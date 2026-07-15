@@ -9,11 +9,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -44,6 +46,7 @@ import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.chaichai.mobile.core.contracts.EmbyGateway
 import dev.chaichai.mobile.core.contracts.MediaIdentity
@@ -61,6 +64,12 @@ import kotlinx.coroutines.launch
 
 enum class LibraryWindowClass { Compact, Medium, Expanded }
 
+data class HingeListDetailPanes(
+    val collectionWidth: Dp,
+    val hingeWidth: Dp,
+    val detailWidth: Dp,
+)
+
 @Composable
 fun LibrariesScreen(
     gateway: EmbyGateway,
@@ -70,6 +79,9 @@ fun LibrariesScreen(
     playback: PlaybackCoordinator,
     onOpenDetails: (MediaIdentity) -> Unit,
     modifier: Modifier = Modifier,
+    hingePanes: HingeListDetailPanes? = null,
+    initialSelection: MediaIdentity? = null,
+    onSelectionChanged: (MediaIdentity?) -> Unit = {},
 ) {
     val state by gateway.movieLibrary.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
@@ -82,14 +94,22 @@ fun LibrariesScreen(
         SortDirection.entries[savedDirection],
         savedGenre,
     )
-    var selected by rememberSaveable(stateSaver = MediaIdentitySaver) {
-        androidx.compose.runtime.mutableStateOf<MediaIdentity?>(null)
+    var selected by rememberSaveable("movie-library-selection", stateSaver = MediaIdentitySaver) {
+        androidx.compose.runtime.mutableStateOf(initialSelection)
+    }
+    LaunchedEffect(initialSelection) {
+        if (initialSelection != null && selected != initialSelection) selected = initialSelection
     }
     LaunchedEffect(gateway) {
         if (gateway.movieLibrary.value is MovieLibraryState.Loading) gateway.refreshMovies(savedQuery)
     }
     LaunchedEffect(supportsListDetail, selected) {
-        if (!supportsListDetail && selected != null) onOpenDetails(selected!!)
+        if (!supportsListDetail && selected != null) {
+            val identity = selected!!
+            selected = null
+            onSelectionChanged(null)
+            onOpenDetails(identity)
+        }
     }
     val requestQuery: (MovieLibraryQuery) -> Unit = { query ->
         savedSort = query.sortField.ordinal
@@ -98,10 +118,31 @@ fun LibrariesScreen(
         scope.launch { gateway.refreshMovies(query) }
     }
     val open: (MediaIdentity) -> Unit = { identity ->
-        selected = identity
-        if (!supportsListDetail) onOpenDetails(identity)
+        if (supportsListDetail) {
+            selected = identity
+            onSelectionChanged(identity)
+        } else onOpenDetails(identity)
     }
-    if (supportsListDetail && selected != null) {
+    if (supportsListDetail && hingePanes != null) {
+        Row(modifier.fillMaxSize()) {
+            MovieCollection(
+                gateway, state, LibraryWindowClass.Compact, isHeightConstrained, open, requestQuery,
+                Modifier.width(hingePanes.collectionWidth),
+            )
+            Spacer(Modifier.width(hingePanes.hingeWidth))
+            selected?.let { identity ->
+                MovieDetailsScreen(
+                    gateway, identity, playback, LibraryWindowClass.Compact, isHeightConstrained,
+                    Modifier.width(hingePanes.detailWidth).fillMaxHeight(),
+                )
+            } ?: Box(
+                Modifier.width(hingePanes.detailWidth).fillMaxHeight().padding(24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("Select a movie to view details")
+            }
+        }
+    } else if (supportsListDetail && selected != null) {
         Row(modifier.fillMaxSize()) {
             MovieCollection(gateway, state, windowClass, isHeightConstrained, open, requestQuery, Modifier.weight(0.56f))
             MovieDetailsScreen(
@@ -223,7 +264,7 @@ internal fun movieGridColumnCount(
         LibraryWindowClass.Expanded -> 164f to 6..8
     }
     val scaledMinimum = minimumWidth * fontScale.coerceIn(1f, 1.35f)
-    return (usableWidthDp / scaledMinimum).toInt().coerceIn(range)
+    return (usableWidthDp / scaledMinimum).toInt().coerceAtLeast(1).coerceAtMost(range.last)
 }
 
 @Composable

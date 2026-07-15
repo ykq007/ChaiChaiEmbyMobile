@@ -10,6 +10,7 @@ import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.HomeSection
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.MockResponse
@@ -225,6 +226,41 @@ class AuthenticatedEmbyGatewayTest {
         }
     }
 
+    @Test
+    fun artwork_cache_load_cannot_return_bytes_after_user_scope_changes() = runTest {
+        val address = valid("http://127.0.0.1:8096/emby")
+        val vault = FakeVault(stored(address))
+        val cache = BlockingArtworkCache(blockLoad = true)
+        val gateway = gateway(vault, homeCache = cache)
+        val reference = ArtworkReference(MediaIdentity("server", "private"), "tag")
+        val result = backgroundScope.async { gateway.loadArtwork(reference) }
+        cache.loadStarted.await()
+
+        vault.save(stored(address).copy(userId = "user-b"))
+        cache.releaseLoad.complete(Unit)
+
+        assertNull(result.await())
+    }
+
+    @Test
+    fun artwork_network_bytes_are_not_saved_or_returned_after_user_scope_changes() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(MockResponse.Builder().code(200).body("private-art").build())
+            val vault = FakeVault(stored(valid(server.url("/emby").toString())))
+            val cache = BlockingArtworkCache(blockSave = true)
+            val gateway = gateway(vault, homeCache = cache)
+            val reference = ArtworkReference(MediaIdentity("server", "private"), "tag")
+            val result = backgroundScope.async { gateway.loadArtwork(reference) }
+            cache.saveStarted.await()
+
+            vault.save(stored(valid(server.url("/emby").toString())).copy(userId = "user-b"))
+            cache.releaseSave.complete(Unit)
+
+            assertNull(result.await())
+        }
+    }
+
     private fun gateway(
         vault: SessionVault,
         homeCache: HomeCache = InMemoryHomeCache(),
@@ -234,6 +270,32 @@ class AuthenticatedEmbyGatewayTest {
         override fun restore() = session
         override fun save(session: StoredSession) { this.session = session }
         override fun clear() { session = null }
+    }
+
+    private class BlockingArtworkCache(
+        private val blockLoad: Boolean = false,
+        private val blockSave: Boolean = false,
+    ) : HomeCache {
+        val loadStarted = CompletableDeferred<Unit>()
+        val releaseLoad = CompletableDeferred<Unit>()
+        val saveStarted = CompletableDeferred<Unit>()
+        val releaseSave = CompletableDeferred<Unit>()
+        override suspend fun loadFeed(scope: HomeScope): Map<HomeSection, HomeSectionContent>? = null
+        override suspend fun saveFeed(scope: HomeScope, sections: Map<HomeSection, HomeSectionContent>) = Unit
+        override suspend fun loadArtwork(scope: HomeScope, reference: ArtworkReference): ByteArray? {
+            if (blockLoad) {
+                loadStarted.complete(Unit)
+                releaseLoad.await()
+                return "old-private-art".encodeToByteArray()
+            }
+            return null
+        }
+        override suspend fun saveArtwork(scope: HomeScope, reference: ArtworkReference, bytes: ByteArray) {
+            if (blockSave) {
+                saveStarted.complete(Unit)
+                releaseSave.await()
+            }
+        }
     }
 
     private class FirstLoadBlockingCache : HomeCache {

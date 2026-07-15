@@ -32,7 +32,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.AbsoluteAlignment
@@ -41,6 +45,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
 import androidx.navigation.NavDestination
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavHostController
@@ -51,6 +56,7 @@ import androidx.navigation.compose.rememberNavController
 import dev.chaichai.mobile.core.contracts.AppBoundaries
 import dev.chaichai.mobile.core.contracts.GatewayAuthenticationStatus
 import dev.chaichai.mobile.core.contracts.HomeMediaAction
+import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.design.system.EmptyDestination
 import dev.chaichai.mobile.design.system.LocalReducedMotion
 import dev.chaichai.mobile.feature.home.HomeScreen
@@ -58,6 +64,7 @@ import dev.chaichai.mobile.feature.home.HomeWindowClass
 import dev.chaichai.mobile.feature.home.HomeUiState
 import dev.chaichai.mobile.feature.home.rememberHomeUiState
 import dev.chaichai.mobile.feature.libraries.LibrariesScreen
+import dev.chaichai.mobile.feature.libraries.HingeListDetailPanes
 import dev.chaichai.mobile.feature.libraries.LibraryWindowClass
 import dev.chaichai.mobile.feature.libraries.MovieDetailsScreen
 import dev.chaichai.mobile.feature.search.SearchScreen
@@ -69,6 +76,7 @@ import dev.chaichai.mobile.platform.adaptive.ContentWidthClass
 import dev.chaichai.mobile.platform.adaptive.NavigationPlacement
 import dev.chaichai.mobile.platform.adaptive.WindowCharacteristics
 import kotlin.math.roundToInt
+import kotlin.math.max
 import kotlinx.coroutines.launch
 
 enum class HingeOrientation { Vertical, Horizontal }
@@ -90,6 +98,12 @@ private enum class TopLevelDestination(val route: String, val label: String, val
 
 private const val MediaActionRoute = "media/{serverId}/{itemId}/{intent}"
 private const val MovieDetailsRoute = "movies/{serverId}/{itemId}"
+
+private data class VerticalHingePanes(
+    val leftWidth: Dp,
+    val hingeWidth: Dp,
+    val rightWidth: Dp,
+)
 
 @Composable
 fun MobileApp(
@@ -115,6 +129,23 @@ fun MobileApp(
             HingeOrientation.Vertical -> {
                 val leftWidth = with(density) { separatingHinge.leftPx.toDp() }
                 val rightWidth = maxWidth - with(density) { separatingHinge.rightPx.toDp() }
+                val hingeWidth = with(density) { (separatingHinge.rightPx - separatingHinge.leftPx).toDp() }
+                val panes = VerticalHingePanes(leftWidth, hingeWidth, rightWidth)
+                val supportsTwoPane = AdaptiveNavigationPolicy.layout(
+                    WindowCharacteristics(
+                        usableWidthDp = max(leftWidth.value, rightWidth.value).roundToInt(),
+                        usableHeightDp = maxHeight.value.roundToInt(),
+                        hasSeparatingVerticalHinge = true,
+                        verticalPaneWidthsDp = listOf(leftWidth.value.roundToInt(), rightWidth.value.roundToInt()),
+                    ),
+                ).supportsListDetail
+                if (supportsTwoPane) {
+                    AdaptiveShell(
+                        boundaries, navController, true, restoredDestination, homeUiState,
+                        verticalHingePanes = panes,
+                    )
+                    return@BoxWithConstraints
+                }
                 val useLeft = leftWidth >= rightWidth
                 Box(
                     modifier = Modifier
@@ -152,8 +183,13 @@ private fun AdaptiveShell(
     isHingeSeparated: Boolean,
     restoredDestination: String,
     homeUiState: HomeUiState,
+    verticalHingePanes: VerticalHingePanes? = null,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
+        var librarySelection by rememberSaveable(
+            "mobile-app-library-selection",
+            stateSaver = MediaIdentitySaver,
+        ) { mutableStateOf<MediaIdentity?>(null) }
         val density = LocalDensity.current
         val layoutDirection = LocalLayoutDirection.current
         val safeDrawing = WindowInsets.safeDrawing
@@ -164,12 +200,19 @@ private fun AdaptiveShell(
         val verticalInsetsDp = with(density) {
             (safeDrawing.getTop(density) + safeDrawing.getBottom(density)).toDp().value
         }
+        val paneWidths = verticalHingePanes?.let {
+            listOf(it.leftWidth.value.roundToInt(), it.rightWidth.value.roundToInt())
+        }.orEmpty()
         val window = WindowCharacteristics(
-            usableWidthDp = (maxWidth.value - horizontalInsetsDp).roundToInt(),
+            usableWidthDp = verticalHingePanes?.let { max(it.leftWidth.value, it.rightWidth.value).roundToInt() }
+                ?: (maxWidth.value - horizontalInsetsDp).roundToInt(),
             usableHeightDp = (maxHeight.value - verticalInsetsDp).roundToInt(),
             hasSeparatingVerticalHinge = isHingeSeparated,
+            verticalPaneWidthsDp = paneWidths,
         )
-        val layout = AdaptiveNavigationPolicy.layout(window)
+        val layout = AdaptiveNavigationPolicy.layout(window).let {
+            if (verticalHingePanes != null) it.copy(navigationPlacement = NavigationPlacement.Bottom) else it
+        }
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentDestination = backStackEntry?.destination
         val reducedMotion = LocalReducedMotion.current
@@ -231,6 +274,11 @@ private fun AdaptiveShell(
                         isHeightConstrained = layout.isHeightConstrained,
                         supportsListDetail = layout.supportsListDetail,
                         playback = boundaries.playback,
+                        hingePanes = verticalHingePanes?.let {
+                            HingeListDetailPanes(it.leftWidth, it.hingeWidth, it.rightWidth)
+                        },
+                        initialSelection = librarySelection,
+                        onSelectionChanged = { librarySelection = it },
                         onOpenDetails = { identity ->
                             navController.navigate("movies/${Uri.encode(identity.serverId)}/${Uri.encode(identity.itemId)}")
                         },
@@ -276,21 +324,52 @@ private fun AdaptiveShell(
         } else {
             Scaffold(
                 bottomBar = {
-                    NavigationBar(Modifier.testTag("bottom-navigation")) {
-                        TopLevelDestination.entries.forEach { destination ->
-                            NavigationBarItem(
-                                selected = currentDestination.isSelected(destination),
-                                onClick = { navigate(destination) },
-                                icon = { DestinationIcon(destination) },
-                                label = { Text(destination.label) },
-                            )
+                    val navigation: @Composable (Modifier) -> Unit = { navigationModifier ->
+                        NavigationBar(navigationModifier.testTag("bottom-navigation")) {
+                            TopLevelDestination.entries.forEach { destination ->
+                                NavigationBarItem(
+                                    selected = currentDestination.isSelected(destination),
+                                    onClick = { navigate(destination) },
+                                    icon = { DestinationIcon(destination) },
+                                    label = { Text(destination.label) },
+                                )
+                            }
                         }
                     }
+                    verticalHingePanes?.let { panes ->
+                        Box(Modifier.fillMaxWidth()) {
+                            val useLeft = panes.leftWidth >= panes.rightWidth
+                            navigation(
+                                Modifier.width(if (useLeft) panes.leftWidth else panes.rightWidth)
+                                    .align(if (useLeft) Alignment.CenterStart else Alignment.CenterEnd),
+                            )
+                        }
+                    } ?: navigation(Modifier.fillMaxWidth())
                 },
-            ) { padding -> content(Modifier.fillMaxSize().padding(padding)) }
+            ) { padding ->
+                Box(Modifier.fillMaxSize().padding(padding)) {
+                    val hinge = verticalHingePanes
+                    val showAcrossPanes = currentDestination.isSelected(TopLevelDestination.Libraries)
+                    if (hinge != null && !showAcrossPanes) {
+                        val useLeft = hinge.leftWidth >= hinge.rightWidth
+                        content(
+                            Modifier.width(if (useLeft) hinge.leftWidth else hinge.rightWidth)
+                                .fillMaxHeight()
+                                .align(if (useLeft) Alignment.CenterStart else Alignment.CenterEnd),
+                        )
+                    } else {
+                        content(Modifier.fillMaxSize())
+                    }
+                }
+            }
         }
     }
 }
+
+private val MediaIdentitySaver = Saver<MediaIdentity?, List<String>>(
+    save = { identity -> identity?.let { listOf(it.serverId, it.itemId) } ?: emptyList() },
+    restore = { values -> values.takeIf { it.size == 2 }?.let { MediaIdentity(it[0], it[1]) } },
+)
 
 private fun HomeMediaAction.navigationRoute(): String {
     val intent = when (this) {

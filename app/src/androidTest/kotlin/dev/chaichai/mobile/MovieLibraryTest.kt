@@ -5,6 +5,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertLeftPositionInRootIsEqualTo
+import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -94,6 +96,73 @@ class MovieLibraryTest {
 
         composeRule.onNodeWithText("Language changes everything.").assertIsDisplayed()
         composeRule.onAllNodesWithText("Arrival").assertCountEquals(2)
+    }
+
+    @Test
+    fun hinge_separated_panes_keep_collection_and_restored_details_clear_of_the_hinge() {
+        val restoration = StateRestorationTester(composeRule)
+        val gateway = FakeMovieGateway(ready())
+        restoration.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                themed {
+                    MobileApp(
+                        appBoundaries(gateway, FakePlayback()),
+                        SeparatingHinge(400, 0, 420, 700, HingeOrientation.Vertical),
+                        Modifier.requiredSize(840.dp, 700.dp),
+                    )
+                }
+            }
+        }
+        composeRule.onNodeWithText("Libraries").performClick()
+        composeRule.onNodeWithTag("movie-grid").assertWidthIsEqualTo(400.dp)
+        composeRule.onNodeWithText("Arrival").performClick()
+        composeRule.onNodeWithTag("movie-details-scroll")
+            .assertLeftPositionInRootIsEqualTo(420.dp)
+            .assertWidthIsEqualTo(420.dp)
+
+        restoration.emulateSavedInstanceStateRestore()
+
+        composeRule.onAllNodesWithText("Arrival").assertCountEquals(2)
+        composeRule.onNodeWithTag("movie-details-scroll").assertLeftPositionInRootIsEqualTo(420.dp)
+    }
+
+    @Test
+    fun hinge_panes_below_either_minimum_keep_the_single_safe_pane_layout() {
+        val gateway = FakeMovieGateway(ready())
+        composeRule.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                themed {
+                    MobileApp(
+                        appBoundaries(gateway, FakePlayback()),
+                        SeparatingHinge(350, 0, 370, 700, HingeOrientation.Vertical),
+                        Modifier.requiredSize(729.dp, 700.dp),
+                    )
+                }
+            }
+        }
+        composeRule.onNodeWithText("Libraries").performClick()
+
+        composeRule.onNodeWithTag("movie-grid").assertWidthIsEqualTo(359.dp)
+        composeRule.onNodeWithText("Arrival").performClick()
+        composeRule.onNodeWithText("Language changes everything.").assertIsDisplayed()
+    }
+
+    @Test
+    fun compact_selection_emits_exactly_one_navigation_request() {
+        val gateway = FakeMovieGateway(ready())
+        var navigations = 0
+        composeRule.setContent {
+            themed {
+                LibrariesScreen(
+                    gateway, LibraryWindowClass.Compact, false, false, FakePlayback(),
+                    { navigations += 1 },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Arrival").performClick()
+
+        composeRule.runOnIdle { assertEquals(1, navigations) }
     }
 
     @Test
@@ -187,17 +256,19 @@ class MovieLibraryTest {
         composeRule.setContent {
             themed {
                 MobileApp(
-                    AppBoundaries(
-                        gateway,
-                        playback,
-                        AppClock { Instant.EPOCH },
-                        object : ConnectivityMonitor { override val isOnline = MutableStateFlow(true) },
-                    ),
+                    appBoundaries(gateway, playback),
                     separatingHinge = null,
                 )
             }
         }
     }
+
+    private fun appBoundaries(gateway: EmbyGateway, playback: PlaybackCoordinator) = AppBoundaries(
+        gateway,
+        playback,
+        AppClock { Instant.EPOCH },
+        object : ConnectivityMonitor { override val isOnline = MutableStateFlow(true) },
+    )
 
     private fun showLibrary(gateway: EmbyGateway) {
         composeRule.setContent {

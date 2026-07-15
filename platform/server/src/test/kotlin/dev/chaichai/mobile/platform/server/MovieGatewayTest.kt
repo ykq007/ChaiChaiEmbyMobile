@@ -11,6 +11,7 @@ import dev.chaichai.mobile.core.contracts.MovieLibraryState
 import dev.chaichai.mobile.core.contracts.MovieSortField
 import dev.chaichai.mobile.core.contracts.SortDirection
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
@@ -22,6 +23,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class MovieGatewayTest {
     @Test
@@ -99,6 +101,28 @@ class MovieGatewayTest {
             assertEquals(GatewayConnectionState.Disconnected, gateway.connectionState.value)
             assertEquals(MovieLibraryState.Loading, gateway.movieLibrary.value)
             assertEquals("libraries", expiredDestination)
+        }
+    }
+
+    @Test
+    fun stale_revocation_cannot_disconnect_a_newer_same_user_credential() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(MockResponse.Builder().code(401).headersDelay(1, TimeUnit.SECONDS).build())
+            val vault = FakeVault(stored(valid(server.url("/emby").toString())))
+            val gateway = AuthenticatedEmbyGateway(vault, movieCache = InMemoryMovieCache(), deviceId = "test-device")
+            gateway.setConnected(true)
+            var expirations = 0
+            gateway.onAuthenticationExpired = { expirations += 1 }
+            val refresh = backgroundScope.launch(Dispatchers.Default) { gateway.refreshMovies() }
+            server.takeRequest()
+
+            vault.save(stored(valid(server.url("/emby").toString())).copy(accessToken = AccessToken.fromRaw("new-token")))
+            gateway.setConnected(true)
+            refresh.join()
+
+            assertEquals(GatewayConnectionState.Connected, gateway.connectionState.value)
+            assertEquals(0, expirations)
         }
     }
 
