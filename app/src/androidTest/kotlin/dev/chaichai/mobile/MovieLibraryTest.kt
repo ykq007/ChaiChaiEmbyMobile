@@ -68,11 +68,11 @@ class MovieLibraryTest {
         composeRule.onNodeWithText("1 subtitle track").assertIsDisplayed()
         composeRule.onNodeWithText("Resume from 2:00").performClick()
         assertEquals(
-            MediaPlaybackRequest.Resume(MediaIdentity("server", "arrival"), 1_200_000_000),
+            MediaPlaybackRequest.Resume(MediaIdentity("server", "arrival"), 1_200_000_000, "user", "Arrival"),
             playback.submitted,
         )
         composeRule.onNodeWithText("Play from beginning").performClick()
-        assertEquals(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "arrival")), playback.submitted)
+        assertEquals(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "arrival"), "user", "Arrival"), playback.submitted)
     }
 
     @Test
@@ -541,6 +541,7 @@ class MovieLibraryTest {
             overview = "Language changes everything.",
             playbackPositionTicks = 1_200_000_000,
             tracks = MovieTrackAvailability(2, 1),
+            scope = HomeScope("server", "user"),
         )
     }
 }

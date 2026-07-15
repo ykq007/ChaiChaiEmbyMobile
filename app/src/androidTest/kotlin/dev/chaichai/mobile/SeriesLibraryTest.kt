@@ -70,11 +70,11 @@ class SeriesLibraryTest {
         composeRule.onNodeWithText("A distress call changes everything.").assertIsDisplayed()
         composeRule.onNodeWithText("Resume from 2:00").performClick()
         assertEquals(
-            MediaPlaybackRequest.Resume(MediaIdentity("server", "episode-1"), 1_200_000_000, "user"),
+            MediaPlaybackRequest.Resume(MediaIdentity("server", "episode-1"), 1_200_000_000, "user", "Dulcinea"),
             playback.submitted,
         )
         composeRule.onNodeWithText("Play from beginning").performClick()
-        assertEquals(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "episode-1"), "user"), playback.submitted)
+        assertEquals(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "episode-1"), "user", "Dulcinea"), playback.submitted)
     }
 
     @Test

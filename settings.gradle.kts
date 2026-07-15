@@ -22,6 +22,8 @@ include(
     ":design:system",
     ":platform:adaptive",
     ":platform:server",
+    ":platform:playback",
+    ":feature:playback",
     ":feature:home",
     ":feature:libraries",
     ":feature:search",

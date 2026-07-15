@@ -530,7 +530,7 @@ class AuthenticatedEmbyGateway(
                 .newCall(request).execute().use { response ->
                     response.requireAuthenticatedSuccess("Details request failed")
                     val dto = json.decodeFromString<MovieDetailsDto>(response.body.string())
-                    val details = dto.toContract(identity)
+                    val details = dto.toContract(identity).copy(scope = scope)
                     if (!isActiveRequest(scope, session, authentication)) return@use MovieDetailsState.Failure("Movie details are no longer active.")
                     movieCache.saveDetails(scope, details)
                     if (!isActiveRequest(scope, session, authentication)) return@use MovieDetailsState.Failure("Movie details are no longer active.")
@@ -542,7 +542,7 @@ class AuthenticatedEmbyGateway(
         } catch (_: Exception) {
             val cached = movieCache.loadDetails(scope, identity)
             if (!isActiveRequest(scope, session, authentication)) return@withContext MovieDetailsState.Failure("Movie details are no longer active.")
-            cached?.copy(tracks = MovieTrackAvailability())?.let(MovieDetailsState::Ready)
+            cached?.copy(scope = scope, tracks = MovieTrackAvailability())?.let(MovieDetailsState::Ready)
                 ?: MovieDetailsState.Failure("Movie details couldn't be loaded. Retry when the server is available.")
         }
     }

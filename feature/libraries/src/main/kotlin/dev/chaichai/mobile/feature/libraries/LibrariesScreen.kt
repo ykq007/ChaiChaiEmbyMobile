@@ -458,12 +458,12 @@ private fun MovieDetailsContent(
             if (details.tracks.audioTracks > 0) Text("${details.tracks.audioTracks} audio track${if (details.tracks.audioTracks == 1) "" else "s"}")
             if (details.tracks.subtitleTracks > 0) Text("${details.tracks.subtitleTracks} subtitle track${if (details.tracks.subtitleTracks == 1) "" else "s"}")
             if (details.hasMeaningfulResume) {
-                Button(onClick = { playback.submit(MediaPlaybackRequest.Resume(details.identity, details.playbackPositionTicks)) }) {
+                Button(onClick = { playback.submit(MediaPlaybackRequest.Resume(details.identity, details.playbackPositionTicks, details.scope?.userId, details.title)) }) {
                     Text("Resume from ${formatPosition(details.playbackPositionTicks)}")
                 }
-                OutlinedButton(onClick = { playback.submit(MediaPlaybackRequest.PlayFromBeginning(details.identity)) }) { Text("Play from beginning") }
+                OutlinedButton(onClick = { playback.submit(MediaPlaybackRequest.PlayFromBeginning(details.identity, details.scope?.userId, details.title)) }) { Text("Play from beginning") }
             } else {
-                Button(onClick = { playback.submit(MediaPlaybackRequest.PlayFromBeginning(details.identity)) }) { Text("Play") }
+                Button(onClick = { playback.submit(MediaPlaybackRequest.PlayFromBeginning(details.identity, details.scope?.userId, details.title)) }) { Text("Play") }
             }
         }
     }
@@ -855,11 +855,11 @@ private fun EpisodeDetailsContent(
         if (details.tracks.audioTracks > 0) Text("${details.tracks.audioTracks} audio track${if (details.tracks.audioTracks == 1) "" else "s"}")
         if (details.tracks.subtitleTracks > 0) Text("${details.tracks.subtitleTracks} subtitle track${if (details.tracks.subtitleTracks == 1) "" else "s"}")
         if (episode.hasMeaningfulResume) {
-            Button({ playback.submit(MediaPlaybackRequest.Resume(episode.identity, episode.playbackPositionTicks, details.scope.userId)) }) {
+            Button({ playback.submit(MediaPlaybackRequest.Resume(episode.identity, episode.playbackPositionTicks, details.scope.userId, episode.title)) }) {
                 Text("Resume from ${formatPosition(episode.playbackPositionTicks)}")
             }
-            OutlinedButton({ playback.submit(MediaPlaybackRequest.PlayFromBeginning(episode.identity, details.scope.userId)) }) { Text("Play from beginning") }
-        } else Button({ playback.submit(MediaPlaybackRequest.PlayFromBeginning(episode.identity, details.scope.userId)) }) { Text("Play") }
+            OutlinedButton({ playback.submit(MediaPlaybackRequest.PlayFromBeginning(episode.identity, details.scope.userId, episode.title)) }) { Text("Play from beginning") }
+        } else Button({ playback.submit(MediaPlaybackRequest.PlayFromBeginning(episode.identity, details.scope.userId, episode.title)) }) { Text("Play") }
     }
 }
 

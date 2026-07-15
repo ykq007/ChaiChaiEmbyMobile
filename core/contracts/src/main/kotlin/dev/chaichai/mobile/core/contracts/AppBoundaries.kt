@@ -48,7 +48,15 @@ enum class GatewayConnectionState { Disconnected, Connected }
 enum class GatewayAuthenticationStatus { Valid, Expired, Unavailable }
 interface PlaybackCoordinator {
     val isPlaying: StateFlow<Boolean>
+    val state: StateFlow<PlaybackState>
+        get() = EmptyPlaybackState.flow
     fun submit(request: MediaPlaybackRequest) = Unit
+    fun toggleControls() = Unit
+    fun playPause() = Unit
+    fun seekBy(deltaTicks: Long) = Unit
+    fun seekTo(positionTicks: Long) = Unit
+    fun retry() = Unit
+    fun exit() = Unit
 }
 fun interface AppClock { fun now(): Instant }
 interface ConnectivityMonitor { val isOnline: StateFlow<Boolean> }
@@ -185,6 +193,7 @@ data class MovieDetails(
     val tracks: MovieTrackAvailability = MovieTrackAvailability(),
     val artwork: ArtworkReference? = null,
     val backdrop: ArtworkReference? = null,
+    val scope: HomeScope? = null,
 ) {
     val hasMeaningfulResume: Boolean
         get() = hasMeaningfulResume(playbackPositionTicks, runtimeTicks, played)
@@ -281,11 +290,40 @@ sealed interface MediaPlaybackRequest {
         override val identity: MediaIdentity,
         val positionTicks: Long,
         override val userId: String? = null,
+        val title: String = "",
     ) : MediaPlaybackRequest
     data class PlayFromBeginning(
         override val identity: MediaIdentity,
         override val userId: String? = null,
+        val title: String = "",
     ) : MediaPlaybackRequest
+}
+
+enum class PlaybackFailureKind(val canRetry: Boolean) {
+    UnsupportedMedia(false),
+    TranscodingRefused(false),
+    SourceUnavailable(true),
+    AuthorizationExpired(false),
+    Network(true),
+}
+
+sealed interface PlaybackState {
+    data object Idle : PlaybackState
+    data class Negotiating(val title: String) : PlaybackState
+    data class Active(
+        val identity: MediaIdentity,
+        val title: String,
+        val positionTicks: Long,
+        val runtimeTicks: Long,
+        val isPaused: Boolean,
+        val controlsVisible: Boolean = true,
+    ) : PlaybackState
+    data class Failed(val reason: PlaybackFailureKind) : PlaybackState
+    data class Exited(val identity: MediaIdentity) : PlaybackState
+}
+
+private object EmptyPlaybackState {
+    val flow: StateFlow<PlaybackState> = kotlinx.coroutines.flow.MutableStateFlow(PlaybackState.Idle)
 }
 typealias MoviePlaybackRequest = MediaPlaybackRequest
 
