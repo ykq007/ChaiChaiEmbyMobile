@@ -92,7 +92,7 @@ class AdaptiveNavigationPolicyTest {
     @Test
     fun `playback tracks choose one unobstructed pane around separating hinges`() {
         assertEquals(
-            PlaybackTracksLayout(PlaybackTracksPresentation.ModalBottom, PlaybackSafePane.End(420)),
+            PlaybackTracksLayout(PlaybackTracksPresentation.ModalBottom, PlaybackSafePane.Right(420)),
             AdaptiveNavigationPolicy.playbackTracks(
                 WindowCharacteristics(420, 700, true, listOf(380, 420)),
             ),

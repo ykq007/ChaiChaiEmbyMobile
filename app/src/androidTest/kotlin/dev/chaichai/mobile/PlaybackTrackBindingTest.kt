@@ -33,6 +33,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -75,7 +76,7 @@ class PlaybackTrackBindingTest {
                     json(playbackInfo(audioIndex = 2))
                 },
             )
-            if (failureMode == FailureMode.None) server.enqueue(noContent())
+            if (failureMode != FailureMode.Gateway) server.enqueue(noContent())
             val address = (ServerAddress.parse(server.url("/emby").toString()) as AddressValidation.Valid).address
             val authenticated = runBlocking {
                 EmbyAuthenticator().authenticate(address, "server", "Ada", "secret", "binding-device")
@@ -189,6 +190,8 @@ class PlaybackTrackBindingTest {
     }
 
     private class DeterministicEngine : PlaybackEngine {
+        private val eventsFlow = MutableSharedFlow<dev.chaichai.mobile.platform.playback.PlaybackEngineEvent>()
+        override val events = eventsFlow
         override var positionTicks = 0L
         override var isPaused = false
         override val snapshot: PlaybackEngineSnapshot
@@ -208,6 +211,7 @@ class PlaybackTrackBindingTest {
             }
             positionTicks = startPositionTicks
             isPaused = startPaused
+            eventsFlow.emit(dev.chaichai.mobile.platform.playback.PlaybackEngineEvent.Ready)
         }
 
         override suspend fun acknowledgePlayingReported() = Unit

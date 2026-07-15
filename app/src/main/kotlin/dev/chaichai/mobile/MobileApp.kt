@@ -51,6 +51,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavDestination
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavHostController
@@ -206,100 +207,8 @@ fun MobileApp(
             activeLibraryScope?.let { scope -> ScopedLibrarySelection(scope, selected) }
         }
     }
-    Box(modifier.fillMaxSize()) {
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier.fillMaxSize()) {
         val navController = rememberNavController()
-        val density = LocalDensity.current
-        val layoutDirection = LocalLayoutDirection.current
-        val safeDrawing = WindowInsets.safeDrawing
-        val leftInsetDp = with(density) { safeDrawing.getLeft(density, layoutDirection).toDp().value }
-        val rightInsetDp = with(density) { safeDrawing.getRight(density, layoutDirection).toDp().value }
-        when (separatingHinge?.orientation) {
-            HingeOrientation.Vertical -> {
-                val leftWidth = with(density) { separatingHinge.leftPx.toDp() }
-                val rightWidth = maxWidth - with(density) { separatingHinge.rightPx.toDp() }
-                val hingeWidth = with(density) { (separatingHinge.rightPx - separatingHinge.leftPx).toDp() }
-                val usableLeftWidth = (leftWidth.value - leftInsetDp).coerceAtLeast(0f)
-                val usableRightWidth = (rightWidth.value - rightInsetDp).coerceAtLeast(0f)
-                val panes = VerticalHingePanes(Dp(usableLeftWidth), hingeWidth, Dp(usableRightWidth))
-                val supportsTwoPane = AdaptiveNavigationPolicy.layout(
-                    WindowCharacteristics(
-                        usableWidthDp = max(usableLeftWidth, usableRightWidth).roundToInt(),
-                        usableHeightDp = maxHeight.value.roundToInt(),
-                        hasSeparatingVerticalHinge = true,
-                        verticalPaneWidthsDp = listOf(usableLeftWidth.roundToInt(), usableRightWidth.roundToInt()),
-                    ),
-                ).supportsListDetail
-                if (supportsTwoPane) {
-                    AdaptiveShell(
-                        boundaries, navController, true, restoredDestination, homeUiState,
-                        verticalHingePanes = panes,
-                        librarySelection = librarySelection,
-                        onLibrarySelectionChanged = onLibrarySelectionChanged,
-                        libraryGridState = libraryGridState,
-                        searchListState = searchListState,
-                        libraryCollection = libraryCollection,
-                        onLibraryCollectionChanged = { libraryCollection = it },
-                        adaptiveContentState = adaptiveContentState,
-                    )
-                    return@BoxWithConstraints
-                }
-                val useLeft = leftWidth >= rightWidth
-                Box(
-                    modifier = Modifier
-                        .width(if (useLeft) leftWidth else rightWidth)
-                        .fillMaxHeight()
-                        .align(if (useLeft) AbsoluteAlignment.CenterLeft else AbsoluteAlignment.CenterRight),
-                ) {
-                    AdaptiveShell(
-                        boundaries, navController, true, restoredDestination, homeUiState,
-                        librarySelection = librarySelection,
-                        onLibrarySelectionChanged = onLibrarySelectionChanged,
-                        libraryGridState = libraryGridState,
-                        searchListState = searchListState,
-                        libraryCollection = libraryCollection,
-                        onLibraryCollectionChanged = { libraryCollection = it },
-                        adaptiveContentState = adaptiveContentState,
-                    )
-                }
-            }
-
-            HingeOrientation.Horizontal -> {
-                val topHeight = with(density) { separatingHinge.topPx.toDp() }
-                val bottomHeight = maxHeight - with(density) { separatingHinge.bottomPx.toDp() }
-                val useTop = topHeight >= bottomHeight
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(if (useTop) topHeight else bottomHeight)
-                        .align(if (useTop) Alignment.TopCenter else Alignment.BottomCenter),
-                ) {
-                    AdaptiveShell(
-                        boundaries, navController, true, restoredDestination, homeUiState,
-                        librarySelection = librarySelection,
-                        onLibrarySelectionChanged = onLibrarySelectionChanged,
-                        libraryGridState = libraryGridState,
-                        searchListState = searchListState,
-                        libraryCollection = libraryCollection,
-                        onLibraryCollectionChanged = { libraryCollection = it },
-                        adaptiveContentState = adaptiveContentState,
-                    )
-                }
-            }
-
-            null -> AdaptiveShell(
-                boundaries, navController, false, restoredDestination, homeUiState,
-                librarySelection = librarySelection,
-                onLibrarySelectionChanged = onLibrarySelectionChanged,
-                libraryGridState = libraryGridState,
-                searchListState = searchListState,
-                libraryCollection = libraryCollection,
-                onLibraryCollectionChanged = { libraryCollection = it },
-                adaptiveContentState = adaptiveContentState,
-            )
-        }
-    }
-    BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
         val layoutDirection = LocalLayoutDirection.current
         val safeDrawing = WindowInsets.safeDrawing
@@ -309,17 +218,17 @@ fun MobileApp(
         val bottomInsetDp = with(density) { safeDrawing.getBottom(density).toDp().value }
         val usableWidth = (maxWidth.value - leftInsetDp - rightInsetDp).coerceAtLeast(0f)
         val usableHeight = (maxHeight.value - topInsetDp - bottomInsetDp).coerceAtLeast(0f)
-        val playbackWindow = when (separatingHinge?.orientation) {
+        val window = when (separatingHinge?.orientation) {
             HingeOrientation.Vertical -> {
-                val start = (with(density) { separatingHinge.leftPx.toDp().value } - leftInsetDp).coerceAtLeast(0f)
-                val end = (
+                val left = (with(density) { separatingHinge.leftPx.toDp().value } - leftInsetDp).coerceAtLeast(0f)
+                val right = (
                     maxWidth.value - with(density) { separatingHinge.rightPx.toDp().value } - rightInsetDp
                 ).coerceAtLeast(0f)
                 WindowCharacteristics(
-                    usableWidthDp = max(start, end).roundToInt(),
+                    usableWidthDp = max(left, right).roundToInt(),
                     usableHeightDp = usableHeight.roundToInt(),
                     hasSeparatingVerticalHinge = true,
-                    verticalPaneWidthsDp = listOf(start.roundToInt(), end.roundToInt()),
+                    verticalPaneWidthsDp = listOf(left.roundToInt(), right.roundToInt()),
                 )
             }
             HingeOrientation.Horizontal -> {
@@ -336,7 +245,92 @@ fun MobileApp(
             }
             null -> WindowCharacteristics(usableWidth.roundToInt(), usableHeight.roundToInt())
         }
-        val tracksLayout = AdaptiveNavigationPolicy.playbackTracks(playbackWindow)
+        Box(Modifier.fillMaxSize()) {
+        when (separatingHinge?.orientation) {
+            HingeOrientation.Vertical -> {
+                val (leftWidthDp, rightWidthDp) = window.verticalPaneWidthsDp
+                val leftWidth = leftWidthDp.dp
+                val rightWidth = rightWidthDp.dp
+                val hingeWidth = with(density) { (separatingHinge.rightPx - separatingHinge.leftPx).toDp() }
+                val panes = VerticalHingePanes(leftWidth, hingeWidth, rightWidth)
+                val supportsTwoPane = AdaptiveNavigationPolicy.layout(window).supportsListDetail
+                if (supportsTwoPane) {
+                    AdaptiveShell(
+                        boundaries, navController, window, restoredDestination, homeUiState,
+                        verticalHingePanes = panes,
+                        librarySelection = librarySelection,
+                        onLibrarySelectionChanged = onLibrarySelectionChanged,
+                        libraryGridState = libraryGridState,
+                        searchListState = searchListState,
+                        libraryCollection = libraryCollection,
+                        onLibraryCollectionChanged = { libraryCollection = it },
+                        adaptiveContentState = adaptiveContentState,
+                    )
+                } else {
+                    val useLeft = leftWidth >= rightWidth
+                    val selectedWidth = if (useLeft) leftWidth else rightWidth
+                    Box(
+                        modifier = Modifier.width(selectedWidth).fillMaxHeight()
+                            .align(if (useLeft) AbsoluteAlignment.CenterLeft else AbsoluteAlignment.CenterRight),
+                    ) {
+                        AdaptiveShell(
+                            boundaries,
+                            navController,
+                            WindowCharacteristics(selectedWidth.value.roundToInt(), window.usableHeightDp),
+                            restoredDestination,
+                            homeUiState,
+                            librarySelection = librarySelection,
+                            onLibrarySelectionChanged = onLibrarySelectionChanged,
+                            libraryGridState = libraryGridState,
+                            searchListState = searchListState,
+                            libraryCollection = libraryCollection,
+                            onLibraryCollectionChanged = { libraryCollection = it },
+                            adaptiveContentState = adaptiveContentState,
+                        )
+                    }
+                }
+            }
+
+            HingeOrientation.Horizontal -> {
+                val (topHeightDp, bottomHeightDp) = window.horizontalPaneHeightsDp
+                val topHeight = topHeightDp.dp
+                val bottomHeight = bottomHeightDp.dp
+                val useTop = topHeight >= bottomHeight
+                val selectedHeight = if (useTop) topHeight else bottomHeight
+                Box(
+                    modifier = Modifier.fillMaxWidth().height(selectedHeight)
+                        .align(if (useTop) Alignment.TopCenter else Alignment.BottomCenter),
+                ) {
+                    AdaptiveShell(
+                        boundaries,
+                        navController,
+                        WindowCharacteristics(window.usableWidthDp, selectedHeight.value.roundToInt()),
+                        restoredDestination,
+                        homeUiState,
+                        librarySelection = librarySelection,
+                        onLibrarySelectionChanged = onLibrarySelectionChanged,
+                        libraryGridState = libraryGridState,
+                        searchListState = searchListState,
+                        libraryCollection = libraryCollection,
+                        onLibraryCollectionChanged = { libraryCollection = it },
+                        adaptiveContentState = adaptiveContentState,
+                    )
+                }
+            }
+
+            null -> AdaptiveShell(
+                boundaries, navController, window, restoredDestination, homeUiState,
+                librarySelection = librarySelection,
+                onLibrarySelectionChanged = onLibrarySelectionChanged,
+                libraryGridState = libraryGridState,
+                searchListState = searchListState,
+                libraryCollection = libraryCollection,
+                onLibraryCollectionChanged = { libraryCollection = it },
+                adaptiveContentState = adaptiveContentState,
+            )
+        }
+        }
+        val tracksLayout = AdaptiveNavigationPolicy.playbackTracks(window)
         if (playbackState is PlaybackState.Active) Media3VideoSurface(Modifier.fillMaxSize())
         PlaybackHost(
             boundaries.playback,
@@ -346,15 +340,14 @@ fun MobileApp(
             onPlaybackEnded,
             tracksLayout = tracksLayout,
         )
-    }
-    }
+        }
 }
 
 @Composable
 private fun AdaptiveShell(
     boundaries: AppBoundaries,
     navController: NavHostController,
-    isHingeSeparated: Boolean,
+    window: WindowCharacteristics,
     restoredDestination: String,
     homeUiState: HomeUiState,
     verticalHingePanes: VerticalHingePanes? = null,
@@ -366,27 +359,7 @@ private fun AdaptiveShell(
     onLibraryCollectionChanged: (LibraryCollection) -> Unit,
     adaptiveContentState: SaveableStateHolder,
 ) {
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val density = LocalDensity.current
-        val layoutDirection = LocalLayoutDirection.current
-        val safeDrawing = WindowInsets.safeDrawing
-        val horizontalInsetsDp = with(density) {
-            (safeDrawing.getLeft(density, layoutDirection) +
-                safeDrawing.getRight(density, layoutDirection)).toDp().value
-        }
-        val verticalInsetsDp = with(density) {
-            (safeDrawing.getTop(density) + safeDrawing.getBottom(density)).toDp().value
-        }
-        val paneWidths = verticalHingePanes?.let {
-            listOf(it.leftWidth.value.roundToInt(), it.rightWidth.value.roundToInt())
-        }.orEmpty()
-        val window = WindowCharacteristics(
-            usableWidthDp = paneWidths.maxOrNull()
-                ?: (maxWidth.value - horizontalInsetsDp).roundToInt(),
-            usableHeightDp = (maxHeight.value - verticalInsetsDp).roundToInt(),
-            hasSeparatingVerticalHinge = isHingeSeparated,
-            verticalPaneWidthsDp = paneWidths,
-        )
+    Box(Modifier.fillMaxSize()) {
         val layout = AdaptiveNavigationPolicy.layout(window)
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentDestination = backStackEntry?.destination

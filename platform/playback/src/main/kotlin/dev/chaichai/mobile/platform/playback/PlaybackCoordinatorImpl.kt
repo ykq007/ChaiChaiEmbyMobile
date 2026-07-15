@@ -40,6 +40,7 @@ interface PlaybackEngine {
 }
 data class PlaybackEngineSnapshot(val positionTicks: Long, val isPaused: Boolean)
 sealed interface PlaybackEngineEvent {
+    data object Ready : PlaybackEngineEvent
     data object Completed : PlaybackEngineEvent
     data object FatalError : PlaybackEngineEvent
     data class Progress(
@@ -69,12 +70,14 @@ class PlaybackCoordinatorImpl(
     private var terminalAfterStop: PlaybackState? = null
     private var pendingRequest: MediaPlaybackRequest? = null
     private var trackChangeJob: Job? = null
+    private var pendingTrackTransition: PendingTrackTransition? = null
 
     private val engineEventJob = scope.launch {
             engine.events.collect { event ->
                 when (event) {
+                    PlaybackEngineEvent.Ready -> confirmTrackTransition()
                     PlaybackEngineEvent.Completed -> exit()
-                    PlaybackEngineEvent.FatalError -> failActivePlayback()
+                    PlaybackEngineEvent.FatalError -> recoverTrackTransitionOrFail()
                     is PlaybackEngineEvent.Progress -> reportServiceProgress(event)
                     is PlaybackEngineEvent.Stopped -> finishServiceStop(event)
                 }
@@ -86,10 +89,12 @@ class PlaybackCoordinatorImpl(
         timelineJob?.cancel()
         negotiationJob?.cancel()
         trackChangeJob?.cancel()
+        pendingTrackTransition = null
     }
 
     override fun submit(request: MediaPlaybackRequest) {
         trackChangeJob?.cancel()
+        pendingTrackTransition = null
         if (activePlan != null) {
             pendingRequest = request
             if (!exiting) {
@@ -202,25 +207,19 @@ class PlaybackCoordinatorImpl(
             when (val result = gateway.negotiate(request, capabilities)) {
                 is PlaybackNegotiationResult.Failed -> publishTrackRollback(current, previousPlan)
                 is PlaybackNegotiationResult.Ready -> {
+                    val transition = PendingTrackTransition(
+                        current, previousPlan, result.plan, positionTicks, wasPaused, restoring = false,
+                    )
+                    pendingTrackTransition = transition
+                    activePlan = result.plan
                     try {
                         engine.prepare(result.plan, positionTicks, wasPaused)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
-                        try {
-                            engine.prepare(previousPlan, positionTicks, wasPaused)
-                        } catch (_: Exception) {
-                            failActivePlayback()
-                            return@launch
-                        }
-                        publishTrackRollback(current, previousPlan)
+                        beginTrackRestore(transition)
                         return@launch
                     }
-                    activePlan = result.plan
-                    gateway.report(report(result.plan, PlaybackReportKind.Playing))
-                    engine.acknowledgePlayingReported()
-                    mutableIsPlaying.value = !engine.isPaused
-                    publishActive(current.title, controlsVisible = true)
                 }
             }
         }
@@ -233,6 +232,7 @@ class PlaybackCoordinatorImpl(
     override fun exit() {
         negotiationJob?.cancel()
         trackChangeJob?.cancel()
+        pendingTrackTransition = null
         val plan = activePlan
         if (plan == null) {
             val identity = lastRequest?.identity ?: return
@@ -295,6 +295,55 @@ class PlaybackCoordinatorImpl(
         }
     }
 
+    private fun recoverTrackTransitionOrFail() {
+        val transition = pendingTrackTransition
+        if (transition == null) {
+            failActivePlayback()
+            return
+        }
+        if (transition.restoring) {
+            pendingTrackTransition = null
+            failActivePlayback()
+            return
+        }
+        trackChangeJob = scope.launch { beginTrackRestore(transition) }
+    }
+
+    private suspend fun beginTrackRestore(transition: PendingTrackTransition) {
+        if (pendingTrackTransition != transition) return
+        val restoring = transition.copy(restoring = true)
+        pendingTrackTransition = restoring
+        activePlan = restoring.previousPlan
+        try {
+            engine.prepare(restoring.previousPlan, restoring.positionTicks, restoring.wasPaused)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            pendingTrackTransition = null
+            failActivePlayback()
+        }
+    }
+
+    private fun confirmTrackTransition() {
+        val transition = pendingTrackTransition ?: return
+        pendingTrackTransition = null
+        trackChangeJob = scope.launch {
+            if (transition.restoring) {
+                activePlan = transition.previousPlan
+                gateway.report(report(transition.previousPlan, PlaybackReportKind.Playing))
+                engine.acknowledgePlayingReported()
+                mutableIsPlaying.value = !engine.isPaused
+                publishTrackRollback(transition.activeState, transition.previousPlan)
+            } else {
+                activePlan = transition.replacementPlan
+                gateway.report(report(transition.replacementPlan, PlaybackReportKind.Playing))
+                engine.acknowledgePlayingReported()
+                mutableIsPlaying.value = !engine.isPaused
+                publishActive(transition.activeState.title, controlsVisible = true)
+            }
+        }
+    }
+
     private fun finishServiceStop(event: PlaybackEngineEvent.Stopped) {
         val plan = activePlan ?: return
         val terminal = terminalAfterStop ?: PlaybackState.Failed(PlaybackFailureKind.SourceUnavailable)
@@ -346,4 +395,13 @@ class PlaybackCoordinatorImpl(
     private companion object {
         const val TIMELINE_INTERVAL_MILLIS = 1_000L
     }
+
+    private data class PendingTrackTransition(
+        val activeState: PlaybackState.Active,
+        val previousPlan: AuthoritativePlaybackPlan,
+        val replacementPlan: AuthoritativePlaybackPlan,
+        val positionTicks: Long,
+        val wasPaused: Boolean,
+        val restoring: Boolean,
+    )
 }

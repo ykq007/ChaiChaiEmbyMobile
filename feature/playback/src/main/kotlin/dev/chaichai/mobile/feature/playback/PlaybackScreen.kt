@@ -46,6 +46,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -302,8 +303,8 @@ private fun TracksSurface(
 
 private fun BoxScope.safePane(pane: PlaybackSafePane): Modifier = when (pane) {
     PlaybackSafePane.WholeWindow -> Modifier.fillMaxSize()
-    is PlaybackSafePane.Start -> Modifier.align(Alignment.CenterStart).width(pane.widthDp.dp).fillMaxHeight()
-    is PlaybackSafePane.End -> Modifier.align(Alignment.CenterEnd).width(pane.widthDp.dp).fillMaxHeight()
+    is PlaybackSafePane.Left -> Modifier.align(AbsoluteAlignment.CenterLeft).width(pane.widthDp.dp).fillMaxHeight()
+    is PlaybackSafePane.Right -> Modifier.align(AbsoluteAlignment.CenterRight).width(pane.widthDp.dp).fillMaxHeight()
     is PlaybackSafePane.Top -> Modifier.align(Alignment.TopCenter).fillMaxWidth().height(pane.heightDp.dp)
     is PlaybackSafePane.Bottom -> Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(pane.heightDp.dp)
 }

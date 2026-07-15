@@ -263,8 +263,15 @@ class PlaybackCoordinatorImplTest {
         engine.positionTicks = 1_200_000_000
         coordinator.playPause()
         runCurrent()
+        engine.autoReady = false
 
         coordinator.selectTrack(PlaybackTrackSelection(audioStreamIndex = 2))
+        runCurrent()
+
+        val changing = coordinator.state.value as PlaybackState.Active
+        assertTrue(changing.isChangingTrack)
+        assertTrue(changing.audioTracks.single { it.index == 1 }.isCurrent)
+        engine.eventsFlow.emit(PlaybackEngineEvent.Ready)
         runCurrent()
 
         val state = coordinator.state.value as PlaybackState.Active
@@ -275,6 +282,48 @@ class PlaybackCoordinatorImplTest {
         assertEquals(PlaybackSessionReference("source", "session"), gateway.requests.last().sessionReference)
         assertEquals(1_200_000_000, gateway.requests.last().startPositionTicks)
         assertEquals(listOf(false, true), engine.preparePauseStates)
+        coordinator.close()
+    }
+
+    @Test
+    fun `delayed replacement error restores the prior plan after it becomes ready`() = runTest {
+        val gateway = FakeGateway()
+        val engine = FakeEngine()
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
+            MediaIdentity("server", "movie"), HomeScope("server", "user"), "Arrival",
+        ))
+        runCurrent()
+        engine.positionTicks = 900_000_000
+        coordinator.playPause()
+        runCurrent()
+        engine.autoReady = false
+
+        coordinator.selectTrack(PlaybackTrackSelection(audioStreamIndex = 2))
+        runCurrent()
+        engine.eventsFlow.emit(PlaybackEngineEvent.FatalError)
+        runCurrent()
+
+        assertTrue((coordinator.state.value as PlaybackState.Active).isChangingTrack)
+        assertEquals(listOf(false, true, true), engine.preparePauseStates)
+        engine.eventsFlow.emit(PlaybackEngineEvent.Ready)
+        runCurrent()
+
+        val restored = coordinator.state.value as PlaybackState.Active
+        assertFalse(restored.isChangingTrack)
+        assertTrue(restored.audioTracks.single { it.index == 1 }.isCurrent)
+        assertEquals(900_000_000, restored.positionTicks)
+        assertTrue(restored.isPaused)
+        assertTrue(restored.trackChangeError!!.contains("previous track is still playing"))
+        assertEquals(
+            listOf(
+                PlaybackReportKind.Playing,
+                PlaybackReportKind.Progress,
+                PlaybackReportKind.Progress,
+                PlaybackReportKind.Playing,
+            ),
+            gateway.reports.map { it.kind },
+        )
         coordinator.close()
     }
 
@@ -322,14 +371,15 @@ class PlaybackCoordinatorImplTest {
             if (failTrackChanges && request.trackSelection != null) {
                 return PlaybackNegotiationResult.Failed(PlaybackFailure.SourceUnavailable)
             }
+            val audioIndex = request.trackSelection?.audioStreamIndex ?: 1
             return result ?: PlaybackNegotiationResult.Ready(
                 AuthoritativePlaybackPlan(
                     request, PlaybackSessionReference("source", "session"), PlaybackMethod.DirectPlay,
                     "https://example.test/video".toHttpUrl(), emptyMap(), 7_200_000_000,
-                    request.trackSelection?.audioStreamIndex,
+                    audioIndex,
                     request.trackSelection?.subtitleStreamIndex,
                     audioTracks = listOf(1, 2).map { index ->
-                        PlaybackTrack(index, PlaybackTrackType.Audio, isCurrent = index == request.trackSelection?.audioStreamIndex)
+                        PlaybackTrack(index, PlaybackTrackType.Audio, isCurrent = index == audioIndex)
                     },
                 ),
             )
@@ -347,6 +397,7 @@ class PlaybackCoordinatorImplTest {
         override var isPaused = false
         override val snapshot: PlaybackEngineSnapshot get() = PlaybackEngineSnapshot(positionTicks, isPaused)
         var prepareFailure: Exception? = null
+        var autoReady = true
         var acknowledgedPlaying = false
         val preparePauseStates = mutableListOf<Boolean>()
         override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean) {
@@ -354,6 +405,7 @@ class PlaybackCoordinatorImplTest {
             positionTicks = startPositionTicks
             isPaused = startPaused
             preparePauseStates += startPaused
+            if (autoReady) eventsFlow.emit(PlaybackEngineEvent.Ready)
         }
         override suspend fun acknowledgePlayingReported() { acknowledgedPlaying = true }
         override suspend fun playPause() {

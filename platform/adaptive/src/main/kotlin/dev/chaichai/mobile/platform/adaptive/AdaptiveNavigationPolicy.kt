@@ -23,8 +23,8 @@ enum class PlaybackTracksPresentation { ModalBottom, AnchoredSide }
 
 sealed interface PlaybackSafePane {
     data object WholeWindow : PlaybackSafePane
-    data class Start(val widthDp: Int) : PlaybackSafePane
-    data class End(val widthDp: Int) : PlaybackSafePane
+    data class Left(val widthDp: Int) : PlaybackSafePane
+    data class Right(val widthDp: Int) : PlaybackSafePane
     data class Top(val heightDp: Int) : PlaybackSafePane
     data class Bottom(val heightDp: Int) : PlaybackSafePane
 }
@@ -67,8 +67,8 @@ object AdaptiveNavigationPolicy {
     fun playbackTracks(window: WindowCharacteristics): PlaybackTracksLayout {
         val pane = when {
             window.hasSeparatingVerticalHinge && window.verticalPaneWidthsDp.size == 2 -> {
-                val (start, end) = window.verticalPaneWidthsDp
-                if (start >= end) PlaybackSafePane.Start(start) else PlaybackSafePane.End(end)
+                val (left, right) = window.verticalPaneWidthsDp
+                if (left >= right) PlaybackSafePane.Left(left) else PlaybackSafePane.Right(right)
             }
             window.hasSeparatingHorizontalHinge && window.horizontalPaneHeightsDp.size == 2 -> {
                 val (top, bottom) = window.horizontalPaneHeightsDp

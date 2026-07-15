@@ -6,8 +6,12 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.Modifier
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.foundation.layout.size
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.MediaPlaybackRequest
@@ -26,6 +30,7 @@ import dev.chaichai.mobile.platform.adaptive.PlaybackTracksLayout
 import dev.chaichai.mobile.platform.adaptive.PlaybackTracksPresentation
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -146,7 +151,7 @@ class PlaybackFlowTest {
                     Modifier.size(1000.dp, 700.dp),
                     tracksLayout = PlaybackTracksLayout(
                         PlaybackTracksPresentation.ModalBottom,
-                        PlaybackSafePane.End(500),
+                        PlaybackSafePane.Right(500),
                     ),
                 )
             }
@@ -158,6 +163,30 @@ class PlaybackFlowTest {
         compose.onNodeWithText("No audio tracks available").assertExists()
         compose.onNodeWithText("Off · Current").assertExists()
         compose.onNodeWithText("No subtitle streams available").assertExists()
+    }
+
+    @Test
+    fun rtl_keeps_an_asymmetric_hinge_sheet_on_the_physical_right_pane() {
+        val playback = FakePlayback()
+        compose.setContent {
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                ChaiChaiTheme(reducedMotion = true) {
+                    PlaybackHost(
+                        playback,
+                        tracksLayout = PlaybackTracksLayout(
+                            PlaybackTracksPresentation.ModalBottom,
+                            PlaybackSafePane.Right(140),
+                        ),
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithContentDescription("Tracks").performClick()
+
+        val bounds = compose.onNodeWithTag("tracks-bottom-sheet", useUnmergedTree = true)
+            .getUnclippedBoundsInRoot()
+        assertTrue(bounds.left > 0.dp)
     }
 
     @Test
