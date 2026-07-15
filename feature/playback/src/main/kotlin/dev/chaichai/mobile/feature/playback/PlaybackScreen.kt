@@ -66,6 +66,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.height
 import dev.chaichai.mobile.core.contracts.PlaybackCoordinator
 import dev.chaichai.mobile.core.contracts.PlaybackState
+import dev.chaichai.mobile.core.contracts.PlaybackProgressSync
 import dev.chaichai.mobile.core.contracts.PlaybackTrack
 import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
 import dev.chaichai.mobile.core.contracts.PlaybackTrackType
@@ -150,16 +151,17 @@ private fun PlaybackControls(
     LaunchedEffect(keepControlsVisible, state.controlsVisible) {
         if (keepControlsVisible && !state.controlsVisible) coordinator.toggleControls()
     }
-    Box(
-        modifier.fillMaxSize().then(
-            if (showTracks || keepControlsVisible) Modifier else Modifier.clickable(
-                onClickLabel = if (state.controlsVisible) "Hide playback controls" else "Show playback controls",
-                onClick = coordinator::toggleControls,
-            ),
-        ).testTag("playback-screen"),
-    ) {
-        if (!state.controlsVisible) return@Box
-        Column(
+    Box(modifier.fillMaxSize()) {
+        Box(
+            Modifier.fillMaxSize().then(
+                if (showTracks || keepControlsVisible) Modifier else Modifier.clickable(
+                    onClickLabel = if (state.controlsVisible) "Hide playback controls" else "Show playback controls",
+                    onClick = coordinator::toggleControls,
+                ),
+            ).testTag("playback-screen"),
+        ) {
+            if (state.controlsVisible) {
+            Column(
             safePane(windowLayout.safePane)
                 .windowInsetsPadding(WindowInsets.safeDrawing)
                 .padding(12.dp)
@@ -197,13 +199,43 @@ private fun PlaybackControls(
                 }
             }
         }
-        if (showTracks) {
-            TracksSurface(
-                state = state,
-                layout = windowLayout,
-                onDismiss = { onShowTracksChanged(false) },
-                onSelect = coordinator::selectTrack,
+                if (showTracks) {
+                    TracksSurface(
+                        state = state,
+                        layout = windowLayout,
+                        onDismiss = { onShowTracksChanged(false) },
+                        onSelect = coordinator::selectTrack,
+                    )
+                }
+            }
+        }
+        val syncFailure = state.progressSync as? PlaybackProgressSync.Failed
+        if (syncFailure != null && !showTracks) {
+            ProgressSyncFailure(syncFailure.message, coordinator::retryProgressSync)
+        }
+    }
+}
+
+@Composable
+private fun BoxScope.ProgressSyncFailure(message: String, onRetry: () -> Unit) {
+    Surface(
+        modifier = Modifier.align(Alignment.TopCenter)
+            .padding(top = 72.dp, start = 12.dp, end = 12.dp)
+            .fillMaxWidth()
+            .testTag("progress-sync-failure"),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.94f),
+    ) {
+        Row(
+            Modifier.padding(start = 16.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                message,
+                modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite },
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
             )
+            Button(onClick = onRetry) { Text("Retry") }
         }
     }
 }

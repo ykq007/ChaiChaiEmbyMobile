@@ -56,6 +56,7 @@ interface PlaybackCoordinator {
     fun seekTo(positionTicks: Long)
     fun selectTrack(selection: PlaybackTrackSelection) = Unit
     fun retry()
+    fun retryProgressSync() = Unit
     fun exit()
 }
 fun interface AppClock { fun now(): Instant }
@@ -346,9 +347,16 @@ sealed interface PlaybackState {
         val subtitleTracks: List<PlaybackTrack> = emptyList(),
         val isChangingTrack: Boolean = false,
         val trackChangeError: String? = null,
+        val progressSync: PlaybackProgressSync = PlaybackProgressSync.Synced,
     ) : PlaybackState
     data class Failed(val reason: PlaybackFailureKind) : PlaybackState
     data class Exited(val identity: MediaIdentity) : PlaybackState
+}
+
+sealed interface PlaybackProgressSync {
+    data object Synced : PlaybackProgressSync
+    data object Pending : PlaybackProgressSync
+    data class Failed(val message: String) : PlaybackProgressSync
 }
 
 typealias MoviePlaybackRequest = MediaPlaybackRequest
@@ -427,4 +435,5 @@ data class AppBoundaries(
     val connectivity: ConnectivityMonitor,
     val serverSetup: ServerSetupBoundary? = null,
     val homeMediaActions: HomeMediaActionBoundary = HomeMediaActionBoundary {},
+    val account: AccountBoundary? = null,
 )

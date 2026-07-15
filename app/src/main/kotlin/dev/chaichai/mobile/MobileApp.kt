@@ -523,7 +523,7 @@ private fun AdaptiveShell(
                         )
                     }
                 }
-                composable(TopLevelDestination.Settings.route) { SettingsScreen() }
+                composable(TopLevelDestination.Settings.route) { SettingsScreen(account = boundaries.account) }
                 }
             }
         }

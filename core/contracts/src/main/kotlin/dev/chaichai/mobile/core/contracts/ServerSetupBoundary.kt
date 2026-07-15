@@ -56,4 +56,5 @@ interface ServerSetupBoundary {
     fun authenticate(username: String, password: String)
     fun retry()
     fun authenticationExpired(requestedDestination: String?)
+    fun signedOut() = Unit
 }

@@ -3,6 +3,7 @@ package dev.chaichai.mobile
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.Network
 import dev.chaichai.mobile.core.contracts.AppBoundaries
 import dev.chaichai.mobile.core.contracts.AppClock
 import dev.chaichai.mobile.core.contracts.ConnectivityMonitor
@@ -18,6 +19,13 @@ import dev.chaichai.mobile.platform.server.EmbyProbe
 import dev.chaichai.mobile.platform.server.KeystoreSessionVault
 import dev.chaichai.mobile.platform.server.ServerSetupCoordinator
 import dev.chaichai.mobile.platform.server.EmbyPlaybackGateway
+import dev.chaichai.mobile.platform.server.DurableProgressGateway
+import dev.chaichai.mobile.platform.server.EmbyProgressRemote
+import dev.chaichai.mobile.platform.server.ProgressSyncManager
+import dev.chaichai.mobile.platform.server.WorkManagerProgressRetryScheduler
+import dev.chaichai.mobile.platform.server.createRoomProgressOutbox
+import dev.chaichai.mobile.platform.server.AccountManager
+import dev.chaichai.mobile.platform.server.ServerPrivateDataCleaner
 import dev.chaichai.mobile.platform.playback.Media3ServicePlaybackEngine
 import dev.chaichai.mobile.platform.playback.PlaybackCoordinatorImpl
 import dev.chaichai.mobile.platform.playback.androidPlaybackCapabilities
@@ -46,12 +54,16 @@ object ProductionBoundariesModule {
             preferences.edit().putString("device_id", it).apply()
         }
         val vault = KeystoreSessionVault(context)
+        val homeCache = createRoomHomeCache(context)
+        val movieCache = createRoomMovieCache(context)
+        val seriesCache = createRoomSeriesCache(context)
+        val searchCache = createRoomSearchCache(context)
         val gateway = AuthenticatedEmbyGateway(
             vault,
-            homeCache = createRoomHomeCache(context),
-            movieCache = createRoomMovieCache(context),
-            seriesCache = createRoomSeriesCache(context),
-            searchCache = createRoomSearchCache(context),
+            homeCache = homeCache,
+            movieCache = movieCache,
+            seriesCache = seriesCache,
+            searchCache = searchCache,
             deviceId = deviceId,
         )
         val serverSetup = ServerSetupCoordinator(
@@ -66,23 +78,51 @@ object ProductionBoundariesModule {
         applicationScope.launch {
             serverSetup.state.collect { gateway.setConnected(it is ServerSetupState.Authenticated) }
         }
-        val connectivityManager = context.getSystemService(ConnectivityManager::class.java)
-        val activeNetwork = connectivityManager.activeNetwork
-        val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
-        val online = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        val clock = AppClock { Instant.now() }
+        val connectivity = AndroidConnectivityMonitor(context)
+        val progress = ProgressSyncManager(
+            createRoomProgressOutbox(context),
+            EmbyProgressRemote(vault, deviceId),
+            clock,
+            connectivity,
+            WorkManagerProgressRetryScheduler(context),
+            applicationScope,
+        )
         return AppBoundaries(
             gateway = gateway,
             playback = PlaybackCoordinatorImpl(
                 applicationScope,
-                EmbyPlaybackGateway(vault, deviceId = deviceId),
+                DurableProgressGateway(EmbyPlaybackGateway(vault, deviceId = deviceId), progress, clock),
                 Media3ServicePlaybackEngine(context),
                 androidPlaybackCapabilities(),
             ),
-            clock = AppClock { Instant.now() },
-            connectivity = object : ConnectivityMonitor {
-                override val isOnline = MutableStateFlow(online)
-            },
+            clock = clock,
+            connectivity = connectivity,
             serverSetup = serverSetup,
+            account = AccountManager(
+                applicationScope, vault, progress,
+                ServerPrivateDataCleaner(homeCache, movieCache, seriesCache, searchCache),
+                serverSetup::signedOut,
+            ),
         )
     }
+}
+
+private class AndroidConnectivityMonitor(context: Context) : ConnectivityMonitor {
+    private val manager = context.getSystemService(ConnectivityManager::class.java)
+    private val mutableOnline = MutableStateFlow(manager.isOnline())
+    override val isOnline = mutableOnline
+
+    init {
+        manager.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) { mutableOnline.value = manager.isOnline() }
+            override fun onLost(network: Network) { mutableOnline.value = manager.isOnline() }
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                mutableOnline.value = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            }
+        })
+    }
+
+    private fun ConnectivityManager.isOnline(): Boolean = getNetworkCapabilities(activeNetwork)
+        ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
 }

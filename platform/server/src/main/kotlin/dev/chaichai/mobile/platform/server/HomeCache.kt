@@ -24,6 +24,7 @@ interface HomeCache {
     suspend fun saveFeed(scope: HomeScope, sections: Map<HomeSection, HomeSectionContent>)
     suspend fun loadArtwork(scope: HomeScope, reference: ArtworkReference): ByteArray?
     suspend fun saveArtwork(scope: HomeScope, reference: ArtworkReference, bytes: ByteArray)
+    suspend fun clear(scope: HomeScope) = Unit
 }
 
 class InMemoryHomeCache : HomeCache {
@@ -36,6 +37,10 @@ class InMemoryHomeCache : HomeCache {
     override suspend fun loadArtwork(scope: HomeScope, reference: ArtworkReference) = artwork[scope to reference]
     override suspend fun saveArtwork(scope: HomeScope, reference: ArtworkReference, bytes: ByteArray) {
         artwork[scope to reference] = bytes
+    }
+    override suspend fun clear(scope: HomeScope) {
+        feeds.remove(scope)
+        artwork.keys.removeAll { it.first == scope }
     }
 }
 
@@ -67,6 +72,8 @@ internal interface HomeCacheDao {
     @Query("SELECT * FROM home_artwork WHERE serverId = :serverId AND userId = :userId AND itemId = :itemId AND kind = :kind AND imageTag = :tag")
     suspend fun artwork(serverId: String, userId: String, itemId: String, kind: String, tag: String): HomeArtworkEntity?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveArtwork(entity: HomeArtworkEntity)
+    @Query("DELETE FROM home_feeds WHERE serverId=:serverId AND userId=:userId") suspend fun clearFeed(serverId: String, userId: String)
+    @Query("DELETE FROM home_artwork WHERE serverId=:serverId AND userId=:userId") suspend fun clearArtwork(serverId: String, userId: String)
 }
 
 @Database(entities = [HomeFeedEntity::class, HomeArtworkEntity::class], version = 1, exportSchema = false)
@@ -90,6 +97,10 @@ internal class RoomHomeCache(private val dao: HomeCacheDao) : HomeCache {
                 scope.serverId, scope.userId, reference.identity.itemId, reference.kind.name, reference.imageTag, bytes,
             ),
         )
+    }
+    override suspend fun clear(scope: HomeScope) {
+        dao.clearFeed(scope.serverId, scope.userId)
+        dao.clearArtwork(scope.serverId, scope.userId)
     }
 }
 

@@ -186,6 +186,15 @@ class ServerSetupCoordinator(
         )
     }
 
+    override fun signedOut() {
+        enteredAddress = null
+        discovered = null
+        certificateBypassAuthority = null
+        acknowledgedCleartextAuthority = null
+        pendingReturnDestination = null
+        mutableState.value = ServerSetupState.EnterAddress()
+    }
+
     private fun beginProbe() {
         val address = enteredAddress ?: return
         mutableState.value = ServerSetupState.Probing(address.value)
