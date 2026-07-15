@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
@@ -31,12 +33,14 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.navigation.NavDestination
 import androidx.navigation.NavDestination.Companion.hierarchy
+import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -53,7 +57,15 @@ import dev.chaichai.mobile.platform.adaptive.NavigationPlacement
 import dev.chaichai.mobile.platform.adaptive.WindowCharacteristics
 import kotlin.math.roundToInt
 
-data class VerticalHinge(val leftPx: Int, val rightPx: Int)
+enum class HingeOrientation { Vertical, Horizontal }
+
+data class SeparatingHinge(
+    val leftPx: Int,
+    val topPx: Int,
+    val rightPx: Int,
+    val bottomPx: Int,
+    val orientation: HingeOrientation,
+)
 
 private enum class TopLevelDestination(val route: String, val label: String, val icon: ImageVector) {
     Home("home", "Home", Icons.Default.Home),
@@ -65,33 +77,52 @@ private enum class TopLevelDestination(val route: String, val label: String, val
 @Composable
 fun MobileApp(
     boundaries: AppBoundaries,
-    verticalHinge: VerticalHinge?,
+    separatingHinge: SeparatingHinge?,
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
+        val navController = rememberNavController()
         val density = LocalDensity.current
-        val leftPaneWidth = verticalHinge?.let { with(density) { it.leftPx.toDp() } }
-        val rightPaneWidth = verticalHinge?.let { maxWidth - with(density) { it.rightPx.toDp() } }
-        val useLeftPane = leftPaneWidth != null && rightPaneWidth != null && leftPaneWidth >= rightPaneWidth
-        val paneWidth = if (useLeftPane) leftPaneWidth else rightPaneWidth
-
-        if (paneWidth != null) {
-            Box(
-                modifier = Modifier
-                    .width(paneWidth)
-                    .fillMaxHeight()
-                    .align(if (useLeftPane) Alignment.CenterStart else Alignment.CenterEnd),
-            ) {
-                AdaptiveShell(boundaries, isHingeSeparated = true)
+        when (separatingHinge?.orientation) {
+            HingeOrientation.Vertical -> {
+                val leftWidth = with(density) { separatingHinge.leftPx.toDp() }
+                val rightWidth = maxWidth - with(density) { separatingHinge.rightPx.toDp() }
+                val useLeft = leftWidth >= rightWidth
+                Box(
+                    modifier = Modifier
+                        .width(if (useLeft) leftWidth else rightWidth)
+                        .fillMaxHeight()
+                        .align(if (useLeft) AbsoluteAlignment.CenterLeft else AbsoluteAlignment.CenterRight),
+                ) {
+                    AdaptiveShell(boundaries, navController, isHingeSeparated = true)
+                }
             }
-        } else {
-            AdaptiveShell(boundaries, isHingeSeparated = false)
+
+            HingeOrientation.Horizontal -> {
+                val topHeight = with(density) { separatingHinge.topPx.toDp() }
+                val bottomHeight = maxHeight - with(density) { separatingHinge.bottomPx.toDp() }
+                val useTop = topHeight >= bottomHeight
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(if (useTop) topHeight else bottomHeight)
+                        .align(if (useTop) Alignment.TopCenter else Alignment.BottomCenter),
+                ) {
+                    AdaptiveShell(boundaries, navController, isHingeSeparated = true)
+                }
+            }
+
+            null -> AdaptiveShell(boundaries, navController, isHingeSeparated = false)
         }
     }
 }
 
 @Composable
-private fun AdaptiveShell(boundaries: AppBoundaries, isHingeSeparated: Boolean) {
+private fun AdaptiveShell(
+    boundaries: AppBoundaries,
+    navController: NavHostController,
+    isHingeSeparated: Boolean,
+) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
         val layoutDirection = LocalLayoutDirection.current
@@ -121,7 +152,6 @@ private fun AdaptiveShell(boundaries: AppBoundaries, isHingeSeparated: Boolean) 
             "Checked ${checkedAt.toString().substring(11, 16)} UTC",
         ).joinToString(" • ")
 
-        val navController = rememberNavController()
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentDestination = backStackEntry?.destination
         val reducedMotion = LocalReducedMotion.current

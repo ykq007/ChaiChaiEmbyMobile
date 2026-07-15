@@ -11,7 +11,10 @@ allprojects { dependencyLocking { lockAllConfigurations() } }
 tasks.register("verifyModuleGraph") {
     group = "verification"
     description = "Fails when one feature module depends directly on another."
-    inputs.files(fileTree("feature") { include("*/build.gradle.kts") })
+    inputs.files(
+        fileTree("feature") { include("*/build.gradle.kts") },
+        file("gradle/feature-module.gradle"),
+    )
     doLast {
         val forbidden = Regex("project\\(\\\":feature:")
         val violations = inputs.files.filter { forbidden.containsMatchIn(it.readText()) }

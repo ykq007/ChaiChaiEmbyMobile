@@ -6,6 +6,9 @@ import androidx.compose.ui.test.isHeading
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import dev.chaichai.mobile.core.contracts.AppBoundaries
 import dev.chaichai.mobile.core.contracts.AppClock
 import dev.chaichai.mobile.core.contracts.ConnectivityMonitor
@@ -24,6 +27,7 @@ class DeterministicHarnessTest {
 
     @Test
     fun controllable_boundaries_drive_the_real_app_shell() {
+        var separatingHinge by mutableStateOf<SeparatingHinge?>(null)
         val gatewayState = MutableStateFlow(GatewayConnectionState.Connected)
         val playbackState = MutableStateFlow(true)
         val connectivityState = MutableStateFlow(false)
@@ -42,7 +46,7 @@ class DeterministicHarnessTest {
 
         composeRule.setContent {
             ChaiChaiTheme(reducedMotion = true) {
-                MobileApp(boundaries, verticalHinge = null)
+                MobileApp(boundaries, separatingHinge = separatingHinge)
             }
         }
 
@@ -52,6 +56,17 @@ class DeterministicHarnessTest {
             substring = true,
         ).assertIsDisplayed()
         composeRule.onNodeWithText("Settings").performClick()
+        composeRule.onNode(hasText("Settings") and isHeading()).assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            separatingHinge = SeparatingHinge(
+                leftPx = 500,
+                topPx = 0,
+                rightPx = 520,
+                bottomPx = 2_000,
+                orientation = HingeOrientation.Vertical,
+            )
+        }
         composeRule.onNode(hasText("Settings") and isHeading()).assertIsDisplayed()
     }
 }

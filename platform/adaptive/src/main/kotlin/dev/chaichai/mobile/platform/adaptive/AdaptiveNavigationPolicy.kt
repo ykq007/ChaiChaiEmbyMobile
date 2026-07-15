@@ -18,7 +18,7 @@ object AdaptiveNavigationPolicy {
     private const val ConstrainedHeightDp = 480
 
     fun placement(window: WindowCharacteristics): NavigationPlacement =
-        if (window.usableWidthDp >= RailMinimumWidthDp && !window.hasSeparatingVerticalHinge) {
+        if (window.usableWidthDp >= RailMinimumWidthDp) {
             NavigationPlacement.Rail
         } else {
             NavigationPlacement.Bottom

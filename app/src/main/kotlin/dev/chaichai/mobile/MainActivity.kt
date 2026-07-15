@@ -24,15 +24,25 @@ class MainActivity : ComponentActivity() {
             val layoutInfo by WindowInfoTracker.getOrCreate(this)
                 .windowLayoutInfo(this)
                 .collectAsState(initial = null)
-            val separatingVerticalHinge = layoutInfo?.displayFeatures
+            val separatingHinge = layoutInfo?.displayFeatures
                 ?.filterIsInstance<FoldingFeature>()
-                ?.firstOrNull { it.isSeparating && it.orientation == FoldingFeature.Orientation.VERTICAL }
+                ?.firstOrNull { it.isSeparating }
 
             ChaiChaiTheme(reducedMotion = !ValueAnimator.areAnimatorsEnabled()) {
                 MobileApp(
                     boundaries = boundaries,
-                    verticalHinge = separatingVerticalHinge?.bounds?.let {
-                        VerticalHinge(leftPx = it.left, rightPx = it.right)
+                    separatingHinge = separatingHinge?.let { feature ->
+                        SeparatingHinge(
+                            leftPx = feature.bounds.left,
+                            topPx = feature.bounds.top,
+                            rightPx = feature.bounds.right,
+                            bottomPx = feature.bounds.bottom,
+                            orientation = if (feature.orientation == FoldingFeature.Orientation.VERTICAL) {
+                                HingeOrientation.Vertical
+                            } else {
+                                HingeOrientation.Horizontal
+                            },
+                        )
                     },
                 )
             }

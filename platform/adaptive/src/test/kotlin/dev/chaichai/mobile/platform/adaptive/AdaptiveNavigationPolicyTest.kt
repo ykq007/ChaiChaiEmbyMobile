@@ -25,9 +25,9 @@ class AdaptiveNavigationPolicyTest {
     }
 
     @Test
-    fun `separating vertical hinge keeps navigation and content together`() {
+    fun `wide unobstructed pane uses rail when a separating hinge is present`() {
         assertEquals(
-            NavigationPlacement.Bottom,
+            NavigationPlacement.Rail,
             AdaptiveNavigationPolicy.placement(
                 WindowCharacteristics(
                     usableWidthDp = 840,
