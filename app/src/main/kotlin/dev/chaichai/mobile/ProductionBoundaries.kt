@@ -18,6 +18,7 @@ import dev.chaichai.mobile.platform.server.EmbyAuthenticator
 import dev.chaichai.mobile.platform.server.EmbyProbe
 import dev.chaichai.mobile.platform.server.KeystoreSessionVault
 import dev.chaichai.mobile.platform.server.ServerSetupCoordinator
+import dev.chaichai.mobile.platform.server.createRoomHomeCache
 import java.util.UUID
 import java.time.Instant
 import dagger.Module
@@ -39,7 +40,7 @@ object ProductionBoundariesModule {
             preferences.edit().putString("device_id", it).apply()
         }
         val vault = KeystoreSessionVault(context)
-        val gateway = AuthenticatedEmbyGateway(vault)
+        val gateway = AuthenticatedEmbyGateway(vault, homeCache = createRoomHomeCache(context))
         val serverSetup = ServerSetupCoordinator(
             applicationScope,
             EmbyProbe(),

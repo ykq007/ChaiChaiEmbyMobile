@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.hasText
@@ -58,6 +59,7 @@ class ServerSetupFlowTest {
             server.start()
             server.enqueue(publicInfo(version))
             server.enqueue(authenticated("token-one"))
+            repeat(5) { server.enqueue(MockResponse.Builder().body("{\"Items\":[]}").build()) }
             server.enqueue(MockResponse.Builder().code(401).build())
             server.enqueue(authenticated("token-two"))
             server.enqueue(MockResponse.Builder().body("{}").build())
@@ -73,19 +75,23 @@ class ServerSetupFlowTest {
             val serverAddress = server.url("/emby/").toString()
             composeRule.onNodeWithText("Server Address").performTextInput(serverAddress)
             composeRule.onNodeWithText("Check server").performClick()
-            composeRule.onNodeWithText("I understand, continue with HTTP").assertIsDisplayed().performClick()
+            waitForText("I understand, continue with HTTP")
+            composeRule.onNodeWithText("I understand, continue with HTTP").performClick()
+            waitForText("Confirm and sign in")
             composeRule.onNodeWithText("Confirm and sign in").performClick()
             composeRule.onNodeWithText("Username").performTextInput("Ada")
             composeRule.onNodeWithText("Password").performTextInput("secret-password")
             composeRule.onNodeWithText("Sign in", useUnmergedTree = true).performClick()
-            composeRule.onNode(hasText("Home") and isHeading()).assertIsDisplayed()
+            waitForText("Your Home is empty")
             assertEquals("user", vault.restore()!!.userId)
 
             composeRule.onNodeWithText("Search").performClick()
-            composeRule.onNodeWithText("Sign in to Cinema").assertIsDisplayed()
+            waitForText("Sign in to Cinema")
             composeRule.onNodeWithText("Password").performTextInput("replacement-password")
             composeRule.onNodeWithText("Sign in", useUnmergedTree = true).performClick()
-            composeRule.onNode(hasText("Search") and isHeading()).assertIsDisplayed()
+            composeRule.waitUntil(5_000) {
+                composeRule.onAllNodes(hasText("Search") and isHeading()).fetchSemanticsNodes().isNotEmpty()
+            }
 
             val restoredGateway = AuthenticatedEmbyGateway(vault)
             val restored = ServerSetupCoordinator(
@@ -97,6 +103,12 @@ class ServerSetupFlowTest {
         }
         vault.clear()
         scope.cancel()
+    }
+
+    private fun waitForText(text: String) {
+        composeRule.waitUntil(5_000) {
+            composeRule.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
+        }
     }
 
     @Test
