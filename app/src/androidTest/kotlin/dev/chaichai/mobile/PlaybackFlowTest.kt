@@ -1,7 +1,10 @@
 package dev.chaichai.mobile
 
 import androidx.activity.ComponentActivity
+import androidx.activity.BackEventCompat
+import android.view.View
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.ComposeAccessibilityValidator
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -33,7 +36,6 @@ import dev.chaichai.mobile.core.contracts.TrackQualifier
 import dev.chaichai.mobile.design.system.ChaiChaiTheme
 import dev.chaichai.mobile.feature.playback.PlaybackHost
 import dev.chaichai.mobile.platform.adaptive.PlaybackSafePane
-import dev.chaichai.mobile.platform.adaptive.PlaybackTracksLayout
 import dev.chaichai.mobile.platform.adaptive.PlaybackTracksPresentation
 import dev.chaichai.mobile.platform.adaptive.PlaybackWindowLayout
 import dev.chaichai.mobile.platform.adaptive.PlaybackSystemBars
@@ -42,6 +44,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import androidx.test.espresso.accessibility.AccessibilityChecks
+import com.google.android.apps.common.testing.accessibility.framework.AccessibilityViewCheckResult
+import org.hamcrest.Description
+import org.hamcrest.TypeSafeMatcher
 
 class PlaybackFlowTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
@@ -135,9 +141,10 @@ class PlaybackFlowTest {
                 PlaybackHost(
                     playback,
                     Modifier.size(1000.dp, 700.dp),
-                    tracksLayout = PlaybackTracksLayout(
-                        PlaybackTracksPresentation.AnchoredSide,
+                    windowLayout = PlaybackWindowLayout(
                         PlaybackSafePane.WholeWindow,
+                        PlaybackSystemBars.Visible,
+                        PlaybackTracksPresentation.AnchoredSide,
                     ),
                 )
             }
@@ -158,9 +165,10 @@ class PlaybackFlowTest {
                 PlaybackHost(
                     playback,
                     Modifier.size(1000.dp, 700.dp),
-                    tracksLayout = PlaybackTracksLayout(
-                        PlaybackTracksPresentation.ModalBottom,
+                    windowLayout = PlaybackWindowLayout(
                         PlaybackSafePane.Right(500),
+                        PlaybackSystemBars.Visible,
+                        PlaybackTracksPresentation.ModalBottom,
                     ),
                 )
             }
@@ -182,9 +190,10 @@ class PlaybackFlowTest {
                 ChaiChaiTheme(reducedMotion = true) {
                     PlaybackHost(
                         playback,
-                        tracksLayout = PlaybackTracksLayout(
-                            PlaybackTracksPresentation.ModalBottom,
+                        windowLayout = PlaybackWindowLayout(
                             PlaybackSafePane.Right(140),
+                            PlaybackSystemBars.Visible,
+                            PlaybackTracksPresentation.ModalBottom,
                         ),
                     )
                 }
@@ -300,23 +309,67 @@ class PlaybackFlowTest {
     }
 
     @Test
+    fun playback_controls_pass_automated_compose_accessibility_checks() {
+        val validator = AccessibilityChecks.enable()
+            .setRunChecksFromRootView(true)
+            .setSuppressingResultMatcher(
+                object : TypeSafeMatcher<AccessibilityViewCheckResult>() {
+                    override fun describeTo(description: Description) {
+                        description.appendText("Compose host view's virtual-node label false positive")
+                    }
+
+                    override fun matchesSafely(result: AccessibilityViewCheckResult): Boolean =
+                        result.view?.javaClass?.name == "androidx.compose.ui.platform.AndroidComposeView" &&
+                            result.sourceCheckClass.simpleName == "SpeakableTextPresentCheck"
+                },
+            )
+        try {
+            compose.setComposeAccessibilityValidator(
+                object : ComposeAccessibilityValidator {
+                    override fun check(view: View) = validator.check(view)
+                },
+            )
+            compose.setContent {
+                ChaiChaiTheme(reducedMotion = true) { PlaybackHost(FakePlayback()) }
+            }
+
+            // Compose invokes the configured validator before semantics actions.
+            compose.onNodeWithContentDescription("Pause").performClick()
+            compose.onNodeWithContentDescription("Tracks").performClick()
+            compose.onNodeWithTag("tracks-bottom-sheet", useUnmergedTree = true).assertExists()
+        } finally {
+            AccessibilityChecks.disable()
+        }
+    }
+
+    @Test
     fun back_dismisses_tracks_before_exiting_playback() {
         val playback = FakePlayback()
         compose.setContent { ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback) } }
         compose.onNodeWithContentDescription("Tracks").performClick()
 
-        dispatcherBack()
+        predictiveBack(cancel = true)
+        compose.waitForIdle()
+        compose.onNodeWithTag("tracks-bottom-sheet", useUnmergedTree = true).assertExists()
+        assertEquals(0, playback.exitCount)
+
+        predictiveBack(cancel = false)
         compose.waitForIdle()
 
         compose.onNodeWithTag("tracks-bottom-sheet", useUnmergedTree = true).assertDoesNotExist()
         assertEquals(0, playback.exitCount)
-        dispatcherBack()
+        predictiveBack(cancel = false)
         compose.waitForIdle()
         assertEquals(1, playback.exitCount)
     }
 
-    private fun dispatcherBack() {
-        compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+    private fun predictiveBack(cancel: Boolean) {
+        compose.activityRule.scenario.onActivity {
+            val dispatcher = it.onBackPressedDispatcher
+            dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 0f, 0f, BackEventCompat.EDGE_LEFT))
+            dispatcher.dispatchOnBackProgressed(BackEventCompat(20f, 0f, 0.5f, BackEventCompat.EDGE_LEFT))
+            if (cancel) dispatcher.dispatchOnBackCancelled() else dispatcher.onBackPressed()
+        }
     }
 
     private class FakePlayback : NoOpPlaybackCoordinator() {

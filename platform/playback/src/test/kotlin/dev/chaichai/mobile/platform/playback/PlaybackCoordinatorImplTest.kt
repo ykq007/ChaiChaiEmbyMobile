@@ -183,6 +183,8 @@ class PlaybackCoordinatorImplTest {
             MediaIdentity("server", "movie"), HomeScope("server", "user"), "Arrival",
         ))
         runCurrent()
+        coordinator.toggleControls()
+        assertFalse((coordinator.state.value as PlaybackState.Active).controlsVisible)
         engine.positionTicks = 700_000_000
 
         engine.eventsFlow.emit(
@@ -198,6 +200,7 @@ class PlaybackCoordinatorImplTest {
         assertEquals(PlaybackReportKind.Progress, background.kind)
         assertEquals(700_000_000, background.positionTicks)
         assertTrue(coordinator.state.value is PlaybackState.Active)
+        assertFalse((coordinator.state.value as PlaybackState.Active).controlsVisible)
         assertEquals(0, engine.stopCount)
         coordinator.close()
     }

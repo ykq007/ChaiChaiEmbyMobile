@@ -260,7 +260,9 @@ class PlaybackCoordinatorImpl(
             mutableState.value = current.copy(
                 positionTicks = event.positionTicks.coerceIn(0, plan.runtimeTicks),
                 isPaused = event.isPaused,
-                controlsVisible = true,
+                controlsVisible = if (
+                    event.event == dev.chaichai.mobile.platform.server.PlaybackProgressEvent.TimeUpdate
+                ) current.controlsVisible else true,
             )
         }
         scope.launch {

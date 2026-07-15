@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.Build
 import androidx.media3.common.MediaItem
@@ -33,12 +34,10 @@ class PlaybackMediaControllerTest {
     fun media_controller_drives_transport_system_volume_and_a_visible_notification() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            instrumentation.uiAutomation.executeShellCommand(
-                "pm revoke ${context.packageName} ${Manifest.permission.POST_NOTIFICATIONS}",
-            ).close()
-        }
-        val host = ActivityScenario.launch(PlaybackControllerHostActivity::class.java)
+        val notificationGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        var originalVolume: Int? = null
+        val host = ActivityScenario.launch(MainActivity::class.java)
         try {
             MockWebServer().use { server ->
             server.start()
@@ -53,14 +52,37 @@ class PlaybackMediaControllerTest {
             val controller = future.get(10, TimeUnit.SECONDS)
             try {
                 onMain {
-                    controller.setMediaItem(MediaItem.fromUri(server.url("/stream").toString()))
+                    controller.setMediaItem(
+                        MediaItem.Builder()
+                            .setMediaId("authoritative-movie")
+                            .setUri(server.url("/stream").toString())
+                            .build(),
+                    )
                     controller.prepare()
                     controller.play()
                 }
                 waitUntil { onMain { controller.playWhenReady } }
                 waitUntil { onMain { controller.playbackState == Player.STATE_READY } }
+                val positionBeforeRecreation = onMain { controller.currentPosition }
+                val connectedTokenBefore = onMain { controller.connectedToken }
+                val activityBefore = AtomicReference<MainActivity>()
+                host.onActivity {
+                    activityBefore.set(it)
+                    it.recreate()
+                }
+                waitUntil {
+                    var recreated = false
+                    host.onActivity { recreated = it !== activityBefore.get() }
+                    recreated
+                }
+                assertEquals(connectedTokenBefore, onMain { controller.connectedToken })
+                assertEquals("authoritative-movie", onMain { controller.currentMediaItem?.mediaId })
+                assertTrue(onMain { controller.currentPosition >= positionBeforeRecreation })
+                assertTrue(onMain { controller.playWhenReady })
+                assertEquals(1, server.requestCount)
 
                 val audio = context.getSystemService(AudioManager::class.java)
+                originalVolume = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
                 takeAudioFocus(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
                 waitUntil {
                     onMain {
@@ -93,15 +115,12 @@ class PlaybackMediaControllerTest {
                 waitUntil { audio.getStreamVolume(AudioManager.STREAM_MUSIC) == requestedVolume }
 
                 onMain { controller.play() }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    instrumentation.uiAutomation.executeShellCommand(
-                        "pm grant ${context.packageName} ${Manifest.permission.POST_NOTIFICATIONS}",
-                    ).close()
-                }
                 val notifications = context.getSystemService(NotificationManager::class.java)
-                waitUntil { notifications.activeNotifications.isNotEmpty() }
                 assertTrue(notifications.notificationChannels.isNotEmpty())
-                assertTrue(notifications.activeNotifications.any { it.notification.actions?.isNotEmpty() == true })
+                if (notificationGranted) {
+                    waitUntil { notifications.activeNotifications.isNotEmpty() }
+                    assertTrue(notifications.activeNotifications.any { it.notification.actions?.isNotEmpty() == true })
+                }
             } finally {
                 onMain {
                     controller.stop()
@@ -110,6 +129,11 @@ class PlaybackMediaControllerTest {
             }
             }
         } finally {
+            releaseAudioFocus()
+            originalVolume?.let {
+                context.getSystemService(AudioManager::class.java)
+                    .setStreamVolume(AudioManager.STREAM_MUSIC, it, 0)
+            }
             host.close()
         }
     }

@@ -1,5 +1,6 @@
 package dev.chaichai.mobile
 
+import android.os.ParcelFileDescriptor
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -77,32 +78,60 @@ class PlaybackActivityRecreationTest {
 
     @Test
     fun real_activity_recreation_keeps_the_authoritative_session_without_prepare_restart() {
-        ActivityScenario.launch(PlaybackRecreationActivity::class.java).use { scenario ->
-            InstrumentationRegistry.getInstrumentation().runOnMainSync {
-                coordinator.submit(
-                    MediaPlaybackRequest.Resume(
-                        MediaIdentity("server", "movie"),
-                        600_000_000,
-                        HomeScope("server", "user"),
-                        "Arrival",
-                    ),
-                )
-            }
-            waitForActive()
-            val creationCount = PlaybackRecreationActivity.creationCount.get()
-            scenario.onActivity { it.recreate() }
-            waitUntil { PlaybackRecreationActivity.creationCount.get() > creationCount }
+        PlaybackRecreationActivity.playbackEndedCount.set(0)
+        val originalAutoRotation = shellOutput("settings get system accelerometer_rotation").trim()
+        val originalUserRotation = shellOutput("settings get system user_rotation").trim()
+        try {
+            ActivityScenario.launch(PlaybackRecreationActivity::class.java).use { scenario ->
+                InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                    coordinator.submit(
+                        MediaPlaybackRequest.Resume(
+                            MediaIdentity("server", "movie"),
+                            600_000_000,
+                            HomeScope("server", "user"),
+                            "Arrival",
+                        ),
+                    )
+                }
+                waitForActive()
+                val rotationCreationCount = PlaybackRecreationActivity.creationCount.get()
+                shell("settings put system accelerometer_rotation 0")
+                shell("settings put system user_rotation ${if (originalUserRotation == "1") 0 else 1}")
+                waitUntil { PlaybackRecreationActivity.creationCount.get() > rotationCreationCount }
+                assertEquals(1, gateway.negotiationCount)
+                assertEquals(1, engine.prepareCount)
 
-            val active = coordinator.state.value as PlaybackState.Active
-            assertEquals(MediaIdentity("server", "movie"), active.identity)
-            assertEquals(600_000_000, active.positionTicks)
-            assertFalse(active.isPaused)
-            assertEquals(1, gateway.negotiationCount)
-            assertEquals(1, engine.prepareCount)
-            assertEquals(PlaybackSessionReference("source", "session"), gateway.reports.single().plan.sessionReference)
-            assertEquals(PlaybackMethod.DirectPlay, gateway.reports.single().plan.method)
+                val creationCount = PlaybackRecreationActivity.creationCount.get()
+                scenario.onActivity { it.recreate() }
+                waitUntil { PlaybackRecreationActivity.creationCount.get() > creationCount }
+
+                val active = coordinator.state.value as PlaybackState.Active
+                assertEquals(MediaIdentity("server", "movie"), active.identity)
+                assertEquals(600_000_000, active.positionTicks)
+                assertFalse(active.isPaused)
+                assertEquals(1, gateway.negotiationCount)
+                assertEquals(1, engine.prepareCount)
+                assertEquals(0, PlaybackRecreationActivity.playbackEndedCount.get())
+                assertEquals(
+                    PlaybackSessionReference("source", "session"),
+                    gateway.reports.single().plan.sessionReference,
+                )
+                assertEquals(PlaybackMethod.DirectPlay, gateway.reports.single().plan.method)
+            }
+        } finally {
+            shell("settings put system accelerometer_rotation $originalAutoRotation")
+            shell("settings put system user_rotation $originalUserRotation")
         }
     }
+
+    private fun shell(command: String) {
+        InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command).close()
+    }
+
+    private fun shellOutput(command: String): String =
+        ParcelFileDescriptor.AutoCloseInputStream(
+            InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command),
+        ).bufferedReader().use { it.readText() }
 
     private fun waitForActive() {
         val deadline = System.currentTimeMillis() + 5_000
@@ -143,7 +172,7 @@ class PlaybackActivityRecreationTest {
     }
 
     private class RecordingEngine : PlaybackEngine {
-        private val mutableEvents = MutableSharedFlow<PlaybackEngineEvent>()
+        private val mutableEvents = MutableSharedFlow<PlaybackEngineEvent>(replay = 1)
         override val events = mutableEvents
         override var positionTicks = 0L
         override var isPaused = true

@@ -92,7 +92,6 @@ import dev.chaichai.mobile.core.contracts.ServerSetupState
 import dev.chaichai.mobile.platform.adaptive.AdaptiveNavigationPolicy
 import dev.chaichai.mobile.platform.adaptive.ContentWidthClass
 import dev.chaichai.mobile.platform.adaptive.NavigationPlacement
-import dev.chaichai.mobile.platform.adaptive.PlaybackTracksLayout
 import dev.chaichai.mobile.platform.adaptive.PlaybackTracksPresentation
 import dev.chaichai.mobile.platform.adaptive.PlaybackSafePane
 import dev.chaichai.mobile.platform.adaptive.WindowCharacteristics
@@ -333,7 +332,6 @@ fun MobileApp(
             )
         }
         }
-        val tracksLayout = AdaptiveNavigationPolicy.playbackTracks(window)
         val playbackWindowLayout = AdaptiveNavigationPolicy.playbackWindowLayout(window)
         val playbackSystemBars = if (
             playbackWindowLayout.systemBars == PlaybackSystemBars.Immersive &&
@@ -349,7 +347,6 @@ fun MobileApp(
             onTogglePlaybackOrientation,
             onTogglePlaybackFullscreen,
             onPlaybackEnded,
-            tracksLayout = tracksLayout,
             windowLayout = playbackWindowLayout,
             keepControlsVisible = keepPlaybackControlsVisible,
         )

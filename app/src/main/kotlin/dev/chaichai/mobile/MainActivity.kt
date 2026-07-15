@@ -40,6 +40,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        notificationPermissionRequested = savedInstanceState?.getBoolean(NOTIFICATION_PERMISSION_REQUESTED) == true ||
+            getSharedPreferences(PERMISSION_PREFERENCES, MODE_PRIVATE)
+                .getBoolean(NOTIFICATION_PERMISSION_REQUESTED, false)
         enableEdgeToEdge()
         setContent {
             val layoutInfo by WindowInfoTracker.getOrCreate(this)
@@ -94,6 +97,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean(NOTIFICATION_PERMISSION_REQUESTED, notificationPermissionRequested)
+        super.onSaveInstanceState(outState)
+    }
+
     private fun togglePlaybackOrientation() {
         requestedOrientation = if (resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT) {
             ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -131,10 +139,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun requestPlaybackNotificationPermission() {
+    internal fun requestPlaybackNotificationPermission() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || notificationPermissionRequested) return
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
         notificationPermissionRequested = true
+        getSharedPreferences(PERMISSION_PREFERENCES, MODE_PRIVATE).edit()
+            .putBoolean(NOTIFICATION_PERMISSION_REQUESTED, true)
+            .commit()
         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    internal fun hasRequestedPlaybackNotificationPermission(): Boolean = notificationPermissionRequested
+
+    internal companion object {
+        const val PERMISSION_PREFERENCES = "playback-permissions"
+        const val NOTIFICATION_PERMISSION_REQUESTED = "notification-permission-requested"
     }
 }

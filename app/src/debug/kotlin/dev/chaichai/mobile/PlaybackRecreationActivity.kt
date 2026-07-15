@@ -13,12 +13,15 @@ class PlaybackRecreationActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         creationCount.incrementAndGet()
         setContent {
-            ChaiChaiTheme(reducedMotion = true) { MobileApp(boundaries, null) }
+            ChaiChaiTheme(reducedMotion = true) {
+                MobileApp(boundaries, null, onPlaybackEnded = { playbackEndedCount.incrementAndGet() })
+            }
         }
     }
 
     companion object {
         lateinit var boundaries: AppBoundaries
         val creationCount = AtomicInteger()
+        val playbackEndedCount = AtomicInteger()
     }
 }

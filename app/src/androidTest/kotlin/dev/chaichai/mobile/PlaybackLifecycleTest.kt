@@ -72,6 +72,11 @@ class PlaybackLifecycleTest {
         // Expanded/unfolded.
         compose.runOnIdle { size = DpSize(1_000.dp, 700.dp) }
         compose.onNodeWithContentDescription("Tracks").assertIsDisplayed()
+        // Expanded portrait/tablet.
+        compose.runOnIdle { size = DpSize(900.dp, 1_200.dp) }
+        compose.onNodeWithContentDescription("Pause").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Tracks").assertIsDisplayed()
+        compose.runOnIdle { size = DpSize(1_000.dp, 700.dp) }
         // Vertical separating fold.
         compose.runOnIdle {
             hinge = SeparatingHinge(480, 0, 520, 700, HingeOrientation.Vertical)
@@ -107,27 +112,19 @@ class PlaybackLifecycleTest {
 
     @Test
     fun unsafe_process_restore_returns_to_details_without_autoplay() {
-        val playback = RecordingPlayback(active())
-        val setup = AuthenticatedSetup("movies/server/movie")
-        val gateway = object : EmbyGateway {
-            override val connectionState = MutableStateFlow(GatewayConnectionState.Connected)
-            override suspend fun loadMovieDetails(
-                identity: MediaIdentity,
-                authenticationReturnDestination: String?,
-            ) = MovieDetailsState.Ready(MovieDetails(identity, "Arrival"))
-        }
+        var process by mutableStateOf(ProcessInstance.withActivePlayback())
+        val originalProcess = process
         val restoration = StateRestorationTester(compose)
         restoration.setContent {
             ChaiChaiTheme(reducedMotion = true) {
-                MobileApp(boundaries(gateway, playback, setup), null)
+                MobileApp(process.boundaries, null)
             }
         }
 
         compose.onNodeWithContentDescription("Pause").assertIsDisplayed()
         compose.runOnIdle {
-            // Process death removes the service/coordinator session; only navigation state is safe to restore.
-            playback.state.value = PlaybackState.Idle
-            playback.isPlaying.value = false
+            // Rebuild every process-owned boundary with no surviving playback service session.
+            process = ProcessInstance.withoutPlaybackSession()
         }
         restoration.emulateSavedInstanceStateRestore()
 
@@ -135,8 +132,9 @@ class PlaybackLifecycleTest {
             compose.onAllNodesWithText("Arrival").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithText("Arrival").assertIsDisplayed()
-        assertEquals(PlaybackState.Idle, playback.state.value)
-        assertEquals(0, playback.submitCount)
+        assertEquals(PlaybackState.Idle, process.playback.state.value)
+        assertEquals(0, process.playback.submitCount)
+        assertEquals(0, originalProcess.playback.submitCount)
     }
 
     private fun active() = PlaybackState.Active(
@@ -177,5 +175,50 @@ class PlaybackLifecycleTest {
         override fun authenticate(username: String, password: String) = Unit
         override fun retry() = Unit
         override fun authenticationExpired(requestedDestination: String?) = Unit
+    }
+
+    private data class ProcessInstance(
+        val boundaries: AppBoundaries,
+        val playback: RecordingPlayback,
+    ) {
+        companion object {
+            fun withActivePlayback() = create(active = true)
+            fun withoutPlaybackSession() = create(active = false)
+
+            private fun create(active: Boolean): ProcessInstance {
+                val playback = RecordingPlayback(
+                    if (active) {
+                        PlaybackState.Active(
+                            MediaIdentity("server", "movie"),
+                            "Arrival",
+                            600_000_000,
+                            7_200_000_000,
+                            false,
+                        )
+                    } else {
+                        PlaybackState.Idle
+                    },
+                )
+                val gateway = object : EmbyGateway {
+                    override val connectionState = MutableStateFlow(GatewayConnectionState.Connected)
+                    override suspend fun loadMovieDetails(
+                        identity: MediaIdentity,
+                        authenticationReturnDestination: String?,
+                    ) = MovieDetailsState.Ready(MovieDetails(identity, "Arrival"))
+                }
+                return ProcessInstance(
+                    AppBoundaries(
+                        gateway = gateway,
+                        playback = playback,
+                        clock = AppClock { Instant.EPOCH },
+                        connectivity = object : ConnectivityMonitor {
+                            override val isOnline = MutableStateFlow(true)
+                        },
+                        serverSetup = AuthenticatedSetup("movies/server/movie"),
+                    ),
+                    playback,
+                )
+            }
+        }
     }
 }

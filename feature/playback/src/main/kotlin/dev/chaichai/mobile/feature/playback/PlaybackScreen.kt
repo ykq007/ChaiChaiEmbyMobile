@@ -40,7 +40,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -77,7 +76,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import dev.chaichai.mobile.platform.adaptive.PlaybackSafePane
-import dev.chaichai.mobile.platform.adaptive.PlaybackTracksLayout
 import dev.chaichai.mobile.platform.adaptive.PlaybackTracksPresentation
 import dev.chaichai.mobile.platform.adaptive.PlaybackWindowLayout
 import dev.chaichai.mobile.platform.adaptive.PlaybackSystemBars
@@ -90,10 +88,6 @@ fun PlaybackHost(
     onToggleOrientation: () -> Unit = {},
     onToggleFullscreen: () -> Unit = {},
     onPlaybackEnded: () -> Unit = {},
-    tracksLayout: PlaybackTracksLayout = PlaybackTracksLayout(
-        PlaybackTracksPresentation.ModalBottom,
-        PlaybackSafePane.WholeWindow,
-    ),
     windowLayout: PlaybackWindowLayout = PlaybackWindowLayout(
         PlaybackSafePane.WholeWindow,
         PlaybackSystemBars.Visible,
@@ -106,7 +100,6 @@ fun PlaybackHost(
     LaunchedEffect(state) {
         if (state is PlaybackState.Exited || state is PlaybackState.Failed) onPlaybackEnded()
     }
-    DisposableEffect(Unit) { onDispose(onPlaybackEnded) }
     PredictiveBackHandler(enabled = state !is PlaybackState.Idle && state !is PlaybackState.Exited) { progress ->
         progress.collect { }
         if (showTracks) showTracks = false else coordinator.exit()
@@ -117,7 +110,7 @@ fun PlaybackHost(
             snapshot.title, coordinator::exit, windowLayout, modifier,
         )
         is PlaybackState.Active -> PlaybackControls(
-            snapshot, coordinator, onToggleOrientation, onToggleFullscreen, tracksLayout,
+            snapshot, coordinator, onToggleOrientation, onToggleFullscreen,
             windowLayout, keepControlsVisible, showTracks, { showTracks = it }, modifier,
         )
         is PlaybackState.Failed -> PlaybackFailure(snapshot, coordinator, modifier)
@@ -148,7 +141,6 @@ private fun PlaybackControls(
     coordinator: PlaybackCoordinator,
     onToggleOrientation: () -> Unit,
     onToggleFullscreen: () -> Unit,
-    tracksLayout: PlaybackTracksLayout,
     windowLayout: PlaybackWindowLayout,
     keepControlsVisible: Boolean,
     showTracks: Boolean,
@@ -208,7 +200,7 @@ private fun PlaybackControls(
         if (showTracks) {
             TracksSurface(
                 state = state,
-                layout = tracksLayout,
+                layout = windowLayout,
                 onDismiss = { onShowTracksChanged(false) },
                 onSelect = coordinator::selectTrack,
             )
@@ -298,7 +290,7 @@ private fun PlaybackHeader(
 @Composable
 private fun TracksSurface(
     state: PlaybackState.Active,
-    layout: PlaybackTracksLayout,
+    layout: PlaybackWindowLayout,
     onDismiss: () -> Unit,
     onSelect: (PlaybackTrackSelection) -> Unit,
 ) {
@@ -310,7 +302,7 @@ private fun TracksSurface(
     BoxWithConstraints(
         safePane(layout.safePane)
             .testTag(
-                if (layout.presentation == PlaybackTracksPresentation.AnchoredSide) {
+                if (layout.tracksPresentation == PlaybackTracksPresentation.AnchoredSide) {
                     "tracks-side-sheet"
                 } else {
                     "tracks-bottom-sheet"
@@ -329,7 +321,7 @@ private fun TracksSurface(
         Surface(
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 6.dp,
-            modifier = if (layout.presentation == PlaybackTracksPresentation.AnchoredSide) {
+            modifier = if (layout.tracksPresentation == PlaybackTracksPresentation.AnchoredSide) {
                 Modifier.align(Alignment.CenterEnd).width(400.dp).fillMaxHeight()
                     .windowInsetsPadding(WindowInsets.safeDrawing)
             } else {
