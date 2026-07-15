@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -96,7 +97,9 @@ class PlaybackCoordinatorImplTest {
         coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
         runCurrent()
 
-        engine.eventsFlow.emit(PlaybackEngineEvent.ProgressDue)
+        engine.eventsFlow.emit(PlaybackEngineEvent.Progress(
+            dev.chaichai.mobile.platform.server.PlaybackProgressEvent.TimeUpdate, engine.positionTicks, engine.isPaused,
+        ))
         runCurrent()
         assertEquals(1, gateway.reports.count { it.kind == PlaybackReportKind.Progress })
 
@@ -117,8 +120,12 @@ class PlaybackCoordinatorImplTest {
         ))
         runCurrent()
 
-        engine.eventsFlow.emit(PlaybackEngineEvent.Progress(dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Pause))
-        engine.eventsFlow.emit(PlaybackEngineEvent.Progress(dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek))
+        engine.eventsFlow.emit(PlaybackEngineEvent.Progress(
+            dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Pause, 10, true,
+        ))
+        engine.eventsFlow.emit(PlaybackEngineEvent.Progress(
+            dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek, 20, true,
+        ))
         runCurrent()
 
         assertEquals(
@@ -128,6 +135,70 @@ class PlaybackCoordinatorImplTest {
             ),
             gateway.reports.filter { it.kind == PlaybackReportKind.Progress }.map { it.event },
         )
+        assertEquals(listOf(10L, 20L), gateway.reports.filter { it.kind == PlaybackReportKind.Progress }.map { it.positionTicks })
+        assertTrue(gateway.reports.filter { it.kind == PlaybackReportKind.Progress }.all { it.isPaused })
+        coordinator.close()
+    }
+
+    @Test
+    fun `playing is reported before service control events are enabled`() = runTest {
+        val gateway = FakeGateway()
+        val engine = FakeEngine()
+        gateway.onReport = { report ->
+            if (report.kind == PlaybackReportKind.Playing) assertFalse(engine.acknowledgedPlaying)
+        }
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
+
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
+            MediaIdentity("server", "movie"), HomeScope("server", "user"),
+        ))
+        runCurrent()
+
+        assertEquals(PlaybackReportKind.Playing, gateway.reports.first().kind)
+        assertTrue(engine.acknowledgedPlaying)
+        coordinator.close()
+    }
+
+    @Test
+    fun `replacement stops and reports the old session before playing the new one`() = runTest {
+        val gateway = FakeGateway()
+        val engine = FakeEngine()
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
+            MediaIdentity("server", "old"), HomeScope("server", "user"), "Old",
+        ))
+        runCurrent()
+
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
+            MediaIdentity("server", "new"), HomeScope("server", "user"), "New",
+        ))
+        runCurrent()
+
+        assertEquals(
+            listOf(PlaybackReportKind.Playing, PlaybackReportKind.Stopped, PlaybackReportKind.Playing),
+            gateway.reports.map { it.kind },
+        )
+        assertEquals(listOf("old", "old", "new"), gateway.reports.map { it.plan.request.itemId })
+        assertEquals("New", (coordinator.state.value as PlaybackState.Active).title)
+        coordinator.close()
+    }
+
+    @Test
+    fun `unsolicited service destruction reports stop and clears active playback`() = runTest {
+        val gateway = FakeGateway()
+        val engine = FakeEngine()
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
+            MediaIdentity("server", "movie"), HomeScope("server", "user"),
+        ))
+        runCurrent()
+
+        engine.eventsFlow.emit(PlaybackEngineEvent.Stopped(333, true))
+        runCurrent()
+
+        assertEquals(333, gateway.reports.single { it.kind == PlaybackReportKind.Stopped }.positionTicks)
+        assertEquals(PlaybackFailureKind.SourceUnavailable, (coordinator.state.value as PlaybackState.Failed).reason)
+        assertFalse(coordinator.isPlaying.value)
         coordinator.close()
     }
 
@@ -186,6 +257,7 @@ class PlaybackCoordinatorImplTest {
     ) : PlaybackGateway {
         var request: ScopedPlaybackRequest? = null
         val reports = mutableListOf<PlaybackReport>()
+        var onReport: (PlaybackReport) -> Unit = {}
         override suspend fun negotiate(request: ScopedPlaybackRequest, capabilities: PlaybackCapabilities): PlaybackNegotiationResult {
             this.request = request
             return result ?: PlaybackNegotiationResult.Ready(
@@ -195,7 +267,10 @@ class PlaybackCoordinatorImplTest {
                 ),
             )
         }
-        override suspend fun report(event: PlaybackReport): Boolean = true.also { reports += event }
+        override suspend fun report(event: PlaybackReport): Boolean = true.also {
+            reports += event
+            onReport(event)
+        }
     }
 
     private class FakeEngine : PlaybackEngine {
@@ -204,20 +279,26 @@ class PlaybackCoordinatorImplTest {
         override var positionTicks = 0L
         override var isPaused = false
         var prepareFailure: Exception? = null
+        var acknowledgedPlaying = false
         override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long) {
             prepareFailure?.let { throw it }
             positionTicks = startPositionTicks
         }
+        override suspend fun acknowledgePlayingReported() { acknowledgedPlaying = true }
         override suspend fun playPause() {
             isPaused = !isPaused
             eventsFlow.emit(PlaybackEngineEvent.Progress(
                 if (isPaused) dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Pause
                 else dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Unpause,
+                positionTicks,
+                isPaused,
             ))
         }
         override suspend fun seekTo(positionTicks: Long) {
             this.positionTicks = positionTicks
-            eventsFlow.emit(PlaybackEngineEvent.Progress(dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek))
+            eventsFlow.emit(PlaybackEngineEvent.Progress(
+                dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek, positionTicks, isPaused,
+            ))
         }
         override suspend fun stop() {
             eventsFlow.emit(PlaybackEngineEvent.Stopped(positionTicks, isPaused))

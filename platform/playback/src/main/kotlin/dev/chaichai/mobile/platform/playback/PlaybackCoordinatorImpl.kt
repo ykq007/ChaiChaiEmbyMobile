@@ -29,6 +29,7 @@ interface PlaybackEngine {
     val isPaused: Boolean
     val events: Flow<PlaybackEngineEvent> get() = emptyFlow()
     suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long)
+    suspend fun acknowledgePlayingReported()
     suspend fun playPause()
     suspend fun seekTo(positionTicks: Long)
     suspend fun stop()
@@ -36,8 +37,11 @@ interface PlaybackEngine {
 sealed interface PlaybackEngineEvent {
     data object Completed : PlaybackEngineEvent
     data object FatalError : PlaybackEngineEvent
-    data object ProgressDue : PlaybackEngineEvent
-    data class Progress(val event: dev.chaichai.mobile.platform.server.PlaybackProgressEvent) : PlaybackEngineEvent
+    data class Progress(
+        val event: dev.chaichai.mobile.platform.server.PlaybackProgressEvent,
+        val positionTicks: Long,
+        val isPaused: Boolean,
+    ) : PlaybackEngineEvent
     data class Stopped(val positionTicks: Long, val isPaused: Boolean) : PlaybackEngineEvent
 }
 
@@ -58,14 +62,14 @@ class PlaybackCoordinatorImpl(
     private var negotiationJob: Job? = null
     private var exiting = false
     private var terminalAfterStop: PlaybackState? = null
+    private var pendingRequest: MediaPlaybackRequest? = null
 
     private val engineEventJob = scope.launch {
             engine.events.collect { event ->
                 when (event) {
                     PlaybackEngineEvent.Completed -> exit()
                     PlaybackEngineEvent.FatalError -> failActivePlayback()
-                    PlaybackEngineEvent.ProgressDue -> reportServiceProgress()
-                    is PlaybackEngineEvent.Progress -> reportServiceProgress(event.event)
+                    is PlaybackEngineEvent.Progress -> reportServiceProgress(event)
                     is PlaybackEngineEvent.Stopped -> finishServiceStop(event)
                 }
             }
@@ -78,6 +82,16 @@ class PlaybackCoordinatorImpl(
     }
 
     override fun submit(request: MediaPlaybackRequest) {
+        if (activePlan != null) {
+            pendingRequest = request
+            if (!exiting) {
+                exiting = true
+                terminalAfterStop = PlaybackState.Idle
+                timelineJob?.cancel()
+                scope.launch { engine.stop() }
+            }
+            return
+        }
         lastRequest = request
         exiting = false
         timelineJob?.cancel()
@@ -122,6 +136,7 @@ class PlaybackCoordinatorImpl(
                     mutableIsPlaying.value = true
                     publishActive(title, controlsVisible = true)
                     gateway.report(report(result.plan, PlaybackReportKind.Playing))
+                    engine.acknowledgePlayingReported()
                     if (scheduleTimelineUpdates) startTimelineUpdates()
                 }
             }
@@ -181,14 +196,13 @@ class PlaybackCoordinatorImpl(
         }
     }
 
-    private fun reportServiceProgress(
-        event: dev.chaichai.mobile.platform.server.PlaybackProgressEvent =
-            dev.chaichai.mobile.platform.server.PlaybackProgressEvent.TimeUpdate,
-    ) {
+    private fun reportServiceProgress(event: PlaybackEngineEvent.Progress) {
         val plan = activePlan ?: return
         scope.launch {
             if (activePlan == plan) gateway.report(
-                report(plan, PlaybackReportKind.Progress, event),
+                PlaybackReport(
+                    plan, PlaybackReportKind.Progress, event.positionTicks, event.isPaused, event = event.event,
+                ),
             )
         }
     }
@@ -226,7 +240,8 @@ class PlaybackCoordinatorImpl(
 
     private fun finishServiceStop(event: PlaybackEngineEvent.Stopped) {
         val plan = activePlan ?: return
-        val terminal = terminalAfterStop ?: return
+        val terminal = terminalAfterStop ?: PlaybackState.Failed(PlaybackFailureKind.SourceUnavailable)
+        timelineJob?.cancel()
         scope.launch {
             gateway.report(
                 PlaybackReport(plan, PlaybackReportKind.Stopped, event.positionTicks, event.isPaused),
@@ -236,6 +251,10 @@ class PlaybackCoordinatorImpl(
             mutableState.value = terminal
             terminalAfterStop = null
             exiting = false
+            pendingRequest?.let { replacement ->
+                pendingRequest = null
+                submit(replacement)
+            }
         }
     }
 

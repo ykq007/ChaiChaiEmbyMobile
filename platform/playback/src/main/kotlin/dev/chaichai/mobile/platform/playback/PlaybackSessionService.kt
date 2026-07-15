@@ -36,6 +36,7 @@ class PlaybackSessionService : MediaSessionService() {
     private val snapshotHandler = Handler(Looper.getMainLooper())
     private var snapshotCount = 0
     private var stoppedPublished = false
+    private var reportControlEvents = false
     private val snapshotRunnable = object : Runnable {
         override fun run() {
             PlaybackServiceOwner.updateSnapshot(
@@ -44,7 +45,13 @@ class PlaybackSessionService : MediaSessionService() {
             )
             snapshotCount++
             if (snapshotCount % SNAPSHOTS_PER_PROGRESS == 0 && player.mediaItemCount > 0) {
-                PlaybackServiceOwner.publish(PlaybackEngineEvent.ProgressDue)
+                PlaybackServiceOwner.publish(
+                    PlaybackEngineEvent.Progress(
+                        dev.chaichai.mobile.platform.server.PlaybackProgressEvent.TimeUpdate,
+                        player.currentPosition * TICKS_PER_MILLISECOND,
+                        !player.playWhenReady,
+                    ),
+                )
             }
             snapshotHandler.postDelayed(this, SNAPSHOT_INTERVAL_MILLIS)
         }
@@ -68,10 +75,13 @@ class PlaybackSessionService : MediaSessionService() {
                 PlaybackServiceOwner.publish(PlaybackEngineEvent.FatalError)
             }
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (!reportControlEvents) return
                 PlaybackServiceOwner.publish(
                     PlaybackEngineEvent.Progress(
                         if (playWhenReady) dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Unpause
                         else dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Pause,
+                        player.currentPosition * TICKS_PER_MILLISECOND,
+                        !playWhenReady,
                     ),
                 )
             }
@@ -82,7 +92,11 @@ class PlaybackSessionService : MediaSessionService() {
             ) {
                 if (reason == Player.DISCONTINUITY_REASON_SEEK) {
                     PlaybackServiceOwner.publish(
-                        PlaybackEngineEvent.Progress(dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek),
+                        PlaybackEngineEvent.Progress(
+                            dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek,
+                            newPosition.positionMs * TICKS_PER_MILLISECOND,
+                            !player.playWhenReady,
+                        ),
                     )
                 }
             }
@@ -96,6 +110,7 @@ class PlaybackSessionService : MediaSessionService() {
     @UnstableApi
     internal fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long) {
         stoppedPublished = false
+        reportControlEvents = false
         val redirectRejectingClient = playbackHttpClient()
         val dataSourceFactory = OkHttpDataSource.Factory(redirectRejectingClient)
             .setDefaultRequestProperties(plan.headers)
@@ -106,6 +121,8 @@ class PlaybackSessionService : MediaSessionService() {
         player.prepare()
         player.play()
     }
+
+    internal fun acknowledgePlayingReported() { reportControlEvents = true }
 
     internal fun playPause() { if (player.playWhenReady) player.pause() else player.play() }
     internal fun seekTo(positionTicks: Long) { player.seekTo(positionTicks / TICKS_PER_MILLISECOND) }
@@ -208,6 +225,11 @@ class Media3ServicePlaybackEngine(private val context: Context) : PlaybackEngine
                 PlaybackServiceOwner.updateSnapshot(positionTicks(), isPaused())
             }
         }
+    }
+
+    override suspend fun acknowledgePlayingReported() = withContext(Dispatchers.Main.immediate) {
+        PlaybackServiceOwner.serviceOrNull()?.acknowledgePlayingReported()
+        Unit
     }
 
     override suspend fun playPause() = withContext(Dispatchers.Main.immediate) {
