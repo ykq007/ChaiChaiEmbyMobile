@@ -13,12 +13,20 @@ import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.MovieDetails
 import dev.chaichai.mobile.core.contracts.MovieDetailsState
-import dev.chaichai.mobile.core.contracts.MovieLibraryQuery
+import dev.chaichai.mobile.core.contracts.LibraryQuery
 import dev.chaichai.mobile.core.contracts.MovieLibraryState
 import dev.chaichai.mobile.core.contracts.MoviePoster
-import dev.chaichai.mobile.core.contracts.MovieSortField
+import dev.chaichai.mobile.core.contracts.LibrarySortField
 import dev.chaichai.mobile.core.contracts.MovieTrackAvailability
 import dev.chaichai.mobile.core.contracts.SortDirection
+import dev.chaichai.mobile.core.contracts.EpisodeDetails
+import dev.chaichai.mobile.core.contracts.EpisodeDetailsState
+import dev.chaichai.mobile.core.contracts.EpisodeSummary
+import dev.chaichai.mobile.core.contracts.SeasonEpisodesState
+import dev.chaichai.mobile.core.contracts.SeasonSummary
+import dev.chaichai.mobile.core.contracts.SeriesDetails
+import dev.chaichai.mobile.core.contracts.SeriesDetailsState
+import dev.chaichai.mobile.core.contracts.SeriesLibraryState
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,6 +52,7 @@ class AuthenticatedEmbyGateway(
     private val clients: AuthorityScopedHttpClients = AuthorityScopedHttpClients(),
     private val homeCache: HomeCache = InMemoryHomeCache(),
     private val movieCache: MovieCache = InMemoryMovieCache(),
+    private val seriesCache: SeriesCache = InMemorySeriesCache(),
     private val deviceId: String,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : EmbyGateway, SessionVerifier {
@@ -54,9 +63,13 @@ class AuthenticatedEmbyGateway(
     private val mutableMovieLibrary = MutableStateFlow<MovieLibraryState>(MovieLibraryState.Loading)
     private val movieOperationMutex = Mutex()
     override val movieLibrary: StateFlow<MovieLibraryState> = mutableMovieLibrary
+    private val mutableSeriesLibrary = MutableStateFlow<SeriesLibraryState>(SeriesLibraryState.Loading)
+    private val seriesOperationMutex = Mutex()
+    override val seriesLibrary: StateFlow<SeriesLibraryState> = mutableSeriesLibrary
     private val json = Json { ignoreUnknownKeys = true }
     private var homeGeneration = 0L
     private var movieGeneration = 0L
+    private var seriesGeneration = 0L
     private var authenticationGeneration = 0L
     private var activeCredential: ActiveCredential? = null
 
@@ -75,8 +88,10 @@ class AuthenticatedEmbyGateway(
             activeCredential = null
             homeGeneration += 1
             movieGeneration += 1
+            seriesGeneration += 1
             mutableHomeFeed.value = HomeFeedState.Loading
             mutableMovieLibrary.value = MovieLibraryState.Loading
+            mutableSeriesLibrary.value = SeriesLibraryState.Loading
             GatewayConnectionState.Disconnected
         }
     }
@@ -158,7 +173,7 @@ class AuthenticatedEmbyGateway(
         }
     }
 
-    override suspend fun refreshMovies(query: MovieLibraryQuery) = withContext(ioDispatcher) {
+    override suspend fun refreshMovies(query: LibraryQuery) = withContext(ioDispatcher) {
         movieOperationMutex.withLock {
         val session = vault.restore()
         if (session == null) {
@@ -174,7 +189,7 @@ class AuthenticatedEmbyGateway(
             MovieLibraryState.Ready(scope, it.items, it.totalCount, query, it.availableGenres, isRefreshing = true)
         } ?: MovieLibraryState.Loading
         val refreshed = try {
-            val genres = fetchGenres(session)
+            val genres = fetchGenres(session, "Movie")
             val firstPage = fetchMoviePage(session, query, 0)
             if (!isActiveMovieRequest(scope, generation, session, authentication)) return@withContext
             val page = revalidateRestoredMoviePages(session, query, firstPage, cached)
@@ -236,6 +251,192 @@ class AuthenticatedEmbyGateway(
 
     override suspend fun retryMoviePage() = loadNextMoviePage()
 
+    override suspend fun refreshSeries(query: LibraryQuery) = withContext(ioDispatcher) {
+        seriesOperationMutex.withLock {
+            val session = vault.restore()
+            if (session == null) {
+                mutableSeriesLibrary.value = SeriesLibraryState.Failure("Sign in again to browse shows.", query = query)
+                return@withContext
+            }
+            val scope = HomeScope(session.serverId, session.userId)
+            val authentication = authenticationGeneration
+            val generation = ++seriesGeneration
+            val cached = seriesCache.loadLibrary(scope, query)
+            if (!isActiveSeriesRequest(scope, generation, session, authentication)) return@withContext
+            mutableSeriesLibrary.value = cached?.takeIf { it.items.isNotEmpty() }?.let {
+                SeriesLibraryState.Ready(scope, it.items, it.totalCount, query, it.availableGenres, isRefreshing = true)
+            } ?: SeriesLibraryState.Loading
+            val refreshed = try {
+                val genres = fetchGenres(session, "Series")
+                val firstPage = fetchSeriesPage(session, query, 0)
+                if (!isActiveSeriesRequest(scope, generation, session, authentication)) return@withContext
+                val page = revalidateRestoredSeriesPages(session, query, firstPage, cached)
+                seriesCache.saveLibrary(scope, query, SeriesLibrarySnapshot(page.items, page.totalCount, genres))
+                if (!isActiveSeriesRequest(scope, generation, session, authentication)) return@withContext
+                when {
+                    page.items.isNotEmpty() -> SeriesLibraryState.Ready(scope, page.items, page.totalCount, query, genres)
+                    query.genre != null -> SeriesLibraryState.EmptyFiltered(scope, query, genres)
+                    else -> SeriesLibraryState.EmptyLibrary(scope, query, genres)
+                }
+            } catch (_: AuthenticationExpiredException) {
+                expireAuthentication(session, authentication, "libraries")
+                return@withContext
+            } catch (_: Exception) {
+                cached?.takeIf { it.items.isNotEmpty() }?.let {
+                    SeriesLibraryState.Ready(
+                        scope, it.items, it.totalCount, query, it.availableGenres,
+                        refreshFailureMessage = "Couldn't refresh shows. Loaded saved content.",
+                    )
+                } ?: SeriesLibraryState.Failure("Shows couldn't be loaded. Check the connection and retry.", scope, query)
+            }
+            if (isActiveSeriesRequest(scope, generation, session, authentication)) mutableSeriesLibrary.value = refreshed
+        }
+    }
+
+    override suspend fun loadNextSeriesPage() = withContext(ioDispatcher) {
+        seriesOperationMutex.withLock {
+            val ready = mutableSeriesLibrary.value as? SeriesLibraryState.Ready ?: return@withContext
+            if (ready.isRefreshing || ready.isLoadingMore || ready.items.size >= ready.totalCount) return@withContext
+            val session = vault.restore()?.takeIf { it.serverId == ready.scope.serverId && it.userId == ready.scope.userId }
+                ?: return@withContext
+            val generation = seriesGeneration
+            val authentication = authenticationGeneration
+            mutableSeriesLibrary.value = ready.copy(isLoadingMore = true, pageFailureMessage = null)
+            val updated = try {
+                val page = fetchSeriesPage(session, ready.query, ready.items.size)
+                if (!isActiveSeriesRequest(ready.scope, generation, session, authentication)) return@withContext
+                ready.copy(
+                    items = (ready.items + page.items).distinctBy { it.identity },
+                    totalCount = page.totalCount,
+                    pageFailureMessage = null,
+                    refreshFailureMessage = null,
+                ).also {
+                    seriesCache.saveLibrary(ready.scope, ready.query, SeriesLibrarySnapshot(it.items, it.totalCount, it.availableGenres))
+                }
+            } catch (_: AuthenticationExpiredException) {
+                expireAuthentication(session, authentication, "libraries")
+                return@withContext
+            } catch (_: Exception) {
+                ready.copy(pageFailureMessage = "Couldn't load more shows.")
+            }
+            if (isActiveSeriesRequest(ready.scope, generation, session, authentication)) mutableSeriesLibrary.value = updated
+        }
+    }
+
+    override suspend fun retrySeriesPage() = loadNextSeriesPage()
+
+    override suspend fun loadSeriesDetails(
+        identity: MediaIdentity,
+        authenticationReturnDestination: String?,
+    ): SeriesDetailsState = withContext(ioDispatcher) {
+        val session = vault.restore()?.takeIf { it.serverId == identity.serverId }
+            ?: return@withContext SeriesDetailsState.Failure("Series details aren't available for this server.")
+        val scope = HomeScope(session.serverId, session.userId)
+        val authentication = authenticationGeneration
+        try {
+            val detailRequest = authenticatedRequest(session)
+                .url(session.address.apiUrl("Users/${session.userId}/Items/${identity.itemId}").toString().toHttpUrl()
+                    .newBuilder().addQueryParameter("Fields", "Overview,Genres").build()).get().build()
+            val detail = clients.forRequest(session.address.authority, session.certificateBypassAuthority)
+                .newCall(detailRequest).execute().use { response ->
+                    response.requireAuthenticatedSuccess("Series details request failed")
+                    json.decodeFromString<SeriesDetailsDto>(response.body.string())
+                }
+            val seasonsUrl = session.address.apiUrl("Shows/${identity.itemId}/Seasons").toString().toHttpUrl().newBuilder()
+                .addQueryParameter("UserId", session.userId).build()
+            val seasonsRequest = authenticatedRequest(session).url(seasonsUrl).get().build()
+            val seasons = clients.forRequest(session.address.authority, session.certificateBypassAuthority)
+                .newCall(seasonsRequest).execute().use { response ->
+                    response.requireAuthenticatedSuccess("Season request failed")
+                    val root = json.parseToJsonElement(response.body.string()) as? JsonObject
+                    (root?.get("Items") as? JsonArray).orEmpty().mapNotNull { element ->
+                        val dto = json.decodeFromJsonElement<SeasonDto>(element)
+                        dto.id?.let { SeasonSummary(MediaIdentity(session.serverId, it), dto.name ?: "Season", dto.indexNumber) }
+                    }
+                }
+            if (!isActiveRequest(scope, session, authentication)) return@withContext SeriesDetailsState.Failure("Series details are no longer active.")
+            SeriesDetailsState.Ready(detail.toContract(identity, seasons).also { seriesCache.saveSeries(scope, it) })
+        } catch (_: AuthenticationExpiredException) {
+            expireAuthentication(session, authentication, authenticationReturnDestination)
+            SeriesDetailsState.Failure("Sign in again to view series details.")
+        } catch (_: Exception) {
+            seriesCache.loadSeries(scope, identity)?.let(SeriesDetailsState::Ready)
+                ?: SeriesDetailsState.Failure("Series details couldn't be loaded. Retry when the server is available.")
+        }
+    }
+
+    override suspend fun loadSeasonEpisodes(
+        seriesIdentity: MediaIdentity,
+        seasonIdentity: MediaIdentity,
+        authenticationReturnDestination: String?,
+    ): SeasonEpisodesState = withContext(ioDispatcher) {
+        val session = vault.restore()?.takeIf {
+            it.serverId == seriesIdentity.serverId && it.serverId == seasonIdentity.serverId
+        } ?: return@withContext SeasonEpisodesState.Failure("Episodes aren't available for this server.")
+        val scope = HomeScope(session.serverId, session.userId)
+        val authentication = authenticationGeneration
+        val season = SeasonSummary(seasonIdentity, "Season")
+        try {
+            val url = session.address.apiUrl("Shows/${seriesIdentity.itemId}/Episodes").toString().toHttpUrl().newBuilder()
+                .addQueryParameter("UserId", session.userId)
+                .addQueryParameter("SeasonId", seasonIdentity.itemId)
+                .addQueryParameter("Fields", "Overview,RunTimeTicks,UserData")
+                .addQueryParameter("EnableImageTypes", "Primary")
+                .build()
+            val request = authenticatedRequest(session).url(url).get().build()
+            val episodes = clients.forRequest(session.address.authority, session.certificateBypassAuthority)
+                .newCall(request).execute().use { response ->
+                    response.requireAuthenticatedSuccess("Episode request failed")
+                    val root = json.parseToJsonElement(response.body.string()) as? JsonObject
+                    (root?.get("Items") as? JsonArray).orEmpty().mapNotNull { element ->
+                        val dto = json.decodeFromJsonElement<EpisodeDto>(element)
+                        dto.id?.let { dto.toSummary(MediaIdentity(session.serverId, it)) }
+                    }
+                }
+            if (!isActiveRequest(scope, session, authentication)) return@withContext SeasonEpisodesState.Failure("Episodes are no longer active.")
+            seriesCache.saveEpisodes(scope, seriesIdentity, seasonIdentity, episodes)
+            if (episodes.isEmpty()) SeasonEpisodesState.Empty(seriesIdentity, season)
+            else SeasonEpisodesState.Ready(seriesIdentity, season, episodes)
+        } catch (_: AuthenticationExpiredException) {
+            expireAuthentication(session, authentication, authenticationReturnDestination)
+            SeasonEpisodesState.Failure("Sign in again to view episodes.")
+        } catch (_: Exception) {
+            seriesCache.loadEpisodes(scope, seriesIdentity, seasonIdentity)?.let {
+                if (it.isEmpty()) SeasonEpisodesState.Empty(seriesIdentity, season)
+                else SeasonEpisodesState.Ready(seriesIdentity, season, it)
+            } ?: SeasonEpisodesState.Failure("Episodes couldn't be loaded. Retry when the server is available.")
+        }
+    }
+
+    override suspend fun loadEpisodeDetails(
+        identity: MediaIdentity,
+        authenticationReturnDestination: String?,
+    ): EpisodeDetailsState = withContext(ioDispatcher) {
+        val session = vault.restore()?.takeIf { it.serverId == identity.serverId }
+            ?: return@withContext EpisodeDetailsState.Failure("Episode details aren't available for this server.")
+        val scope = HomeScope(session.serverId, session.userId)
+        val authentication = authenticationGeneration
+        try {
+            val request = authenticatedRequest(session)
+                .url(session.address.apiUrl("Users/${session.userId}/Items/${identity.itemId}").toString().toHttpUrl()
+                    .newBuilder().addQueryParameter("Fields", "Overview,Genres,MediaSources,RunTimeTicks,UserData").build())
+                .get().build()
+            clients.forRequest(session.address.authority, session.certificateBypassAuthority)
+                .newCall(request).execute().use { response ->
+                    response.requireAuthenticatedSuccess("Episode details request failed")
+                    val dto = json.decodeFromString<EpisodeDto>(response.body.string())
+                    if (!isActiveRequest(scope, session, authentication)) return@use EpisodeDetailsState.Failure("Episode details are no longer active.")
+                    EpisodeDetailsState.Ready(dto.toDetails(identity, scope).also { seriesCache.saveEpisode(scope, it) })
+                }
+        } catch (_: AuthenticationExpiredException) {
+            expireAuthentication(session, authentication, authenticationReturnDestination)
+            EpisodeDetailsState.Failure("Sign in again to view episode details.")
+        } catch (_: Exception) {
+            seriesCache.loadEpisode(scope, identity)?.copy(tracks = MovieTrackAvailability())?.let(EpisodeDetailsState::Ready)
+                ?: EpisodeDetailsState.Failure("Episode details couldn't be loaded. Retry when the server is available.")
+        }
+    }
+
     override suspend fun loadMovieDetails(
         identity: MediaIdentity,
         authenticationReturnDestination: String?,
@@ -270,10 +471,10 @@ class AuthenticatedEmbyGateway(
         }
     }
 
-    private fun fetchGenres(session: StoredSession): List<String> {
+    private fun fetchGenres(session: StoredSession, itemType: String): List<String> {
         val url = session.address.apiUrl("Genres").toString().toHttpUrl().newBuilder()
             .addQueryParameter("UserId", session.userId)
-            .addQueryParameter("IncludeItemTypes", "Movie")
+            .addQueryParameter("IncludeItemTypes", itemType)
             .addQueryParameter("Recursive", "true")
             .build()
         val request = authenticatedRequest(session).url(url).get().build()
@@ -289,7 +490,35 @@ class AuthenticatedEmbyGateway(
             }
     }
 
-    private fun fetchMoviePage(session: StoredSession, query: MovieLibraryQuery, startIndex: Int): MoviePage {
+    private fun fetchSeriesPage(session: StoredSession, query: LibraryQuery, startIndex: Int): SeriesPage {
+        val url = session.address.apiUrl("Users/${session.userId}/Items").toString().toHttpUrl().newBuilder().apply {
+            addQueryParameter("Recursive", "true")
+            addQueryParameter("IncludeItemTypes", "Series")
+            addQueryParameter("Fields", "ProductionYear,PrimaryImageAspectRatio")
+            addQueryParameter("EnableImageTypes", "Primary")
+            addQueryParameter("ImageTypeLimit", "1")
+            addQueryParameter("StartIndex", startIndex.toString())
+            addQueryParameter("Limit", MoviePageSize.toString())
+            addQueryParameter("SortBy", query.sortField.toApiName())
+            addQueryParameter("SortOrder", query.sortDirection.toApiName())
+            query.genre?.let { addQueryParameter("Genres", it) }
+        }.build()
+        val request = authenticatedRequest(session).url(url).get().build()
+        return clients.forRequest(session.address.authority, session.certificateBypassAuthority)
+            .newCall(request).execute().use { response ->
+                response.requireAuthenticatedSuccess("Series request failed")
+                val root = json.parseToJsonElement(response.body.string()) as? JsonObject ?: JsonObject(emptyMap())
+                val items = (root["Items"] as? JsonArray).orEmpty().mapNotNull { element ->
+                    val dto = json.decodeFromJsonElement<MovieListItemDto>(element)
+                    dto.id?.let { id -> dto.toContract(session.serverId, id) }
+                }
+                val total = (root["TotalRecordCount"] as? kotlinx.serialization.json.JsonPrimitive)
+                    ?.content?.toIntOrNull() ?: items.size
+                SeriesPage(items, total)
+            }
+    }
+
+    private fun fetchMoviePage(session: StoredSession, query: LibraryQuery, startIndex: Int): MoviePage {
         val url = session.address.apiUrl("Users/${session.userId}/Items").toString().toHttpUrl().newBuilder().apply {
             addQueryParameter("Recursive", "true")
             addQueryParameter("IncludeItemTypes", "Movie")
@@ -382,6 +611,13 @@ class AuthenticatedEmbyGateway(
         session: StoredSession,
         authentication: Long,
     ): Boolean = isActiveMovieScope(scope, generation) && isActiveCredential(session, authentication)
+
+    private fun isActiveSeriesRequest(
+        scope: HomeScope,
+        generation: Long,
+        session: StoredSession,
+        authentication: Long,
+    ): Boolean = generation == seriesGeneration && isActiveScope(scope) && isActiveCredential(session, authentication)
 
     private fun isActiveHomeRequest(
         scope: HomeScope,
@@ -541,6 +777,81 @@ class AuthenticatedEmbyGateway(
     }
 
     @Serializable
+    private data class SeriesDetailsDto(
+        @kotlinx.serialization.SerialName("Name") val name: String? = null,
+        @kotlinx.serialization.SerialName("ProductionYear") val year: Int? = null,
+        @kotlinx.serialization.SerialName("Overview") val overview: String? = null,
+        @kotlinx.serialization.SerialName("Genres") val genres: List<String> = emptyList(),
+        @kotlinx.serialization.SerialName("ImageTags") val imageTags: Map<String, String> = emptyMap(),
+        @kotlinx.serialization.SerialName("BackdropImageTags") val backdropImageTags: List<String> = emptyList(),
+    ) {
+        fun toContract(identity: MediaIdentity, seasons: List<SeasonSummary>) = SeriesDetails(
+            identity = identity,
+            title = name ?: "Untitled",
+            year = year,
+            overview = overview,
+            genres = genres,
+            artwork = imageTags["Primary"]?.let { ArtworkReference(identity, it) },
+            backdrop = backdropImageTags.firstOrNull()?.let { ArtworkReference(identity, it, ArtworkKind.Backdrop) },
+            seasons = seasons,
+        )
+    }
+
+    @Serializable
+    private data class SeasonDto(
+        @kotlinx.serialization.SerialName("Id") val id: String? = null,
+        @kotlinx.serialization.SerialName("Name") val name: String? = null,
+        @kotlinx.serialization.SerialName("IndexNumber") val indexNumber: Int? = null,
+    )
+
+    @Serializable
+    private data class EpisodeDto(
+        @kotlinx.serialization.SerialName("Id") val id: String? = null,
+        @kotlinx.serialization.SerialName("Name") val name: String? = null,
+        @kotlinx.serialization.SerialName("SeriesName") val seriesName: String? = null,
+        @kotlinx.serialization.SerialName("ParentIndexNumber") val seasonNumber: Int? = null,
+        @kotlinx.serialization.SerialName("IndexNumber") val episodeNumber: Int? = null,
+        @kotlinx.serialization.SerialName("Overview") val overview: String? = null,
+        @kotlinx.serialization.SerialName("RunTimeTicks") val runtimeTicks: Long? = null,
+        @kotlinx.serialization.SerialName("CommunityRating") val communityRating: Double? = null,
+        @kotlinx.serialization.SerialName("CriticRating") val criticRating: Double? = null,
+        @kotlinx.serialization.SerialName("Genres") val genres: List<String> = emptyList(),
+        @kotlinx.serialization.SerialName("ImageTags") val imageTags: Map<String, String> = emptyMap(),
+        @kotlinx.serialization.SerialName("BackdropImageTags") val backdropImageTags: List<String> = emptyList(),
+        @kotlinx.serialization.SerialName("UserData") val userData: MovieUserDataDto? = null,
+        @kotlinx.serialization.SerialName("MediaSources") val mediaSources: List<MovieMediaSourceDto> = emptyList(),
+    ) {
+        fun toSummary(identity: MediaIdentity) = EpisodeSummary(
+            identity = identity,
+            title = name ?: "Untitled episode",
+            seriesName = seriesName,
+            seasonNumber = seasonNumber,
+            episodeNumber = episodeNumber,
+            overview = overview,
+            runtimeTicks = runtimeTicks,
+            playbackPositionTicks = userData?.playbackPositionTicks ?: 0,
+            played = userData?.played ?: false,
+            artwork = imageTags["Primary"]?.let { ArtworkReference(identity, it) },
+        )
+
+        fun toDetails(identity: MediaIdentity, scope: HomeScope): EpisodeDetails {
+            val streams = mediaSources.flatMap { it.mediaStreams }
+            return EpisodeDetails(
+                episode = toSummary(identity),
+                communityRating = communityRating,
+                criticRating = criticRating,
+                genres = genres,
+                tracks = MovieTrackAvailability(
+                    streams.count { it.type == "Audio" },
+                    streams.count { it.type == "Subtitle" },
+                ),
+                backdrop = backdropImageTags.firstOrNull()?.let { ArtworkReference(identity, it, ArtworkKind.Backdrop) },
+                scope = scope,
+            )
+        }
+    }
+
+    @Serializable
     private data class MovieUserDataDto(
         @kotlinx.serialization.SerialName("PlaybackPositionTicks") val playbackPositionTicks: Long = 0,
         @kotlinx.serialization.SerialName("Played") val played: Boolean = false,
@@ -555,10 +866,11 @@ class AuthenticatedEmbyGateway(
     private data class MovieStreamDto(@kotlinx.serialization.SerialName("Type") val type: String? = null)
 
     private data class MoviePage(val items: List<MoviePoster>, val totalCount: Int)
+    private data class SeriesPage(val items: List<MoviePoster>, val totalCount: Int)
 
     private suspend fun revalidateRestoredMoviePages(
         session: StoredSession,
-        query: MovieLibraryQuery,
+        query: LibraryQuery,
         firstPage: MoviePage,
         cached: MovieLibrarySnapshot?,
     ): MoviePage {
@@ -578,6 +890,28 @@ class AuthenticatedEmbyGateway(
             offset += page.items.size
         }
         return MoviePage(refreshedItems.take(totalCount), totalCount)
+    }
+
+    private fun revalidateRestoredSeriesPages(
+        session: StoredSession,
+        query: LibraryQuery,
+        firstPage: SeriesPage,
+        cached: SeriesLibrarySnapshot?,
+    ): SeriesPage {
+        if (firstPage.items.isEmpty()) return firstPage
+        val cachedItems = cached?.items.orEmpty()
+        if (cachedItems.take(MoviePageSize).map { it.identity } != firstPage.items.map { it.identity }) return firstPage
+        val refreshedItems = firstPage.items.toMutableList()
+        var totalCount = firstPage.totalCount
+        var offset = MoviePageSize
+        while (offset < minOf(cachedItems.size, totalCount)) {
+            val page = fetchSeriesPage(session, query, offset)
+            refreshedItems += page.items
+            totalCount = page.totalCount
+            if (page.items.isEmpty()) break
+            offset += page.items.size
+        }
+        return SeriesPage(refreshedItems.take(totalCount), totalCount)
     }
 
     private data class ActiveCredential(val serverId: String, val userId: String, val token: String) {
@@ -613,10 +947,10 @@ class AuthenticatedEmbyGateway(
 
 private class AuthenticationExpiredException : Exception()
 
-private fun MovieSortField.toApiName(): String = when (this) {
-    MovieSortField.Name -> "SortName"
-    MovieSortField.DateAdded -> "DateCreated"
-    MovieSortField.ReleaseDate -> "PremiereDate"
+private fun LibrarySortField.toApiName(): String = when (this) {
+    LibrarySortField.Name -> "SortName"
+    LibrarySortField.DateAdded -> "DateCreated"
+    LibrarySortField.ReleaseDate -> "PremiereDate"
 }
 
 private fun SortDirection.toApiName(): String = when (this) {

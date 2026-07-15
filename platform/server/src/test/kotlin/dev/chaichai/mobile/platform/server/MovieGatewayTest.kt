@@ -6,9 +6,9 @@ import dev.chaichai.mobile.core.contracts.GatewayConnectionState
 import dev.chaichai.mobile.core.contracts.MovieDetails
 import dev.chaichai.mobile.core.contracts.MoviePoster
 import dev.chaichai.mobile.core.contracts.MovieDetailsState
-import dev.chaichai.mobile.core.contracts.MovieLibraryQuery
+import dev.chaichai.mobile.core.contracts.LibraryQuery
 import dev.chaichai.mobile.core.contracts.MovieLibraryState
-import dev.chaichai.mobile.core.contracts.MovieSortField
+import dev.chaichai.mobile.core.contracts.LibrarySortField
 import dev.chaichai.mobile.core.contracts.SortDirection
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -46,7 +46,7 @@ class MovieGatewayTest {
             val gateway = gateway(server)
 
             gateway.refreshMovies(
-                MovieLibraryQuery(MovieSortField.ReleaseDate, SortDirection.Descending, "Science Fiction"),
+                LibraryQuery(LibrarySortField.ReleaseDate, SortDirection.Descending, "Science Fiction"),
             )
 
             val state = gateway.movieLibrary.value as MovieLibraryState.Ready
@@ -264,7 +264,7 @@ class MovieGatewayTest {
             server.enqueue(ok(page("Fresh", 80, 0, 40)))
             server.enqueue(ok(page("Fresh", 80, 40, 40)))
             val scope = HomeScope("server", "user")
-            val query = MovieLibraryQuery(MovieSortField.DateAdded, SortDirection.Descending)
+            val query = LibraryQuery(LibrarySortField.DateAdded, SortDirection.Descending)
             val cachedItems = (0 until 80).map {
                 MoviePoster(MediaIdentity("server", "movie-$it"), "Cached $it")
             }
@@ -302,7 +302,7 @@ class MovieGatewayTest {
                 "{\"Id\":\"movie-$it\",\"Name\":\"Updated $it\"}"
             }))
             val scope = HomeScope("server", "user")
-            val query = MovieLibraryQuery(MovieSortField.DateAdded, SortDirection.Descending)
+            val query = LibraryQuery(LibrarySortField.DateAdded, SortDirection.Descending)
             val cache = InMemoryMovieCache().apply {
                 saveLibrary(
                     scope,
@@ -339,7 +339,7 @@ class MovieGatewayTest {
             server.enqueue(ok(page("Fresh", 80, 40, 20)))
             server.enqueue(ok(page("Fresh", 80, 60, 20)))
             val scope = HomeScope("server", "user")
-            val query = MovieLibraryQuery(MovieSortField.DateAdded, SortDirection.Descending)
+            val query = LibraryQuery(LibrarySortField.DateAdded, SortDirection.Descending)
             val cache = InMemoryMovieCache().apply {
                 saveLibrary(
                     scope, query,
@@ -366,7 +366,7 @@ class MovieGatewayTest {
         MockWebServer().use { server ->
             server.start()
             val scope = HomeScope("server", "user")
-            val query = MovieLibraryQuery(MovieSortField.DateAdded, SortDirection.Descending)
+            val query = LibraryQuery(LibrarySortField.DateAdded, SortDirection.Descending)
             val cache = InMemoryMovieCache().apply {
                 saveLibrary(
                     scope, query,
@@ -408,7 +408,7 @@ class MovieGatewayTest {
                 server.enqueue(ok(page("Fresh", 40, 0, 40)))
             }
             val scope = HomeScope("server", "user")
-            val query = MovieLibraryQuery(MovieSortField.DateAdded, SortDirection.Descending)
+            val query = LibraryQuery(LibrarySortField.DateAdded, SortDirection.Descending)
             val cache = SwitchableBlockingLibraryCache(
                 MovieLibrarySnapshot(
                     (0 until 40).map { MoviePoster(MediaIdentity("server", "movie-$it"), "Cached $it") },
@@ -450,7 +450,7 @@ class MovieGatewayTest {
             server.enqueue(ok(page("Fresh", 81, 39, 40)))
             server.enqueue(ok(page("Fresh", 81, 79, 1)))
             val scope = HomeScope("server", "user")
-            val query = MovieLibraryQuery(MovieSortField.DateAdded, SortDirection.Descending)
+            val query = LibraryQuery(LibrarySortField.DateAdded, SortDirection.Descending)
             val cache = InMemoryMovieCache().apply {
                 saveLibrary(
                     scope,
@@ -495,7 +495,7 @@ class MovieGatewayTest {
                     "{\"Id\":\"$it\",\"Name\":\"Fresh $it\"}"
                 }))
                 val scope = HomeScope("server", "user")
-                val query = MovieLibraryQuery(MovieSortField.DateAdded, SortDirection.Descending)
+                val query = LibraryQuery(LibrarySortField.DateAdded, SortDirection.Descending)
                 val cache = InMemoryMovieCache().apply {
                     saveLibrary(
                         scope,
@@ -548,7 +548,7 @@ class MovieGatewayTest {
             val gateway = gateway(server)
             gateway.refreshMovies()
             assertTrue(gateway.movieLibrary.value is MovieLibraryState.EmptyLibrary)
-            gateway.refreshMovies(MovieLibraryQuery(genre = "Drama"))
+            gateway.refreshMovies(LibraryQuery(genre = "Drama"))
             assertTrue(gateway.movieLibrary.value is MovieLibraryState.EmptyFiltered)
             gateway.refreshMovies()
             assertTrue(gateway.movieLibrary.value is MovieLibraryState.Failure)
@@ -575,13 +575,13 @@ class MovieGatewayTest {
 
     private class ThreadRecordingMovieCache : MovieCache {
         var loadThread: String? = null
-        override suspend fun loadLibrary(scope: HomeScope, query: MovieLibraryQuery): MovieLibrarySnapshot? {
+        override suspend fun loadLibrary(scope: HomeScope, query: LibraryQuery): MovieLibrarySnapshot? {
             loadThread = Thread.currentThread().name
             return null
         }
         override suspend fun saveLibrary(
             scope: HomeScope,
-            query: MovieLibraryQuery,
+            query: LibraryQuery,
             items: List<MoviePoster>,
             totalCount: Int,
             availableGenres: List<String>,
@@ -593,7 +593,7 @@ class MovieGatewayTest {
     private class BlockingLibraryCache : MovieCache {
         val loadStarted = CompletableDeferred<Unit>()
         val releaseLoad = CompletableDeferred<Unit>()
-        override suspend fun loadLibrary(scope: HomeScope, query: MovieLibraryQuery): MovieLibrarySnapshot? {
+        override suspend fun loadLibrary(scope: HomeScope, query: LibraryQuery): MovieLibrarySnapshot? {
             loadStarted.complete(Unit)
             releaseLoad.await()
             return MovieLibrarySnapshot(
@@ -604,7 +604,7 @@ class MovieGatewayTest {
         }
         override suspend fun saveLibrary(
             scope: HomeScope,
-            query: MovieLibraryQuery,
+            query: LibraryQuery,
             items: List<MoviePoster>,
             totalCount: Int,
             availableGenres: List<String>,
@@ -617,10 +617,10 @@ class MovieGatewayTest {
         val loadStarted = CompletableDeferred<Unit>()
         val releaseLoad = CompletableDeferred<Unit>()
         var result: MovieDetailsState? = null
-        override suspend fun loadLibrary(scope: HomeScope, query: MovieLibraryQuery): MovieLibrarySnapshot? = null
+        override suspend fun loadLibrary(scope: HomeScope, query: LibraryQuery): MovieLibrarySnapshot? = null
         override suspend fun saveLibrary(
             scope: HomeScope,
-            query: MovieLibraryQuery,
+            query: LibraryQuery,
             items: List<MoviePoster>,
             totalCount: Int,
             availableGenres: List<String>,
@@ -639,7 +639,7 @@ class MovieGatewayTest {
         var blockLoads = false
         val loadStarted = CompletableDeferred<Unit>()
         val releaseLoad = CompletableDeferred<Unit>()
-        override suspend fun loadLibrary(scope: HomeScope, query: MovieLibraryQuery): MovieLibrarySnapshot {
+        override suspend fun loadLibrary(scope: HomeScope, query: LibraryQuery): MovieLibrarySnapshot {
             if (blockLoads) {
                 loadStarted.complete(Unit)
                 releaseLoad.await()
@@ -648,7 +648,7 @@ class MovieGatewayTest {
         }
         override suspend fun saveLibrary(
             scope: HomeScope,
-            query: MovieLibraryQuery,
+            query: LibraryQuery,
             items: List<MoviePoster>,
             totalCount: Int,
             availableGenres: List<String>,

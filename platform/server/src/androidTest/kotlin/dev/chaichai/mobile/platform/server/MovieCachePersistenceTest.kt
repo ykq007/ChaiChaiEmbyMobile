@@ -6,7 +6,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.MovieDetails
-import dev.chaichai.mobile.core.contracts.MovieLibraryQuery
+import dev.chaichai.mobile.core.contracts.LibraryQuery
 import dev.chaichai.mobile.core.contracts.MoviePoster
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -21,7 +21,7 @@ class MovieCachePersistenceTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         context.deleteDatabase("server_scoped_movie_cache.db")
         val scope = HomeScope("server-a", "user-a")
-        val query = MovieLibraryQuery(genre = "Drama")
+        val query = LibraryQuery(genre = "Drama")
         val identity = MediaIdentity(scope.serverId, "arrival")
         createRoomMovieCache(context).apply {
             saveLibrary(scope, query, listOf(MoviePoster(identity, "Arrival", 2016)), 1, listOf("Drama"))
