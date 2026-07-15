@@ -14,9 +14,9 @@ import androidx.media3.session.SessionToken
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import dagger.hilt.android.testing.HiltAndroidRule
+import dagger.hilt.android.testing.HiltAndroidTest
 import dev.chaichai.mobile.platform.playback.PlaybackSessionService
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import mockwebserver3.MockResponse
@@ -25,11 +25,16 @@ import okio.Buffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
+@HiltAndroidTest
 @RunWith(AndroidJUnit4::class)
 class PlaybackMediaControllerTest {
+    @get:Rule(order = 0)
+    val hiltRule = HiltAndroidRule(this)
+
     @Test
     fun media_controller_drives_transport_system_volume_and_a_visible_notification() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -44,14 +49,14 @@ class PlaybackMediaControllerTest {
             server.enqueue(
                 MockResponse.Builder()
                     .addHeader("Content-Type", "audio/wav")
-                    .body(Buffer().write(silentWav()))
+                        .body(Buffer().write(silentWav()))
                     .build(),
             )
             val token = SessionToken(context, ComponentName(context, PlaybackSessionService::class.java))
             val future = MediaController.Builder(context, token).buildAsync()
             val controller = future.get(10, TimeUnit.SECONDS)
             try {
-                onMain {
+                onInstrumentationMain {
                     controller.setMediaItem(
                         MediaItem.Builder()
                             .setMediaId("authoritative-movie")
@@ -61,68 +66,68 @@ class PlaybackMediaControllerTest {
                     controller.prepare()
                     controller.play()
                 }
-                waitUntil { onMain { controller.playWhenReady } }
-                waitUntil { onMain { controller.playbackState == Player.STATE_READY } }
-                val positionBeforeRecreation = onMain { controller.currentPosition }
-                val connectedTokenBefore = onMain { controller.connectedToken }
+                waitForInstrumentationState { onInstrumentationMain { controller.playWhenReady } }
+                waitForInstrumentationState { onInstrumentationMain { controller.playbackState == Player.STATE_READY } }
+                val positionBeforeRecreation = onInstrumentationMain { controller.currentPosition }
+                val connectedTokenBefore = onInstrumentationMain { controller.connectedToken }
                 val activityBefore = AtomicReference<MainActivity>()
                 host.onActivity {
                     activityBefore.set(it)
                     it.recreate()
                 }
-                waitUntil {
+                waitForInstrumentationState {
                     var recreated = false
                     host.onActivity { recreated = it !== activityBefore.get() }
                     recreated
                 }
-                assertEquals(connectedTokenBefore, onMain { controller.connectedToken })
-                assertEquals("authoritative-movie", onMain { controller.currentMediaItem?.mediaId })
-                assertTrue(onMain { controller.currentPosition >= positionBeforeRecreation })
-                assertTrue(onMain { controller.playWhenReady })
+                assertEquals(connectedTokenBefore, onInstrumentationMain { controller.connectedToken })
+                assertEquals("authoritative-movie", onInstrumentationMain { controller.currentMediaItem?.mediaId })
+                assertTrue(onInstrumentationMain { controller.currentPosition >= positionBeforeRecreation })
+                assertTrue(onInstrumentationMain { controller.playWhenReady })
                 assertEquals(1, server.requestCount)
 
                 val audio = context.getSystemService(AudioManager::class.java)
                 originalVolume = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
                 takeAudioFocus(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
-                waitUntil {
-                    onMain {
+                waitForInstrumentationState {
+                    onInstrumentationMain {
                         controller.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE
                     }
                 }
                 releaseAudioFocus()
-                waitUntil {
-                    onMain {
+                waitForInstrumentationState {
+                    onInstrumentationMain {
                         controller.playWhenReady &&
                             controller.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE
                     }
                 }
 
                 takeAudioFocus(AudioManager.AUDIOFOCUS_GAIN)
-                waitUntil { onMain { !controller.playWhenReady } }
+                waitForInstrumentationState { onInstrumentationMain { !controller.playWhenReady } }
                 releaseAudioFocus()
                 Thread.sleep(250)
-                assertFalse(onMain { controller.playWhenReady })
+                assertFalse(onInstrumentationMain { controller.playWhenReady })
 
-                onMain { controller.seekTo(321) }
+                onInstrumentationMain { controller.seekTo(321) }
 
-                assertFalse(onMain { controller.playWhenReady })
-                assertEquals(321, onMain { controller.currentPosition })
+                assertFalse(onInstrumentationMain { controller.playWhenReady })
+                assertEquals(321, onInstrumentationMain { controller.currentPosition })
 
                 val oldVolume = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
                 val maxVolume = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
                 val requestedVolume = if (oldVolume < maxVolume) oldVolume + 1 else (oldVolume - 1).coerceAtLeast(0)
                 audio.setStreamVolume(AudioManager.STREAM_MUSIC, requestedVolume, 0)
-                waitUntil { audio.getStreamVolume(AudioManager.STREAM_MUSIC) == requestedVolume }
+                waitForInstrumentationState { audio.getStreamVolume(AudioManager.STREAM_MUSIC) == requestedVolume }
 
-                onMain { controller.play() }
+                onInstrumentationMain { controller.play() }
                 val notifications = context.getSystemService(NotificationManager::class.java)
                 assertTrue(notifications.notificationChannels.isNotEmpty())
                 if (notificationGranted) {
-                    waitUntil { notifications.activeNotifications.isNotEmpty() }
+                    waitForInstrumentationState { notifications.activeNotifications.isNotEmpty() }
                     assertTrue(notifications.activeNotifications.any { it.notification.actions?.isNotEmpty() == true })
                 }
             } finally {
-                onMain {
+                onInstrumentationMain {
                     controller.stop()
                     controller.release()
                 }
@@ -136,20 +141,6 @@ class PlaybackMediaControllerTest {
             }
             host.close()
         }
-    }
-
-    private fun waitUntil(condition: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + 10_000
-        while (!condition() && System.currentTimeMillis() < deadline) Thread.sleep(50)
-        check(condition()) { "Timed out waiting for Media3 state" }
-    }
-
-    private fun <T> onMain(block: () -> T): T {
-        val result = AtomicReference<Result<T>>()
-        InstrumentationRegistry.getInstrumentation().runOnMainSync {
-            result.set(runCatching(block))
-        }
-        return result.get().getOrThrow()
     }
 
     private fun takeAudioFocus(gain: Int) {
@@ -172,23 +163,4 @@ class PlaybackMediaControllerTest {
         )
     }
 
-    private fun silentWav(): ByteArray {
-        val sampleRate = 8_000
-        val dataSize = sampleRate * 2
-        return ByteBuffer.allocate(44 + dataSize).order(ByteOrder.LITTLE_ENDIAN).apply {
-            put("RIFF".toByteArray())
-            putInt(36 + dataSize)
-            put("WAVEfmt ".toByteArray())
-            putInt(16)
-            putShort(1.toShort())
-            putShort(1.toShort())
-            putInt(sampleRate)
-            putInt(sampleRate * 2)
-            putShort(2.toShort())
-            putShort(16.toShort())
-            put("data".toByteArray())
-            putInt(dataSize)
-            put(ByteArray(dataSize))
-        }.array()
-    }
 }

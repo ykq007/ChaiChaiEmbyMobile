@@ -15,6 +15,10 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
+import dagger.hilt.android.testing.BindValue
+import dagger.hilt.android.testing.HiltAndroidRule
+import dagger.hilt.android.testing.HiltAndroidTest
+import dagger.hilt.android.testing.UninstallModules
 import dev.chaichai.mobile.core.contracts.AppBoundaries
 import dev.chaichai.mobile.core.contracts.AppClock
 import dev.chaichai.mobile.core.contracts.ConnectivityMonitor
@@ -23,11 +27,8 @@ import dev.chaichai.mobile.core.contracts.GatewayConnectionState
 import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.PlaybackState
 import dev.chaichai.mobile.platform.playback.PlaybackSessionService
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.time.Instant
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.flow.MutableStateFlow
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -35,13 +36,26 @@ import okio.Buffer
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
+@HiltAndroidTest
+@UninstallModules(ProductionBoundariesModule::class)
 @RunWith(AndroidJUnit4::class)
 class MainActivityNotificationPermissionTest {
+    @get:Rule(order = 0)
+    val hiltRule = HiltAndroidRule(this)
+
+    private val permissionPlaybackState = MutableStateFlow<PlaybackState>(PlaybackState.Idle)
+
+    @BindValue
+    @JvmField
+    var boundBoundaries = boundariesWithPlaybackState(permissionPlaybackState)
+
     @Test
     fun active_playback_survives_denial_recreation_process_like_restore_and_grant() {
+        hiltRule.inject()
         assumeTrue(Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
@@ -60,8 +74,6 @@ class MainActivityNotificationPermissionTest {
         try {
             preferences.edit().clear().commit()
             shell("pm clear-permission-flags $packageName ${Manifest.permission.POST_NOTIFICATIONS} user-set user-fixed")
-            val permissionPlaybackState = MutableStateFlow<PlaybackState>(PlaybackState.Idle)
-            MainActivity.boundariesOverrideForTesting = boundariesWithPlaybackState(permissionPlaybackState)
             scenario = ActivityScenario.launch(MainActivity::class.java)
 
             MockWebServer().use { server ->
@@ -69,55 +81,58 @@ class MainActivityNotificationPermissionTest {
                 server.enqueue(
                     MockResponse.Builder()
                         .addHeader("Content-Type", "audio/wav")
-                        .body(Buffer().write(silentWav()))
+                        .body(Buffer().write(silentWav(durationSeconds = 60)))
                         .build(),
                 )
                 controller = MediaController.Builder(
                     context,
                     SessionToken(context, ComponentName(context, PlaybackSessionService::class.java)),
                 ).buildAsync().get(10, TimeUnit.SECONDS)
-                onMain {
+                onInstrumentationMain {
                     controller!!.setMediaItem(MediaItem.fromUri(server.url("/stream").toString()))
                     controller!!.prepare()
                     controller!!.play()
                 }
-                waitUntil { onMain { controller!!.playbackState == Player.STATE_READY && controller!!.playWhenReady } }
+                waitForInstrumentationState("permission playback state") {
+                    onInstrumentationMain {
+                        controller!!.playbackState == Player.STATE_READY && controller!!.playWhenReady
+                    }
+                }
 
                 permissionPlaybackState.value = activePlaybackState()
                 assertTrue(device.wait(Until.hasObject(denyButton), 5_000))
                 device.findObject(denyButton).click()
                 device.waitForIdle()
-                assertTrue(onMain { controller!!.playWhenReady })
+                assertTrue(onInstrumentationMain { controller!!.playWhenReady })
                 assertTrue(preferences.getBoolean(MainActivity.NOTIFICATION_PERMISSION_REQUESTED, false))
 
                 scenario!!.recreate()
                 assertFalse(device.wait(Until.hasObject(denyButton), 1_000))
-                assertTrue(onMain { controller!!.playWhenReady })
+                assertTrue(onInstrumentationMain { controller!!.playWhenReady })
 
                 scenario!!.close()
-                MainActivity.boundariesOverrideForTesting = boundariesWithPlaybackState(
+                boundBoundaries = boundariesWithPlaybackState(
                     MutableStateFlow(activePlaybackState()),
                 )
                 scenario = ActivityScenario.launch(MainActivity::class.java)
                 assertFalse(device.wait(Until.hasObject(denyButton), 1_000))
-                assertTrue(onMain { controller!!.playWhenReady })
+                assertTrue(onInstrumentationMain { controller!!.playWhenReady })
 
                 shell("pm grant $packageName ${Manifest.permission.POST_NOTIFICATIONS}")
                 val notifications = context.getSystemService(NotificationManager::class.java)
-                waitUntil { notifications.activeNotifications.isNotEmpty() }
+                waitForInstrumentationState("playback notification") { notifications.activeNotifications.isNotEmpty() }
                 assertTrue(notifications.notificationChannels.isNotEmpty())
                 assertTrue(notifications.activeNotifications.any { it.notification.actions?.isNotEmpty() == true })
-                assertTrue(onMain { controller!!.playWhenReady })
+                assertTrue(onInstrumentationMain { controller!!.playWhenReady })
             }
         } finally {
             scenario?.close()
             controller?.let { mediaController ->
-                onMain {
+                onInstrumentationMain {
                     mediaController.stop()
                     mediaController.release()
                 }
             }
-            MainActivity.boundariesOverrideForTesting = null
             preferences.edit()
                 .putBoolean(MainActivity.NOTIFICATION_PERMISSION_REQUESTED, requestWasPersisted)
                 .commit()
@@ -163,35 +178,4 @@ class MainActivityNotificationPermissionTest {
         InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command).close()
     }
 
-    private fun waitUntil(condition: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + 10_000
-        while (!condition() && System.currentTimeMillis() < deadline) Thread.sleep(50)
-        check(condition()) { "Timed out waiting for permission playback state" }
-    }
-
-    private fun <T> onMain(block: () -> T): T {
-        val result = AtomicReference<Result<T>>()
-        InstrumentationRegistry.getInstrumentation().runOnMainSync { result.set(runCatching(block)) }
-        return result.get().getOrThrow()
-    }
-
-    private fun silentWav(): ByteArray {
-        val sampleRate = 8_000
-        val dataSize = sampleRate * 2 * 60
-        return ByteBuffer.allocate(44 + dataSize).order(ByteOrder.LITTLE_ENDIAN).apply {
-            put("RIFF".toByteArray())
-            putInt(36 + dataSize)
-            put("WAVEfmt ".toByteArray())
-            putInt(16)
-            putShort(1.toShort())
-            putShort(1.toShort())
-            putInt(sampleRate)
-            putInt(sampleRate * 2)
-            putShort(2.toShort())
-            putShort(16.toShort())
-            put("data".toByteArray())
-            putInt(dataSize)
-            put(ByteArray(dataSize))
-        }.array()
-    }
 }

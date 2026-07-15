@@ -40,7 +40,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        boundariesOverrideForTesting?.let { boundaries = it }
         notificationPermissionRequested = savedInstanceState?.getBoolean(NOTIFICATION_PERMISSION_REQUESTED) == true ||
             getSharedPreferences(PERMISSION_PREFERENCES, MODE_PRIVATE)
                 .getBoolean(NOTIFICATION_PERMISSION_REQUESTED, false)
@@ -155,6 +154,5 @@ class MainActivity : ComponentActivity() {
     internal companion object {
         const val PERMISSION_PREFERENCES = "playback-permissions"
         const val NOTIFICATION_PERMISSION_REQUESTED = "notification-permission-requested"
-        internal var boundariesOverrideForTesting: dev.chaichai.mobile.core.contracts.AppBoundaries? = null
     }
 }
