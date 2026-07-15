@@ -4,12 +4,21 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.unit.dp
 import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.MediaPlaybackRequest
 import dev.chaichai.mobile.core.contracts.PlaybackCoordinator
 import dev.chaichai.mobile.core.contracts.PlaybackFailureKind
 import dev.chaichai.mobile.core.contracts.PlaybackState
+import dev.chaichai.mobile.core.contracts.PlaybackTrack
+import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
+import dev.chaichai.mobile.core.contracts.PlaybackTrackType
+import dev.chaichai.mobile.core.contracts.TrackDelivery
+import dev.chaichai.mobile.core.contracts.TrackQualifier
 import dev.chaichai.mobile.design.system.ChaiChaiTheme
 import dev.chaichai.mobile.feature.playback.PlaybackHost
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -79,6 +88,75 @@ class PlaybackFlowTest {
         assertEquals(1, restoreCount)
     }
 
+    @Test
+    fun compact_tracks_sheet_labels_current_default_external_and_off_then_selects_safely() {
+        val playback = FakePlayback().apply {
+            mutableState.value = activeWithTracks()
+        }
+        compose.setContent {
+            ChaiChaiTheme(reducedMotion = true) {
+                PlaybackHost(playback)
+            }
+        }
+
+        compose.onNodeWithContentDescription("Tracks").performClick()
+        compose.onNodeWithText("Audio").assertIsDisplayed()
+        compose.onNodeWithText("English · AAC · Stereo · Default · Current").assertIsDisplayed()
+        compose.onNodeWithText("Japanese · AAC · Commentary").assertIsDisplayed()
+        compose.onNodeWithText("English · SRT · External · Hearing impaired · Current").assertIsDisplayed()
+        compose.onNodeWithText("Off").performClick()
+
+        assertEquals(PlaybackTrackSelection(audioStreamIndex = 1, subtitleStreamIndex = null), playback.selection)
+    }
+
+    @Test
+    fun qualifying_expanded_playback_anchors_tracks_beside_visible_video() {
+        val playback = FakePlayback().apply { mutableState.value = activeWithTracks() }
+        compose.setContent {
+            ChaiChaiTheme(reducedMotion = false) {
+                PlaybackHost(playback, Modifier.size(1000.dp, 700.dp))
+            }
+        }
+
+        compose.onNodeWithContentDescription("Tracks").performClick()
+
+        compose.onNodeWithTag("tracks-side-sheet", useUnmergedTree = true).assertExists()
+        compose.onNodeWithText("PGS · Burn-in required").assertExists()
+        compose.onNodeWithText("French · ASS · Embedded").assertExists()
+    }
+
+    @Test
+    fun separating_hinge_uses_inset_safe_modal_sheet_and_missing_streams_remain_understandable() {
+        val playback = FakePlayback()
+        compose.setContent {
+            ChaiChaiTheme(reducedMotion = true) {
+                PlaybackHost(playback, Modifier.size(1000.dp, 700.dp), hasSeparatingHinge = true)
+            }
+        }
+
+        compose.onNodeWithContentDescription("Tracks").performClick()
+
+        compose.onNodeWithTag("tracks-bottom-sheet", useUnmergedTree = true).assertExists()
+        compose.onNodeWithText("No audio tracks available").assertExists()
+        compose.onNodeWithText("Off · Current").assertExists()
+        compose.onNodeWithText("No subtitle streams available").assertExists()
+    }
+
+    @Test
+    fun track_failure_explanation_stays_in_playback_and_keeps_tracks_available() {
+        val playback = FakePlayback().apply {
+            mutableState.value = activeWithTracks().copy(
+                trackChangeError = "That track couldn't be applied. The previous track is still playing.",
+            )
+        }
+        compose.setContent { ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback) } }
+
+        compose.onNodeWithContentDescription("Tracks").performClick()
+
+        compose.onNodeWithText("That track couldn't be applied. The previous track is still playing.").assertIsDisplayed()
+        compose.onNodeWithText("Arrival").assertIsDisplayed()
+    }
+
     private class FakePlayback : NoOpPlaybackCoordinator() {
         val mutableState = MutableStateFlow<PlaybackState>(
             PlaybackState.Active(MediaIdentity("server", "movie"), "Arrival", 600_000_000, 7_200_000_000, false),
@@ -89,10 +167,28 @@ class PlaybackFlowTest {
         var playPauseCount = 0
         var exitCount = 0
         var retryCount = 0
+        var selection: PlaybackTrackSelection? = null
         override fun submit(request: MediaPlaybackRequest) = Unit
         override fun seekBy(deltaTicks: Long) { seekDelta += deltaTicks }
         override fun playPause() { playPauseCount++ }
         override fun exit() { exitCount++ }
         override fun retry() { retryCount++ }
+        override fun selectTrack(selection: PlaybackTrackSelection) { this.selection = selection }
     }
+
+    private fun activeWithTracks() = PlaybackState.Active(
+        MediaIdentity("server", "movie"), "Arrival", 600_000_000, 7_200_000_000, false,
+        audioTracks = listOf(
+            PlaybackTrack(1, PlaybackTrackType.Audio, "eng", "aac", "Stereo", isDefault = true, isCurrent = true),
+            PlaybackTrack(2, PlaybackTrackType.Audio, "jpn", "aac", qualifiers = listOf(TrackQualifier.Commentary)),
+        ),
+        subtitleTracks = listOf(
+            PlaybackTrack(
+                4, PlaybackTrackType.Subtitle, "eng", "srt", delivery = TrackDelivery.External,
+                isCurrent = true, qualifiers = listOf(TrackQualifier.HearingImpaired),
+            ),
+            PlaybackTrack(5, PlaybackTrackType.Subtitle, codec = "pgs", delivery = TrackDelivery.BurnIn),
+            PlaybackTrack(6, PlaybackTrackType.Subtitle, "fra", "ass"),
+        ),
+    )
 }

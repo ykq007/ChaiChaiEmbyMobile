@@ -303,6 +303,7 @@ fun MobileApp(
         onTogglePlaybackOrientation,
         onTogglePlaybackFullscreen,
         onPlaybackEnded,
+        hasSeparatingHinge = separatingHinge != null,
     )
     }
 }

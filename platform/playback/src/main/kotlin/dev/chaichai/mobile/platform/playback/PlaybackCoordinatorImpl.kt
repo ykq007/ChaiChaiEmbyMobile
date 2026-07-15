@@ -4,6 +4,7 @@ import dev.chaichai.mobile.core.contracts.MediaPlaybackRequest
 import dev.chaichai.mobile.core.contracts.PlaybackCoordinator
 import dev.chaichai.mobile.core.contracts.PlaybackFailureKind
 import dev.chaichai.mobile.core.contracts.PlaybackState
+import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
 import dev.chaichai.mobile.platform.server.AuthoritativePlaybackPlan
 import dev.chaichai.mobile.platform.server.PlaybackCapabilities
 import dev.chaichai.mobile.platform.server.PlaybackFailure
@@ -31,7 +32,7 @@ interface PlaybackEngine {
     val isPaused: Boolean
         get() = snapshot.isPaused
     val events: Flow<PlaybackEngineEvent> get() = emptyFlow()
-    suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long)
+    suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean = false)
     suspend fun acknowledgePlayingReported()
     suspend fun playPause()
     suspend fun seekTo(positionTicks: Long)
@@ -67,6 +68,7 @@ class PlaybackCoordinatorImpl(
     private var exiting = false
     private var terminalAfterStop: PlaybackState? = null
     private var pendingRequest: MediaPlaybackRequest? = null
+    private var trackChangeJob: Job? = null
 
     private val engineEventJob = scope.launch {
             engine.events.collect { event ->
@@ -83,9 +85,11 @@ class PlaybackCoordinatorImpl(
         engineEventJob.cancel()
         timelineJob?.cancel()
         negotiationJob?.cancel()
+        trackChangeJob?.cancel()
     }
 
     override fun submit(request: MediaPlaybackRequest) {
+        trackChangeJob?.cancel()
         if (activePlan != null) {
             pendingRequest = request
             if (!exiting) {
@@ -128,7 +132,7 @@ class PlaybackCoordinatorImpl(
                     activePlan = result.plan
                     val startTicks = (start as? PlaybackStart.Resume)?.positionTicks ?: 0L
                     try {
-                        engine.prepare(result.plan, startTicks)
+                        engine.prepare(result.plan, startTicks, startPaused = false)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
@@ -175,12 +179,61 @@ class PlaybackCoordinatorImpl(
         }
     }
 
+    override fun selectTrack(selection: PlaybackTrackSelection) {
+        val current = mutableState.value as? PlaybackState.Active ?: return
+        val previousPlan = activePlan ?: return
+        if (current.isChangingTrack) return
+        val positionTicks = engine.positionTicks.coerceIn(0, previousPlan.runtimeTicks)
+        val wasPaused = engine.isPaused
+        mutableState.value = current.copy(
+            controlsVisible = true,
+            isChangingTrack = true,
+            trackChangeError = null,
+        )
+        trackChangeJob = scope.launch {
+            gateway.report(
+                PlaybackReport(previousPlan, PlaybackReportKind.Progress, positionTicks, wasPaused),
+            )
+            val request = previousPlan.request.copy(
+                start = PlaybackStart.Resume(positionTicks),
+                trackSelection = selection,
+                mediaSourceId = previousPlan.mediaSourceId,
+                playSessionId = previousPlan.playSessionId,
+            )
+            when (val result = gateway.negotiate(request, capabilities)) {
+                is PlaybackNegotiationResult.Failed -> publishTrackRollback(current, previousPlan)
+                is PlaybackNegotiationResult.Ready -> {
+                    try {
+                        engine.prepare(result.plan, positionTicks, wasPaused)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        try {
+                            engine.prepare(previousPlan, positionTicks, wasPaused)
+                        } catch (_: Exception) {
+                            failActivePlayback()
+                            return@launch
+                        }
+                        publishTrackRollback(current, previousPlan)
+                        return@launch
+                    }
+                    activePlan = result.plan
+                    gateway.report(report(result.plan, PlaybackReportKind.Playing))
+                    engine.acknowledgePlayingReported()
+                    mutableIsPlaying.value = !engine.isPaused
+                    publishActive(current.title, controlsVisible = true)
+                }
+            }
+        }
+    }
+
     override fun retry() {
         lastRequest?.let(::submit)
     }
 
     override fun exit() {
         negotiationJob?.cancel()
+        trackChangeJob?.cancel()
         val plan = activePlan
         if (plan == null) {
             val identity = lastRequest?.identity ?: return
@@ -273,6 +326,19 @@ class PlaybackCoordinatorImpl(
             runtimeTicks = plan.runtimeTicks,
             isPaused = snapshot.isPaused,
             controlsVisible = controlsVisible,
+            audioTracks = plan.audioTracks,
+            subtitleTracks = plan.subtitleTracks,
+        )
+    }
+
+    private fun publishTrackRollback(current: PlaybackState.Active, plan: AuthoritativePlaybackPlan) {
+        if (activePlan != plan) return
+        mutableState.value = current.copy(
+            positionTicks = engine.positionTicks,
+            isPaused = engine.isPaused,
+            controlsVisible = true,
+            isChangingTrack = false,
+            trackChangeError = "That track couldn't be applied. The previous track is still playing.",
         )
     }
 

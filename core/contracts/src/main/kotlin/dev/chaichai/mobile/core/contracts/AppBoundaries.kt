@@ -54,6 +54,7 @@ interface PlaybackCoordinator {
     fun playPause()
     fun seekBy(deltaTicks: Long)
     fun seekTo(positionTicks: Long)
+    fun selectTrack(selection: PlaybackTrackSelection) = Unit
     fun retry()
     fun exit()
 }
@@ -306,6 +307,31 @@ enum class PlaybackFailureKind(val canRetry: Boolean) {
     Network(true),
 }
 
+enum class PlaybackTrackType { Audio, Subtitle }
+enum class TrackDelivery { Embedded, External, BurnIn }
+enum class TrackQualifier { HearingImpaired, Commentary, VisuallyImpaired }
+
+data class PlaybackTrack(
+    val index: Int,
+    val type: PlaybackTrackType,
+    val language: String? = null,
+    val codec: String? = null,
+    val title: String? = null,
+    val delivery: TrackDelivery = TrackDelivery.Embedded,
+    val isDefault: Boolean = false,
+    val isCurrent: Boolean = false,
+    val qualifiers: List<TrackQualifier> = emptyList(),
+)
+
+data class PlaybackTrackSelection(
+    val audioStreamIndex: Int? = null,
+    val subtitleStreamIndex: Int? = null,
+) {
+    companion object {
+        val SubtitleOff = PlaybackTrackSelection()
+    }
+}
+
 sealed interface PlaybackState {
     data object Idle : PlaybackState
     data class Negotiating(val title: String) : PlaybackState
@@ -316,6 +342,10 @@ sealed interface PlaybackState {
         val runtimeTicks: Long,
         val isPaused: Boolean,
         val controlsVisible: Boolean = true,
+        val audioTracks: List<PlaybackTrack> = emptyList(),
+        val subtitleTracks: List<PlaybackTrack> = emptyList(),
+        val isChangingTrack: Boolean = false,
+        val trackChangeError: String? = null,
     ) : PlaybackState
     data class Failed(val reason: PlaybackFailureKind) : PlaybackState
     data class Exited(val identity: MediaIdentity) : PlaybackState

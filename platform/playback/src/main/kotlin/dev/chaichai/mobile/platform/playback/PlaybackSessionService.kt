@@ -103,7 +103,7 @@ class PlaybackSessionService : MediaSessionService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession = mediaSession
 
     @UnstableApi
-    internal fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long) {
+    internal fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean) {
         stoppedPublished = false
         reportControlEvents = false
         val redirectRejectingClient = playbackHttpClient()
@@ -114,7 +114,7 @@ class PlaybackSessionService : MediaSessionService() {
         )
         player.setMediaSource(source, startPositionTicks / TICKS_PER_MILLISECOND)
         player.prepare()
-        player.play()
+        player.playWhenReady = !startPaused
     }
 
     internal fun acknowledgePlayingReported() { reportControlEvents = true }
@@ -217,11 +217,11 @@ class Media3ServicePlaybackEngine(private val context: Context) : PlaybackEngine
     override val events: SharedFlow<PlaybackEngineEvent> = PlaybackServiceOwner.events
 
     @UnstableApi
-    override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long) {
+    override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean) {
         context.startForegroundService(Intent(context, PlaybackSessionService::class.java))
         withContext(Dispatchers.Main.immediate) {
             PlaybackServiceOwner.awaitService().apply {
-                prepare(plan, startPositionTicks)
+                prepare(plan, startPositionTicks, startPaused)
                 PlaybackServiceOwner.updateSnapshot(positionTicks(), isPaused())
             }
         }

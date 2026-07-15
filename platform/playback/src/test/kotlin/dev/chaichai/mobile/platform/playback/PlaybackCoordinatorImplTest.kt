@@ -5,6 +5,9 @@ import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.MediaPlaybackRequest
 import dev.chaichai.mobile.core.contracts.PlaybackFailureKind
 import dev.chaichai.mobile.core.contracts.PlaybackState
+import dev.chaichai.mobile.core.contracts.PlaybackTrack
+import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
+import dev.chaichai.mobile.core.contracts.PlaybackTrackType
 import dev.chaichai.mobile.platform.server.AuthoritativePlaybackPlan
 import dev.chaichai.mobile.platform.server.DirectPlayCapability
 import dev.chaichai.mobile.platform.server.PlaybackCapabilities
@@ -247,6 +250,59 @@ class PlaybackCoordinatorImplTest {
         coordinator.close()
     }
 
+    @Test
+    fun `successful audio change preserves media position pause state and negotiated session continuity`() = runTest {
+        val gateway = FakeGateway()
+        val engine = FakeEngine()
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
+            MediaIdentity("server", "movie"), HomeScope("server", "user"), "Arrival",
+        ))
+        runCurrent()
+        engine.positionTicks = 1_200_000_000
+        coordinator.playPause()
+        runCurrent()
+
+        coordinator.selectTrack(PlaybackTrackSelection(audioStreamIndex = 2))
+        runCurrent()
+
+        val state = coordinator.state.value as PlaybackState.Active
+        assertEquals(MediaIdentity("server", "movie"), state.identity)
+        assertEquals(1_200_000_000, state.positionTicks)
+        assertTrue(state.isPaused)
+        assertTrue(state.audioTracks.single { it.index == 2 }.isCurrent)
+        assertEquals("source", gateway.requests.last().mediaSourceId)
+        assertEquals("session", gateway.requests.last().playSessionId)
+        assertEquals(1_200_000_000, gateway.requests.last().startPositionTicks)
+        assertEquals(listOf(false, true), engine.preparePauseStates)
+        coordinator.close()
+    }
+
+    @Test
+    fun `failed subtitle change restores the prior working track and explains rollback`() = runTest {
+        val gateway = FakeGateway()
+        val engine = FakeEngine()
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
+            MediaIdentity("server", "movie"), HomeScope("server", "user"), "Arrival",
+        ))
+        runCurrent()
+        engine.positionTicks = 800_000_000
+        gateway.failTrackChanges = true
+
+        coordinator.selectTrack(PlaybackTrackSelection(audioStreamIndex = null, subtitleStreamIndex = 4))
+        runCurrent()
+
+        val state = coordinator.state.value as PlaybackState.Active
+        assertEquals(800_000_000, state.positionTicks)
+        assertFalse(state.isPaused)
+        assertFalse(state.isChangingTrack)
+        assertTrue(state.trackChangeError!!.contains("previous track is still playing"))
+        assertEquals(1, engine.preparePauseStates.size)
+        assertEquals(listOf(PlaybackReportKind.Playing, PlaybackReportKind.Progress), gateway.reports.map { it.kind })
+        coordinator.close()
+    }
+
     private fun capabilities() = PlaybackCapabilities(
         18_000_000, 6, listOf(DirectPlayCapability("mp4", "h264", "aac")),
         listOf(TranscodeCapability("hls", "h264", "aac")),
@@ -256,14 +312,25 @@ class PlaybackCoordinatorImplTest {
         private val result: PlaybackNegotiationResult? = null,
     ) : PlaybackGateway {
         var request: ScopedPlaybackRequest? = null
+        val requests = mutableListOf<ScopedPlaybackRequest>()
         val reports = mutableListOf<PlaybackReport>()
         var onReport: (PlaybackReport) -> Unit = {}
+        var failTrackChanges = false
         override suspend fun negotiate(request: ScopedPlaybackRequest, capabilities: PlaybackCapabilities): PlaybackNegotiationResult {
             this.request = request
+            requests += request
+            if (failTrackChanges && request.trackSelection != null) {
+                return PlaybackNegotiationResult.Failed(PlaybackFailure.SourceUnavailable)
+            }
             return result ?: PlaybackNegotiationResult.Ready(
                 AuthoritativePlaybackPlan(
                     request, "source", "session", PlaybackMethod.DirectPlay,
-                    "https://example.test/video".toHttpUrl(), emptyMap(), 7_200_000_000, null, null,
+                    "https://example.test/video".toHttpUrl(), emptyMap(), 7_200_000_000,
+                    request.trackSelection?.audioStreamIndex,
+                    request.trackSelection?.subtitleStreamIndex,
+                    audioTracks = listOf(1, 2).map { index ->
+                        PlaybackTrack(index, PlaybackTrackType.Audio, isCurrent = index == request.trackSelection?.audioStreamIndex)
+                    },
                 ),
             )
         }
@@ -281,9 +348,12 @@ class PlaybackCoordinatorImplTest {
         override val snapshot: PlaybackEngineSnapshot get() = PlaybackEngineSnapshot(positionTicks, isPaused)
         var prepareFailure: Exception? = null
         var acknowledgedPlaying = false
-        override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long) {
+        val preparePauseStates = mutableListOf<Boolean>()
+        override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean) {
             prepareFailure?.let { throw it }
             positionTicks = startPositionTicks
+            isPaused = startPaused
+            preparePauseStates += startPaused
         }
         override suspend fun acknowledgePlayingReported() { acknowledgedPlaying = true }
         override suspend fun playPause() {
