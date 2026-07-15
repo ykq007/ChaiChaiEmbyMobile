@@ -96,7 +96,7 @@ class PlaybackCoordinatorImplTest {
         coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
         runCurrent()
 
-        advanceTimeBy(10_000)
+        engine.eventsFlow.emit(PlaybackEngineEvent.ProgressDue)
         runCurrent()
         assertEquals(1, gateway.reports.count { it.kind == PlaybackReportKind.Progress })
 
@@ -108,9 +108,47 @@ class PlaybackCoordinatorImplTest {
     }
 
     @Test
+    fun `media session pause and seek events produce event driven progress`() = runTest {
+        val gateway = FakeGateway()
+        val engine = FakeEngine()
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
+            MediaIdentity("server", "movie"), HomeScope("server", "user"),
+        ))
+        runCurrent()
+
+        engine.eventsFlow.emit(PlaybackEngineEvent.Progress(dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Pause))
+        engine.eventsFlow.emit(PlaybackEngineEvent.Progress(dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek))
+        runCurrent()
+
+        assertEquals(
+            listOf(
+                dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Pause,
+                dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek,
+            ),
+            gateway.reports.filter { it.kind == PlaybackReportKind.Progress }.map { it.event },
+        )
+        coordinator.close()
+    }
+
+    @Test
+    fun `media3 preparation failure leaves negotiation in retryable source failure`() = runTest {
+        val engine = FakeEngine().apply { prepareFailure = IllegalStateException("service unavailable") }
+        val coordinator = PlaybackCoordinatorImpl(this, FakeGateway(), engine, capabilities(), false)
+
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
+            MediaIdentity("server", "movie"), HomeScope("server", "user"),
+        ))
+        runCurrent()
+
+        assertEquals(PlaybackFailureKind.SourceUnavailable, (coordinator.state.value as PlaybackState.Failed).reason)
+        coordinator.close()
+    }
+
+    @Test
     fun `timeline republishes the service position while playback is active`() = runTest {
         val engine = FakeEngine()
-        val coordinator = PlaybackCoordinatorImpl(this, FakeGateway(), engine, capabilities(), false, true)
+        val coordinator = PlaybackCoordinatorImpl(this, FakeGateway(), engine, capabilities(), true)
         coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
             MediaIdentity("server", "movie"), HomeScope("server", "user"), "Arrival",
         ))
@@ -165,10 +203,25 @@ class PlaybackCoordinatorImplTest {
         override val events = eventsFlow
         override var positionTicks = 0L
         override var isPaused = false
-        override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long) { positionTicks = startPositionTicks }
-        override suspend fun playPause() { isPaused = !isPaused }
-        override suspend fun seekTo(positionTicks: Long) { this.positionTicks = positionTicks }
-        override suspend fun stop() = Unit
+        var prepareFailure: Exception? = null
+        override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long) {
+            prepareFailure?.let { throw it }
+            positionTicks = startPositionTicks
+        }
+        override suspend fun playPause() {
+            isPaused = !isPaused
+            eventsFlow.emit(PlaybackEngineEvent.Progress(
+                if (isPaused) dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Pause
+                else dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Unpause,
+            ))
+        }
+        override suspend fun seekTo(positionTicks: Long) {
+            this.positionTicks = positionTicks
+            eventsFlow.emit(PlaybackEngineEvent.Progress(dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek))
+        }
+        override suspend fun stop() {
+            eventsFlow.emit(PlaybackEngineEvent.Stopped(positionTicks, isPaused))
+        }
     }
 }
 

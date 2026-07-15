@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 
 interface PlaybackEngine {
     val positionTicks: Long
@@ -35,6 +36,9 @@ interface PlaybackEngine {
 sealed interface PlaybackEngineEvent {
     data object Completed : PlaybackEngineEvent
     data object FatalError : PlaybackEngineEvent
+    data object ProgressDue : PlaybackEngineEvent
+    data class Progress(val event: dev.chaichai.mobile.platform.server.PlaybackProgressEvent) : PlaybackEngineEvent
+    data class Stopped(val positionTicks: Long, val isPaused: Boolean) : PlaybackEngineEvent
 }
 
 class PlaybackCoordinatorImpl(
@@ -42,8 +46,7 @@ class PlaybackCoordinatorImpl(
     private val gateway: PlaybackGateway,
     private val engine: PlaybackEngine,
     private val capabilities: PlaybackCapabilities,
-    private val schedulePeriodicReports: Boolean = true,
-    private val scheduleTimelineUpdates: Boolean = schedulePeriodicReports,
+    private val scheduleTimelineUpdates: Boolean = true,
 ) : PlaybackCoordinator, AutoCloseable {
     private val mutableState = MutableStateFlow<PlaybackState>(PlaybackState.Idle)
     override val state: StateFlow<PlaybackState> = mutableState
@@ -51,23 +54,25 @@ class PlaybackCoordinatorImpl(
     override val isPlaying: StateFlow<Boolean> = mutableIsPlaying
     private var activePlan: AuthoritativePlaybackPlan? = null
     private var lastRequest: MediaPlaybackRequest? = null
-    private var periodicJob: Job? = null
     private var timelineJob: Job? = null
     private var negotiationJob: Job? = null
     private var exiting = false
+    private var terminalAfterStop: PlaybackState? = null
 
     private val engineEventJob = scope.launch {
             engine.events.collect { event ->
                 when (event) {
                     PlaybackEngineEvent.Completed -> exit()
                     PlaybackEngineEvent.FatalError -> failActivePlayback()
+                    PlaybackEngineEvent.ProgressDue -> reportServiceProgress()
+                    is PlaybackEngineEvent.Progress -> reportServiceProgress(event.event)
+                    is PlaybackEngineEvent.Stopped -> finishServiceStop(event)
                 }
             }
     }
 
     override fun close() {
         engineEventJob.cancel()
-        periodicJob?.cancel()
         timelineJob?.cancel()
         negotiationJob?.cancel()
     }
@@ -75,7 +80,6 @@ class PlaybackCoordinatorImpl(
     override fun submit(request: MediaPlaybackRequest) {
         lastRequest = request
         exiting = false
-        periodicJob?.cancel()
         timelineJob?.cancel()
         negotiationJob?.cancel()
         if (request.scope.userId.isBlank() || request.scope.serverId != request.identity.serverId || request.identity.itemId.isBlank()) {
@@ -103,14 +107,21 @@ class PlaybackCoordinatorImpl(
                     mutableState.value = PlaybackState.Failed(result.reason.toContractFailure())
                 }
                 is PlaybackNegotiationResult.Ready -> {
-                    activePlan?.let { previous -> stopPlan(previous) }
                     activePlan = result.plan
                     val startTicks = (start as? PlaybackStart.Resume)?.positionTicks ?: 0L
-                    engine.prepare(result.plan, startTicks)
+                    try {
+                        engine.prepare(result.plan, startTicks)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        activePlan = null
+                        mutableIsPlaying.value = false
+                        mutableState.value = PlaybackState.Failed(PlaybackFailureKind.SourceUnavailable)
+                        return@launch
+                    }
                     mutableIsPlaying.value = true
                     publishActive(title, controlsVisible = true)
                     gateway.report(report(result.plan, PlaybackReportKind.Playing))
-                    if (schedulePeriodicReports) startPeriodicReports()
                     if (scheduleTimelineUpdates) startTimelineUpdates()
                 }
             }
@@ -129,9 +140,6 @@ class PlaybackCoordinatorImpl(
             engine.playPause()
             mutableIsPlaying.value = !engine.isPaused
             publishActive(current.title, controlsVisible = true)
-            gateway.report(report(plan, PlaybackReportKind.Progress, if (engine.isPaused) {
-                dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Pause
-            } else dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Unpause))
         }
     }
 
@@ -145,7 +153,6 @@ class PlaybackCoordinatorImpl(
         scope.launch {
             engine.seekTo(positionTicks.coerceIn(0, plan.runtimeTicks))
             publishActive(current.title, controlsVisible = true)
-            gateway.report(report(plan, PlaybackReportKind.Progress, dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek))
         }
     }
 
@@ -164,29 +171,25 @@ class PlaybackCoordinatorImpl(
         }
         if (exiting) return
         exiting = true
-        periodicJob?.cancel()
         timelineJob?.cancel()
+        terminalAfterStop = PlaybackState.Exited(
+            dev.chaichai.mobile.core.contracts.MediaIdentity(plan.request.serverId, plan.request.itemId),
+        )
         scope.launch {
             gateway.report(report(plan, PlaybackReportKind.Progress))
-            stopPlan(plan)
             engine.stop()
-            activePlan = null
-            mutableIsPlaying.value = false
-            mutableState.value = PlaybackState.Exited(
-                dev.chaichai.mobile.core.contracts.MediaIdentity(plan.request.serverId, plan.request.itemId),
-            )
         }
     }
 
-    private fun startPeriodicReports() {
+    private fun reportServiceProgress(
+        event: dev.chaichai.mobile.platform.server.PlaybackProgressEvent =
+            dev.chaichai.mobile.platform.server.PlaybackProgressEvent.TimeUpdate,
+    ) {
         val plan = activePlan ?: return
-        periodicJob = scope.launch {
-            while (activePlan == plan) {
-                delay(PROGRESS_INTERVAL_MILLIS)
-                if (activePlan == plan) gateway.report(
-                    report(plan, PlaybackReportKind.Progress, dev.chaichai.mobile.platform.server.PlaybackProgressEvent.TimeUpdate),
-                )
-            }
+        scope.launch {
+            if (activePlan == plan) gateway.report(
+                report(plan, PlaybackReportKind.Progress, event),
+            )
         }
     }
 
@@ -202,10 +205,6 @@ class PlaybackCoordinatorImpl(
         }
     }
 
-    private suspend fun stopPlan(plan: AuthoritativePlaybackPlan) {
-        gateway.report(report(plan, PlaybackReportKind.Stopped))
-    }
-
     private fun report(
         plan: AuthoritativePlaybackPlan,
         kind: PlaybackReportKind,
@@ -218,14 +217,24 @@ class PlaybackCoordinatorImpl(
         val plan = activePlan ?: return
         if (exiting) return
         exiting = true
-        periodicJob?.cancel()
         timelineJob?.cancel()
+        terminalAfterStop = PlaybackState.Failed(PlaybackFailureKind.SourceUnavailable)
         scope.launch {
-            stopPlan(plan)
             engine.stop()
+        }
+    }
+
+    private fun finishServiceStop(event: PlaybackEngineEvent.Stopped) {
+        val plan = activePlan ?: return
+        val terminal = terminalAfterStop ?: return
+        scope.launch {
+            gateway.report(
+                PlaybackReport(plan, PlaybackReportKind.Stopped, event.positionTicks, event.isPaused),
+            )
             activePlan = null
             mutableIsPlaying.value = false
-            mutableState.value = PlaybackState.Failed(PlaybackFailureKind.SourceUnavailable)
+            mutableState.value = terminal
+            terminalAfterStop = null
             exiting = false
         }
     }
@@ -245,7 +254,6 @@ class PlaybackCoordinatorImpl(
     private fun PlaybackFailure.toContractFailure() = PlaybackFailureKind.valueOf(name)
 
     private companion object {
-        const val PROGRESS_INTERVAL_MILLIS = 10_000L
         const val TIMELINE_INTERVAL_MILLIS = 1_000L
     }
 }

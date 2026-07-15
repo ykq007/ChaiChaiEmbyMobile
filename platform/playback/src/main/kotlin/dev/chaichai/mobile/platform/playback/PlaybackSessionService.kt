@@ -10,10 +10,9 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.PlaybackException
-import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.common.util.UnstableApi
@@ -28,18 +27,25 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.ui.PlayerView
+import okhttp3.OkHttpClient
 
 /** The only owner of the Media3 player and session. Feature and app code only see PlaybackCoordinator. */
 class PlaybackSessionService : MediaSessionService() {
     private lateinit var player: ExoPlayer
     private lateinit var mediaSession: MediaSession
     private val snapshotHandler = Handler(Looper.getMainLooper())
+    private var snapshotCount = 0
+    private var stoppedPublished = false
     private val snapshotRunnable = object : Runnable {
         override fun run() {
             PlaybackServiceOwner.updateSnapshot(
                 player.currentPosition * TICKS_PER_MILLISECOND,
                 !player.playWhenReady,
             )
+            snapshotCount++
+            if (snapshotCount % SNAPSHOTS_PER_PROGRESS == 0 && player.mediaItemCount > 0) {
+                PlaybackServiceOwner.publish(PlaybackEngineEvent.ProgressDue)
+            }
             snapshotHandler.postDelayed(this, SNAPSHOT_INTERVAL_MILLIS)
         }
     }
@@ -61,6 +67,25 @@ class PlaybackSessionService : MediaSessionService() {
             override fun onPlayerError(error: PlaybackException) {
                 PlaybackServiceOwner.publish(PlaybackEngineEvent.FatalError)
             }
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                PlaybackServiceOwner.publish(
+                    PlaybackEngineEvent.Progress(
+                        if (playWhenReady) dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Unpause
+                        else dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Pause,
+                    ),
+                )
+            }
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int,
+            ) {
+                if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                    PlaybackServiceOwner.publish(
+                        PlaybackEngineEvent.Progress(dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek),
+                    )
+                }
+            }
         })
         PlaybackServiceOwner.attach(this)
         snapshotHandler.post(snapshotRunnable)
@@ -70,8 +95,10 @@ class PlaybackSessionService : MediaSessionService() {
 
     @UnstableApi
     internal fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long) {
-        val httpFactory = DefaultHttpDataSource.Factory().setDefaultRequestProperties(plan.headers)
-        val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
+        stoppedPublished = false
+        val redirectRejectingClient = playbackHttpClient()
+        val dataSourceFactory = OkHttpDataSource.Factory(redirectRejectingClient)
+            .setDefaultRequestProperties(plan.headers)
         val source = DefaultMediaSourceFactory(dataSourceFactory).createMediaSource(
             MediaItem.Builder().setUri(plan.url.toString()).setMediaId(plan.request.itemId).build(),
         )
@@ -84,11 +111,16 @@ class PlaybackSessionService : MediaSessionService() {
     internal fun seekTo(positionTicks: Long) { player.seekTo(positionTicks / TICKS_PER_MILLISECOND) }
     internal fun positionTicks(): Long = player.currentPosition * TICKS_PER_MILLISECOND
     internal fun isPaused(): Boolean = !player.playWhenReady
-    internal fun stopPlayback() { player.stop(); stopSelf() }
+    internal fun stopPlayback() {
+        publishStoppedOnce()
+        player.stop()
+        stopSelf()
+    }
     internal fun playerForSurface(): Player = player
 
     override fun onDestroy() {
         snapshotHandler.removeCallbacks(snapshotRunnable)
+        publishStoppedOnce()
         PlaybackServiceOwner.detach(this)
         mediaSession.release()
         player.release()
@@ -98,8 +130,25 @@ class PlaybackSessionService : MediaSessionService() {
     private companion object {
         const val TICKS_PER_MILLISECOND = 10_000L
         const val SNAPSHOT_INTERVAL_MILLIS = 250L
+        const val SNAPSHOTS_PER_PROGRESS = 40
+    }
+
+    private fun publishStoppedOnce() {
+        if (stoppedPublished) return
+        stoppedPublished = true
+        PlaybackServiceOwner.publish(
+            PlaybackEngineEvent.Stopped(
+                player.currentPosition * TICKS_PER_MILLISECOND,
+                !player.playWhenReady,
+            ),
+        )
     }
 }
+
+internal fun playbackHttpClient(): OkHttpClient = OkHttpClient.Builder()
+    .followRedirects(false)
+    .followSslRedirects(false)
+    .build()
 
 @UnstableApi
 @Composable

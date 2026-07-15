@@ -24,10 +24,15 @@ fun androidPlaybackCapabilities(supportedDecoderTypes: Set<String>? = null): Pla
         if ("video/av01" in decoders) add("av1")
     }
     val direct = if (audio == null) emptyList() else video.flatMap { codec ->
-        listOf("mp4", "mkv", "webm").map { container -> DirectPlayCapability(container, codec, audio) }
+        val containers = when (codec) {
+            "h264", "hevc" -> if (audio == "aac") listOf("mp4", "mkv") else listOf("mkv")
+            "vp9", "av1" -> if (audio == "opus") listOf("webm", "mkv") else listOf("mkv")
+            else -> emptyList()
+        }
+        containers.map { container -> DirectPlayCapability(container, codec, audio) }
     }
-    val transcode = if (audio != null && "h264" in video) {
-        listOf(TranscodeCapability("ts", "h264", audio))
+    val transcode = if (audio == "aac" && "h264" in video) {
+        listOf(TranscodeCapability("ts", "h264", "aac"))
     } else emptyList()
     return PlaybackCapabilities(
         maxStreamingBitrate = 20_000_000,
