@@ -40,6 +40,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.AbsoluteAlignment
@@ -62,6 +63,7 @@ import dev.chaichai.mobile.core.contracts.HomeMediaAction
 import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.MovieLibraryState
+import dev.chaichai.mobile.core.contracts.SeriesLibraryState
 import dev.chaichai.mobile.design.system.EmptyDestination
 import dev.chaichai.mobile.design.system.LocalReducedMotion
 import dev.chaichai.mobile.feature.home.HomeScreen
@@ -71,6 +73,7 @@ import dev.chaichai.mobile.feature.home.rememberHomeUiState
 import dev.chaichai.mobile.feature.libraries.LibrariesScreen
 import dev.chaichai.mobile.feature.libraries.HingeListDetailPanes
 import dev.chaichai.mobile.feature.libraries.LibraryWindowClass
+import dev.chaichai.mobile.feature.libraries.LibraryCollection
 import dev.chaichai.mobile.feature.libraries.MovieDetailsScreen
 import dev.chaichai.mobile.feature.search.SearchScreen
 import dev.chaichai.mobile.feature.settings.SettingsScreen
@@ -133,6 +136,14 @@ private fun MovieLibraryState.scopeOrNull(): HomeScope? = when (this) {
     MovieLibraryState.Loading -> null
 }
 
+private fun SeriesLibraryState.scopeOrNull(): HomeScope? = when (this) {
+    is SeriesLibraryState.Ready -> scope
+    is SeriesLibraryState.EmptyLibrary -> scope
+    is SeriesLibraryState.EmptyFiltered -> scope
+    is SeriesLibraryState.Failure -> scope
+    SeriesLibraryState.Loading -> null
+}
+
 @Composable
 fun MobileApp(
     boundaries: AppBoundaries,
@@ -142,12 +153,15 @@ fun MobileApp(
     val serverSetup = boundaries.serverSetup
     val setupState = serverSetup?.state?.collectAsState()?.value
     val movieLibraryState by boundaries.gateway.movieLibrary.collectAsState()
-    val activeLibraryScope = movieLibraryState.scopeOrNull()
+    val seriesLibraryState by boundaries.gateway.seriesLibrary.collectAsState()
+    val activeLibraryScope = movieLibraryState.scopeOrNull() ?: seriesLibraryState.scopeOrNull()
+    var libraryCollection by rememberSaveable { mutableStateOf(LibraryCollection.Movies) }
     var scopedLibrarySelection by rememberSaveable(
         "mobile-app-library-selection",
         stateSaver = ScopedLibrarySelectionSaver,
     ) { mutableStateOf<ScopedLibrarySelection?>(null) }
     val libraryGridState = rememberLazyGridState()
+    val adaptiveContentState = rememberSaveableStateHolder()
     LaunchedEffect(activeLibraryScope, scopedLibrarySelection) {
         if (activeLibraryScope != null && scopedLibrarySelection?.scope != null &&
             scopedLibrarySelection?.scope != activeLibraryScope
@@ -202,6 +216,9 @@ fun MobileApp(
                         librarySelection = librarySelection,
                         onLibrarySelectionChanged = onLibrarySelectionChanged,
                         libraryGridState = libraryGridState,
+                        libraryCollection = libraryCollection,
+                        onLibraryCollectionChanged = { libraryCollection = it },
+                        adaptiveContentState = adaptiveContentState,
                     )
                     return@BoxWithConstraints
                 }
@@ -217,6 +234,9 @@ fun MobileApp(
                         librarySelection = librarySelection,
                         onLibrarySelectionChanged = onLibrarySelectionChanged,
                         libraryGridState = libraryGridState,
+                        libraryCollection = libraryCollection,
+                        onLibraryCollectionChanged = { libraryCollection = it },
+                        adaptiveContentState = adaptiveContentState,
                     )
                 }
             }
@@ -236,6 +256,9 @@ fun MobileApp(
                         librarySelection = librarySelection,
                         onLibrarySelectionChanged = onLibrarySelectionChanged,
                         libraryGridState = libraryGridState,
+                        libraryCollection = libraryCollection,
+                        onLibraryCollectionChanged = { libraryCollection = it },
+                        adaptiveContentState = adaptiveContentState,
                     )
                 }
             }
@@ -245,6 +268,9 @@ fun MobileApp(
                 librarySelection = librarySelection,
                 onLibrarySelectionChanged = onLibrarySelectionChanged,
                 libraryGridState = libraryGridState,
+                libraryCollection = libraryCollection,
+                onLibraryCollectionChanged = { libraryCollection = it },
+                adaptiveContentState = adaptiveContentState,
             )
         }
     }
@@ -261,6 +287,9 @@ private fun AdaptiveShell(
     librarySelection: MediaIdentity?,
     onLibrarySelectionChanged: (MediaIdentity?) -> Unit,
     libraryGridState: LazyGridState,
+    libraryCollection: LibraryCollection,
+    onLibraryCollectionChanged: (LibraryCollection) -> Unit,
+    adaptiveContentState: SaveableStateHolder,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -288,7 +317,6 @@ private fun AdaptiveShell(
         val currentDestination = backStackEntry?.destination
         val reducedMotion = LocalReducedMotion.current
         val scope = rememberCoroutineScope()
-        val adaptiveContentState = rememberSaveableStateHolder()
         val navigate: (TopLevelDestination) -> Unit = { destination ->
             scope.launch {
                 if (boundaries.gateway.verifyAuthentication(destination.route) != GatewayAuthenticationStatus.Expired) {
@@ -352,6 +380,9 @@ private fun AdaptiveShell(
                         onSelectionChanged = onLibrarySelectionChanged,
                         detailsAuthenticationReturnDestination = TopLevelDestination.Libraries.route,
                         gridState = libraryGridState,
+                        initialCollection = libraryCollection,
+                        selectedCollection = libraryCollection,
+                        onCollectionChanged = onLibraryCollectionChanged,
                         onOpenDetails = { identity ->
                             navController.navigate(identity.movieDetailsRoute())
                         },

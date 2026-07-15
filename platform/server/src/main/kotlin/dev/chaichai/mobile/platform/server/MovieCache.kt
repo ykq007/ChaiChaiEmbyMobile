@@ -14,9 +14,9 @@ import dev.chaichai.mobile.core.contracts.ArtworkReference
 import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.MovieDetails
-import dev.chaichai.mobile.core.contracts.MovieLibraryQuery
+import dev.chaichai.mobile.core.contracts.LibraryQuery
 import dev.chaichai.mobile.core.contracts.MoviePoster
-import dev.chaichai.mobile.core.contracts.MovieSortField
+import dev.chaichai.mobile.core.contracts.LibrarySortField
 import dev.chaichai.mobile.core.contracts.MovieTrackAvailability
 import dev.chaichai.mobile.core.contracts.SortDirection
 import kotlinx.serialization.Serializable
@@ -29,10 +29,10 @@ data class MovieLibrarySnapshot(
 )
 
 interface MovieCache {
-    suspend fun loadLibrary(scope: HomeScope, query: MovieLibraryQuery): MovieLibrarySnapshot?
+    suspend fun loadLibrary(scope: HomeScope, query: LibraryQuery): MovieLibrarySnapshot?
     suspend fun saveLibrary(
         scope: HomeScope,
-        query: MovieLibraryQuery,
+        query: LibraryQuery,
         items: List<MoviePoster>,
         totalCount: Int,
         availableGenres: List<String>,
@@ -42,10 +42,10 @@ interface MovieCache {
 }
 
 class InMemoryMovieCache : MovieCache {
-    private val libraries = mutableMapOf<Pair<HomeScope, MovieLibraryQuery>, MovieLibrarySnapshot>()
+    private val libraries = mutableMapOf<Pair<HomeScope, LibraryQuery>, MovieLibrarySnapshot>()
     private val details = mutableMapOf<Pair<HomeScope, MediaIdentity>, MovieDetails>()
-    override suspend fun loadLibrary(scope: HomeScope, query: MovieLibraryQuery) = libraries[scope to query]
-    override suspend fun saveLibrary(scope: HomeScope, query: MovieLibraryQuery, items: List<MoviePoster>, totalCount: Int, availableGenres: List<String>) {
+    override suspend fun loadLibrary(scope: HomeScope, query: LibraryQuery) = libraries[scope to query]
+    override suspend fun saveLibrary(scope: HomeScope, query: LibraryQuery, items: List<MoviePoster>, totalCount: Int, availableGenres: List<String>) {
         libraries[scope to query] = MovieLibrarySnapshot(items, totalCount, availableGenres)
     }
     override suspend fun loadDetails(scope: HomeScope, identity: MediaIdentity) = details[scope to identity]
@@ -84,11 +84,11 @@ internal abstract class MovieCacheDatabase : RoomDatabase() { abstract fun dao()
 
 internal class RoomMovieCache(private val dao: MovieCacheDao) : MovieCache {
     private val json = Json { ignoreUnknownKeys = true }
-    override suspend fun loadLibrary(scope: HomeScope, query: MovieLibraryQuery): MovieLibrarySnapshot? =
+    override suspend fun loadLibrary(scope: HomeScope, query: LibraryQuery): MovieLibrarySnapshot? =
         dao.library(scope.serverId, scope.userId, query.sortField.name, query.sortDirection.name, query.genre.orEmpty())
             ?.let { json.decodeFromString<CachedMovieLibrary>(it.payload).toContract() }
 
-    override suspend fun saveLibrary(scope: HomeScope, query: MovieLibraryQuery, items: List<MoviePoster>, totalCount: Int, availableGenres: List<String>) {
+    override suspend fun saveLibrary(scope: HomeScope, query: LibraryQuery, items: List<MoviePoster>, totalCount: Int, availableGenres: List<String>) {
         dao.saveLibrary(
             MovieLibraryEntity(
                 scope.serverId, scope.userId, query.sortField.name, query.sortDirection.name, query.genre.orEmpty(),

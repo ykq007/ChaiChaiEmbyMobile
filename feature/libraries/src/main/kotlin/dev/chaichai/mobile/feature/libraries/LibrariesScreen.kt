@@ -14,10 +14,13 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -45,21 +48,32 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.isTraversalGroup
+import androidx.compose.ui.semantics.traversalIndex
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.chaichai.mobile.core.contracts.EmbyGateway
+import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.MovieDetails
 import dev.chaichai.mobile.core.contracts.MovieDetailsState
-import dev.chaichai.mobile.core.contracts.MovieLibraryQuery
+import dev.chaichai.mobile.core.contracts.LibraryQuery
 import dev.chaichai.mobile.core.contracts.MovieLibraryState
-import dev.chaichai.mobile.core.contracts.MoviePlaybackRequest
+import dev.chaichai.mobile.core.contracts.MediaPlaybackRequest
 import dev.chaichai.mobile.core.contracts.MoviePoster
-import dev.chaichai.mobile.core.contracts.MovieSortField
+import dev.chaichai.mobile.core.contracts.LibrarySortField
 import dev.chaichai.mobile.core.contracts.PlaybackCoordinator
 import dev.chaichai.mobile.core.contracts.SortDirection
+import dev.chaichai.mobile.core.contracts.EpisodeDetails
+import dev.chaichai.mobile.core.contracts.EpisodeDetailsState
+import dev.chaichai.mobile.core.contracts.EpisodeSummary
+import dev.chaichai.mobile.core.contracts.SeasonEpisodesState
+import dev.chaichai.mobile.core.contracts.SeasonSummary
+import dev.chaichai.mobile.core.contracts.SeriesDetails
+import dev.chaichai.mobile.core.contracts.SeriesDetailsState
+import dev.chaichai.mobile.core.contracts.SeriesLibraryState
 import dev.chaichai.mobile.design.system.AuthenticatedArtwork
 import kotlinx.coroutines.launch
 
@@ -85,15 +99,66 @@ fun LibrariesScreen(
     onSelectionChanged: (MediaIdentity?) -> Unit = {},
     detailsAuthenticationReturnDestination: String? = null,
     gridState: LazyGridState = rememberLazyGridState(),
+    initialCollection: LibraryCollection = LibraryCollection.Movies,
+    selectedCollection: LibraryCollection? = null,
+    onCollectionChanged: (LibraryCollection) -> Unit = {},
+) {
+    var savedCollection by rememberSaveable { androidx.compose.runtime.mutableStateOf(initialCollection) }
+    val collection = selectedCollection ?: savedCollection
+    val selectCollection: (LibraryCollection) -> Unit = { selected ->
+        if (selected != collection) onSelectionChanged(null)
+        savedCollection = selected
+        onCollectionChanged(selected)
+    }
+    Column(modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FilterChip(collection == LibraryCollection.Movies, { selectCollection(LibraryCollection.Movies) }, { Text("Movies") })
+            FilterChip(collection == LibraryCollection.Shows, { selectCollection(LibraryCollection.Shows) }, { Text("Shows") })
+        }
+        if (collection == LibraryCollection.Movies) {
+            MovieLibrariesScreen(
+                gateway, windowClass, isHeightConstrained, supportsListDetail, playback, onOpenDetails,
+                Modifier.weight(1f), hingePanes, initialSelection, onSelectionChanged,
+                detailsAuthenticationReturnDestination, gridState,
+            )
+        } else {
+            SeriesLibraryScreen(
+                gateway, windowClass, isHeightConstrained, supportsListDetail, playback,
+                Modifier.weight(1f), hingePanes, initialSelection, onSelectionChanged,
+                detailsAuthenticationReturnDestination,
+            )
+        }
+    }
+}
+
+enum class LibraryCollection { Movies, Shows }
+
+@Composable
+private fun MovieLibrariesScreen(
+    gateway: EmbyGateway,
+    windowClass: LibraryWindowClass,
+    isHeightConstrained: Boolean,
+    supportsListDetail: Boolean,
+    playback: PlaybackCoordinator,
+    onOpenDetails: (MediaIdentity) -> Unit,
+    modifier: Modifier,
+    hingePanes: HingeListDetailPanes?,
+    initialSelection: MediaIdentity?,
+    onSelectionChanged: (MediaIdentity?) -> Unit,
+    detailsAuthenticationReturnDestination: String?,
+    gridState: LazyGridState,
 ) {
     val state by gateway.movieLibrary.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    val initialQuery = (gateway.movieLibrary.value as? MovieLibraryState.Ready)?.query ?: MovieLibraryQuery()
+    val initialQuery = (gateway.movieLibrary.value as? MovieLibraryState.Ready)?.query ?: LibraryQuery()
     var savedSort by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(initialQuery.sortField.ordinal) }
     var savedDirection by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(initialQuery.sortDirection.ordinal) }
     var savedGenre by rememberSaveable { androidx.compose.runtime.mutableStateOf(initialQuery.genre) }
-    val savedQuery = MovieLibraryQuery(
-        MovieSortField.entries[savedSort],
+    val savedQuery = LibraryQuery(
+        LibrarySortField.entries[savedSort],
         SortDirection.entries[savedDirection],
         savedGenre,
     )
@@ -127,7 +192,7 @@ fun LibrariesScreen(
             onOpenDetails(identity)
         }
     }
-    val requestQuery: (MovieLibraryQuery) -> Unit = { query ->
+    val requestQuery: (LibraryQuery) -> Unit = { query ->
         savedSort = query.sortField.ordinal
         savedDirection = query.sortDirection.ordinal
         savedGenre = query.genre
@@ -183,7 +248,7 @@ private fun MovieCollection(
     windowClass: LibraryWindowClass,
     isHeightConstrained: Boolean,
     onOpenDetails: (MediaIdentity) -> Unit,
-    onQuery: (MovieLibraryQuery) -> Unit,
+    onQuery: (LibraryQuery) -> Unit,
     modifier: Modifier,
     gridState: LazyGridState,
 ) {
@@ -220,7 +285,7 @@ private fun ReadyMovieGrid(
     windowClass: LibraryWindowClass,
     isHeightConstrained: Boolean,
     onOpenDetails: (MediaIdentity) -> Unit,
-    onQuery: (MovieLibraryQuery) -> Unit,
+    onQuery: (LibraryQuery) -> Unit,
     modifier: Modifier,
     gridState: LazyGridState,
 ) {
@@ -293,13 +358,13 @@ internal fun movieGridColumnCount(
 
 @Composable
 private fun LibraryControls(
-    query: MovieLibraryQuery,
+    query: LibraryQuery,
     genres: List<String>,
-    onQuery: (MovieLibraryQuery) -> Unit,
+    onQuery: (LibraryQuery) -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         LazyRow(Modifier.testTag("movie-sort-controls"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(MovieSortField.entries) { sort ->
+            items(LibrarySortField.entries) { sort ->
                 FilterChip(selected = query.sortField == sort, onClick = { onQuery(query.copy(sortField = sort)) }, label = { Text(sort.label) })
             }
             item {
@@ -393,12 +458,12 @@ private fun MovieDetailsContent(
             if (details.tracks.audioTracks > 0) Text("${details.tracks.audioTracks} audio track${if (details.tracks.audioTracks == 1) "" else "s"}")
             if (details.tracks.subtitleTracks > 0) Text("${details.tracks.subtitleTracks} subtitle track${if (details.tracks.subtitleTracks == 1) "" else "s"}")
             if (details.hasMeaningfulResume) {
-                Button(onClick = { playback.submit(MoviePlaybackRequest.Resume(details.identity, details.playbackPositionTicks)) }) {
+                Button(onClick = { playback.submit(MediaPlaybackRequest.Resume(details.identity, details.playbackPositionTicks)) }) {
                     Text("Resume from ${formatPosition(details.playbackPositionTicks)}")
                 }
-                OutlinedButton(onClick = { playback.submit(MoviePlaybackRequest.PlayFromBeginning(details.identity)) }) { Text("Play from beginning") }
+                OutlinedButton(onClick = { playback.submit(MediaPlaybackRequest.PlayFromBeginning(details.identity)) }) { Text("Play from beginning") }
             } else {
-                Button(onClick = { playback.submit(MoviePlaybackRequest.PlayFromBeginning(details.identity)) }) { Text("Play") }
+                Button(onClick = { playback.submit(MediaPlaybackRequest.PlayFromBeginning(details.identity)) }) { Text("Play") }
             }
         }
     }
@@ -417,6 +482,355 @@ private fun MovieDetailsContent(
         metadata(Modifier.fillMaxWidth())
     }
 }
+
+@Composable
+private fun SeriesLibraryScreen(
+    gateway: EmbyGateway,
+    windowClass: LibraryWindowClass,
+    isHeightConstrained: Boolean,
+    supportsListDetail: Boolean,
+    playback: PlaybackCoordinator,
+    modifier: Modifier,
+    hingePanes: HingeListDetailPanes?,
+    initialSelection: MediaIdentity?,
+    onSelectionChanged: (MediaIdentity?) -> Unit,
+    authenticationReturnDestination: String?,
+) {
+    val state by gateway.seriesLibrary.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    var selectedSeriesId by rememberSaveable { androidx.compose.runtime.mutableStateOf(initialSelection?.itemId) }
+    var selectedScope by rememberSaveable(stateSaver = HomeScopeSaver) { androidx.compose.runtime.mutableStateOf<HomeScope?>(null) }
+    var compactDetails by rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
+    val selectedSeries = selectedSeriesId?.let { MediaIdentity(seriesStateScope(state)?.serverId ?: return@let null, it) }
+    val initialQuery = (state as? SeriesLibraryState.Ready)?.query ?: LibraryQuery()
+    var sort by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(initialQuery.sortField.ordinal) }
+    var direction by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(initialQuery.sortDirection.ordinal) }
+    var genre by rememberSaveable { androidx.compose.runtime.mutableStateOf(initialQuery.genre) }
+    val query = LibraryQuery(LibrarySortField.entries[sort], SortDirection.entries[direction], genre)
+    val requestQuery: (LibraryQuery) -> Unit = {
+        sort = it.sortField.ordinal
+        direction = it.sortDirection.ordinal
+        genre = it.genre
+        scope.launch { gateway.refreshSeries(it) }
+    }
+    LaunchedEffect(gateway) {
+        if (gateway.seriesLibrary.value is SeriesLibraryState.Loading) gateway.refreshSeries(query)
+    }
+    LaunchedEffect(initialSelection, state) {
+        val activeScope = seriesStateScope(state)
+        if (initialSelection != null && activeScope?.serverId == initialSelection.serverId && selectedSeriesId != initialSelection.itemId) {
+            selectedSeriesId = initialSelection.itemId
+            selectedScope = activeScope
+        }
+    }
+    LaunchedEffect(seriesStateScope(state), selectedSeriesId) {
+        val activeScope = seriesStateScope(state)
+        if (selectedScope != null && activeScope != null && selectedScope != activeScope) {
+            selectedSeriesId = null
+            selectedScope = null
+            compactDetails = false
+        } else if (activeScope == null && state !is SeriesLibraryState.Loading) {
+            selectedSeriesId = null
+            selectedScope = null
+            compactDetails = false
+        }
+    }
+    LaunchedEffect(supportsListDetail) {
+        if (!supportsListDetail) compactDetails = false
+    }
+    val collection: @Composable (Modifier) -> Unit = { collectionModifier ->
+        when (val snapshot = state) {
+            SeriesLibraryState.Loading -> Column(collectionModifier.fillMaxSize().padding(24.dp)) {
+                Text("Shows", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.semantics { heading() })
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            }
+            is SeriesLibraryState.Failure -> MessageState("Shows unavailable", snapshot.message, "Retry") {
+                scope.launch { gateway.refreshSeries(snapshot.query) }
+            }
+            is SeriesLibraryState.EmptyLibrary -> MessageState(
+                "No shows in this library", "Shows added on your Emby server will appear here.", "Retry",
+            ) { scope.launch { gateway.refreshSeries(snapshot.query) } }
+            is SeriesLibraryState.EmptyFiltered -> Column(collectionModifier.fillMaxSize()) {
+                LibraryControls(snapshot.query, snapshot.availableGenres, requestQuery)
+                MessageState("No matching shows", "Try another genre or clear the filter.", "Clear filter") {
+                    requestQuery(snapshot.query.copy(genre = null))
+                }
+            }
+            is SeriesLibraryState.Ready -> ReadySeriesGrid(
+                gateway, snapshot, windowClass, isHeightConstrained,
+                {
+                    selectedSeriesId = it.itemId
+                    selectedScope = snapshot.scope
+                    onSelectionChanged(it)
+                    compactDetails = !supportsListDetail
+                }, requestQuery, collectionModifier,
+            )
+        }
+    }
+    if (supportsListDetail && hingePanes != null) {
+        Row(modifier.fillMaxSize()) {
+            collection(Modifier.width(hingePanes.collectionWidth))
+            Spacer(Modifier.width(hingePanes.hingeWidth))
+            selectedSeries?.let {
+                SeriesDetailsPane(
+                    gateway, it, playback, isHeightConstrained,
+                    Modifier.width(hingePanes.detailWidth).fillMaxHeight(), authenticationReturnDestination,
+                )
+            } ?: Box(Modifier.width(hingePanes.detailWidth).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                Text("Select a show to view seasons")
+            }
+        }
+    } else if (supportsListDetail) {
+        Row(modifier.fillMaxSize()) {
+            collection(Modifier.weight(0.5f))
+            selectedSeries?.let {
+                SeriesDetailsPane(gateway, it, playback, isHeightConstrained, Modifier.weight(0.5f), authenticationReturnDestination)
+            } ?: Box(Modifier.weight(0.5f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                Text("Select a show to view seasons")
+            }
+        }
+    } else if (selectedSeries != null && compactDetails) {
+        Column(modifier.fillMaxSize()) {
+            OutlinedButton(onClick = { compactDetails = false }, modifier = Modifier.padding(horizontal = 16.dp)) { Text("Back to shows") }
+            SeriesDetailsPane(gateway, selectedSeries, playback, isHeightConstrained, Modifier.weight(1f), authenticationReturnDestination)
+        }
+    } else collection(modifier)
+}
+
+private fun seriesStateScope(state: SeriesLibraryState) = when (state) {
+    is SeriesLibraryState.Ready -> state.scope
+    is SeriesLibraryState.EmptyLibrary -> state.scope
+    is SeriesLibraryState.EmptyFiltered -> state.scope
+    is SeriesLibraryState.Failure -> state.scope
+    SeriesLibraryState.Loading -> null
+}
+
+@Composable
+private fun ReadySeriesGrid(
+    gateway: EmbyGateway,
+    state: SeriesLibraryState.Ready,
+    windowClass: LibraryWindowClass,
+    isHeightConstrained: Boolean,
+    onSelect: (MediaIdentity) -> Unit,
+    onQuery: (LibraryQuery) -> Unit,
+    modifier: Modifier,
+) {
+    val scope = rememberCoroutineScope()
+    val gridState = rememberLazyGridState()
+    val fontScale = LocalDensity.current.fontScale
+    LaunchedEffect(gridState, state.items.size, state.totalCount, state.isRefreshing) {
+        snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }.collect { last ->
+            if (!state.isRefreshing && last >= state.items.lastIndex - 4 && state.items.size < state.totalCount && !state.isLoadingMore) {
+                gateway.loadNextSeriesPage()
+            }
+        }
+    }
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        LazyVerticalGrid(
+            GridCells.Fixed(movieGridColumnCount(windowClass, maxWidth.value, fontScale)),
+            state = gridState,
+            modifier = Modifier.fillMaxSize().testTag("series-grid"),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(if (isHeightConstrained) 8.dp else 16.dp),
+        ) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Column {
+                    Text("Shows", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.semantics { heading() })
+                    LibraryControls(state.query, state.availableGenres, onQuery)
+                }
+            }
+            items(state.items, key = { "${it.identity.serverId}:${it.identity.itemId}" }) { show ->
+                MoviePosterCard(gateway, show, onSelect)
+            }
+            if (state.isLoadingMore) item(span = { GridItemSpan(maxLineSpan) }) {
+                Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            }
+            state.refreshFailureMessage?.let { message -> item(span = { GridItemSpan(maxLineSpan) }) {
+                Row(Modifier.fillMaxWidth().padding(12.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                    Text(message, Modifier.weight(1f))
+                    OutlinedButton({ scope.launch { gateway.refreshSeries(state.query) } }) { Text("Retry refresh") }
+                }
+            } }
+            state.pageFailureMessage?.let { message -> item(span = { GridItemSpan(maxLineSpan) }) {
+                Row(Modifier.fillMaxWidth().padding(12.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                    Text(message, Modifier.weight(1f))
+                    OutlinedButton({ scope.launch { gateway.retrySeriesPage() } }) { Text("Retry page") }
+                }
+            } }
+        }
+    }
+}
+
+@Composable
+private fun SeriesDetailsPane(
+    gateway: EmbyGateway,
+    identity: MediaIdentity,
+    playback: PlaybackCoordinator,
+    isHeightConstrained: Boolean,
+    modifier: Modifier,
+    authenticationReturnDestination: String?,
+) {
+    var retry by rememberSaveable(identity.serverId, identity.itemId) { androidx.compose.runtime.mutableIntStateOf(0) }
+    var detailState by androidx.compose.runtime.remember(identity) { androidx.compose.runtime.mutableStateOf<SeriesDetailsState?>(null) }
+    var selectedSeasonId by rememberSaveable(identity.serverId, identity.itemId) { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    var selectedEpisodeId by rememberSaveable(identity.serverId, identity.itemId) { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    var episodesState by androidx.compose.runtime.remember(identity, selectedSeasonId) { androidx.compose.runtime.mutableStateOf<SeasonEpisodesState?>(null) }
+    LaunchedEffect(gateway, identity, retry) { detailState = gateway.loadSeriesDetails(identity, authenticationReturnDestination) }
+    val details = (detailState as? SeriesDetailsState.Ready)?.details
+    val selectedSeason = details?.seasons?.firstOrNull { it.identity.itemId == selectedSeasonId }
+    LaunchedEffect(gateway, identity, selectedSeason) {
+        episodesState = selectedSeason?.let { gateway.loadSeasonEpisodes(identity, it.identity, authenticationReturnDestination) }
+    }
+    when (val snapshot = detailState) {
+        null -> Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        is SeriesDetailsState.Failure -> MessageState("Series unavailable", snapshot.message, "Retry") { retry += 1 }
+        is SeriesDetailsState.Ready -> {
+            val episodeIdentity = selectedEpisodeId?.let { MediaIdentity(identity.serverId, it) }
+            if (episodeIdentity != null) EpisodeDetailsPane(
+                gateway, episodeIdentity, playback, modifier, authenticationReturnDestination,
+                onBack = { selectedEpisodeId = null },
+            ) else LazyColumn(
+                modifier.fillMaxSize().testTag("series-details").padding(if (isHeightConstrained) 12.dp else 20.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                item {
+                    (snapshot.details.backdrop ?: snapshot.details.artwork)?.let { artwork ->
+                        AuthenticatedArtwork(
+                            artwork, "Artwork for ${snapshot.details.title}", { gateway.loadArtwork(artwork) },
+                            Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                        )
+                    }
+                    Text(snapshot.details.title, style = MaterialTheme.typography.headlineLarge, modifier = Modifier.semantics { heading() })
+                    listOfNotNull(snapshot.details.year?.toString(), snapshot.details.genres.takeIf { it.isNotEmpty() }?.joinToString(" • "))
+                        .takeIf { it.isNotEmpty() }?.let { Text(it.joinToString("  •  ")) }
+                    snapshot.details.overview?.takeIf { it.isNotBlank() }?.let { Text(it) }
+                }
+                if (snapshot.details.seasons.isEmpty()) item {
+                    Text("No seasons available", style = MaterialTheme.typography.titleMedium)
+                    Text("This show does not have season information from the server.")
+                } else items(snapshot.details.seasons, key = { it.identity.itemId }) { season ->
+                    FilterChip(
+                        selected = season.identity.itemId == selectedSeasonId,
+                        onClick = { selectedSeasonId = season.identity.itemId; selectedEpisodeId = null },
+                        label = { Text(season.name) },
+                    )
+                }
+                when (val episodeSnapshot = episodesState) {
+                    null -> if (selectedSeason != null) item { CircularProgressIndicator() }
+                    is SeasonEpisodesState.Failure -> item { Text(episodeSnapshot.message) }
+                    is SeasonEpisodesState.Empty -> item {
+                        Text("No episodes in ${selectedSeason?.name ?: "this season"}", style = MaterialTheme.typography.titleMedium)
+                    }
+                    is SeasonEpisodesState.Ready -> itemsIndexed(
+                        episodeSnapshot.episodes,
+                        key = { _, episode -> episode.identity.itemId },
+                    ) { index, episode ->
+                        EpisodeRow(gateway, episode, index + 1) { selectedEpisodeId = episode.identity.itemId }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EpisodeRow(gateway: EmbyGateway, episode: EpisodeSummary, traversalOrder: Int, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = onClick).padding(vertical = 8.dp)
+            .semantics { traversalIndex = traversalOrder.toFloat() },
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        episode.artwork?.let { artwork ->
+            AuthenticatedArtwork(artwork, "Still for ${episode.title}", { gateway.loadArtwork(artwork) }, Modifier.width(120.dp).aspectRatio(16f / 9f))
+        }
+        Column(Modifier.weight(1f)) {
+            Text(episodeLabel(episode), style = MaterialTheme.typography.titleMedium)
+            episode.runtimeTicks?.let { Text(formatRuntime(it), style = MaterialTheme.typography.bodySmall) }
+            episode.overview?.takeIf { it.isNotBlank() }?.let { Text(it, maxLines = 3, overflow = TextOverflow.Ellipsis) }
+            val runtimeTicks = episode.runtimeTicks
+            if (episode.playbackPositionTicks > 0 && runtimeTicks != null) {
+                val progress = (episode.playbackPositionTicks.toFloat() / runtimeTicks).coerceIn(0f, 1f)
+                androidx.compose.material3.LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth().semantics {
+                        progressBarRangeInfo = androidx.compose.ui.semantics.ProgressBarRangeInfo(progress, 0f..1f)
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EpisodeDetailsPane(
+    gateway: EmbyGateway,
+    identity: MediaIdentity,
+    playback: PlaybackCoordinator,
+    modifier: Modifier,
+    authenticationReturnDestination: String?,
+    onBack: () -> Unit,
+) {
+    var retry by rememberSaveable(identity.serverId, identity.itemId) { androidx.compose.runtime.mutableIntStateOf(0) }
+    var state by androidx.compose.runtime.remember(identity) { androidx.compose.runtime.mutableStateOf<EpisodeDetailsState?>(null) }
+    LaunchedEffect(gateway, identity, retry) { state = gateway.loadEpisodeDetails(identity, authenticationReturnDestination) }
+    when (val snapshot = state) {
+        null -> Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        is EpisodeDetailsState.Failure -> MessageState("Episode unavailable", snapshot.message, "Retry") { retry += 1 }
+        is EpisodeDetailsState.Ready -> EpisodeDetailsContent(gateway, snapshot.details, playback, modifier, onBack)
+    }
+}
+
+@Composable
+private fun EpisodeDetailsContent(
+    gateway: EmbyGateway,
+    details: EpisodeDetails,
+    playback: PlaybackCoordinator,
+    modifier: Modifier,
+    onBack: () -> Unit,
+) {
+    val episode = details.episode
+    Column(
+        modifier.fillMaxSize().testTag("episode-details").verticalScroll(rememberScrollState()).padding(20.dp)
+            .semantics { isTraversalGroup = true },
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        OutlinedButton(onClick = onBack) { Text("Back to episodes") }
+        (details.backdrop ?: episode.artwork)?.let { artwork ->
+            AuthenticatedArtwork(
+                artwork, "Artwork for ${episode.title}", { gateway.loadArtwork(artwork) },
+                Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+            )
+        }
+        episode.seriesName?.let { Text(it, style = MaterialTheme.typography.titleMedium) }
+        Text(episodeLabel(episode), style = MaterialTheme.typography.headlineLarge, modifier = Modifier.semantics { heading() })
+        listOfNotNull(
+            episode.runtimeTicks?.let(::formatRuntime),
+            details.communityRating?.let { "★ $it" },
+            details.criticRating?.let { "Critics $it" },
+        ).takeIf { it.isNotEmpty() }?.let { Text(it.joinToString("  •  ")) }
+        episode.overview?.takeIf { it.isNotBlank() }?.let { Text(it) }
+        if (details.genres.isNotEmpty()) Text(details.genres.joinToString(" • "))
+        if (details.tracks.audioTracks > 0) Text("${details.tracks.audioTracks} audio track${if (details.tracks.audioTracks == 1) "" else "s"}")
+        if (details.tracks.subtitleTracks > 0) Text("${details.tracks.subtitleTracks} subtitle track${if (details.tracks.subtitleTracks == 1) "" else "s"}")
+        if (episode.hasMeaningfulResume) {
+            Button({ playback.submit(MediaPlaybackRequest.Resume(episode.identity, episode.playbackPositionTicks, details.scope.userId)) }) {
+                Text("Resume from ${formatPosition(episode.playbackPositionTicks)}")
+            }
+            OutlinedButton({ playback.submit(MediaPlaybackRequest.PlayFromBeginning(episode.identity, details.scope.userId)) }) { Text("Play from beginning") }
+        } else Button({ playback.submit(MediaPlaybackRequest.PlayFromBeginning(episode.identity, details.scope.userId)) }) { Text("Play") }
+    }
+}
+
+private fun episodeLabel(episode: EpisodeSummary): String {
+    val number = listOfNotNull(episode.seasonNumber?.let { "S$it" }, episode.episodeNumber?.let { "E$it" }).joinToString(" ")
+    return listOf(number, episode.title).filter { it.isNotBlank() }.joinToString("  ")
+}
+
+private val HomeScopeSaver = Saver<HomeScope?, List<String>>(
+    save = { scope -> scope?.let { listOf(it.serverId, it.userId) } ?: emptyList() },
+    restore = { values -> values.takeIf { it.size == 2 }?.let { HomeScope(it[0], it[1]) } },
+)
 
 val MovieLibrarySelectionSaver = Saver<MediaIdentity?, List<String>>(
     save = { identity -> identity?.let { listOf(it.serverId, it.itemId) } ?: emptyList() },

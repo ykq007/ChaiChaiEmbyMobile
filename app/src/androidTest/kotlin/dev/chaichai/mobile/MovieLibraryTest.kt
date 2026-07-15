@@ -30,11 +30,11 @@ import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.MovieDetails
 import dev.chaichai.mobile.core.contracts.MovieDetailsState
-import dev.chaichai.mobile.core.contracts.MovieLibraryQuery
+import dev.chaichai.mobile.core.contracts.LibraryQuery
 import dev.chaichai.mobile.core.contracts.MovieLibraryState
-import dev.chaichai.mobile.core.contracts.MoviePlaybackRequest
+import dev.chaichai.mobile.core.contracts.MediaPlaybackRequest
 import dev.chaichai.mobile.core.contracts.MoviePoster
-import dev.chaichai.mobile.core.contracts.MovieSortField
+import dev.chaichai.mobile.core.contracts.LibrarySortField
 import dev.chaichai.mobile.core.contracts.MovieTrackAvailability
 import dev.chaichai.mobile.core.contracts.PlaybackCoordinator
 import dev.chaichai.mobile.core.contracts.SortDirection
@@ -68,11 +68,11 @@ class MovieLibraryTest {
         composeRule.onNodeWithText("1 subtitle track").assertIsDisplayed()
         composeRule.onNodeWithText("Resume from 2:00").performClick()
         assertEquals(
-            MoviePlaybackRequest.Resume(MediaIdentity("server", "arrival"), 1_200_000_000),
+            MediaPlaybackRequest.Resume(MediaIdentity("server", "arrival"), 1_200_000_000),
             playback.submitted,
         )
         composeRule.onNodeWithText("Play from beginning").performClick()
-        assertEquals(MoviePlaybackRequest.PlayFromBeginning(MediaIdentity("server", "arrival")), playback.submitted)
+        assertEquals(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "arrival")), playback.submitted)
     }
 
     @Test
@@ -204,7 +204,7 @@ class MovieLibraryTest {
         val gateway = FakeMovieGateway(
             MovieLibraryState.Ready(
                 HomeScope("server", "user"), movies, movies.size,
-                MovieLibraryQuery(MovieSortField.Name, SortDirection.Ascending),
+                LibraryQuery(LibrarySortField.Name, SortDirection.Ascending),
             ),
             details().copy(identity = movies[80].identity, title = movies[80].title),
         )
@@ -382,7 +382,7 @@ class MovieLibraryTest {
 
         composeRule.runOnIdle {
             assertEquals(
-                MovieLibraryQuery(MovieSortField.ReleaseDate, SortDirection.Descending, "Drama"),
+                LibraryQuery(LibrarySortField.ReleaseDate, SortDirection.Descending, "Drama"),
                 (gateway.movieLibrary.value as MovieLibraryState.Ready).query,
             )
         }
@@ -390,7 +390,7 @@ class MovieLibraryTest {
 
     @Test
     fun library_empty_filtered_empty_and_initial_failure_have_distinct_recovery_copy() {
-        val emptyQuery = MovieLibraryQuery(MovieSortField.DateAdded, SortDirection.Descending)
+        val emptyQuery = LibraryQuery(LibrarySortField.DateAdded, SortDirection.Descending)
         val gateway = FakeMovieGateway(MovieLibraryState.EmptyLibrary(HomeScope("server", "user"), emptyQuery))
         showLibrary(gateway)
         composeRule.onNodeWithText("No movies in this library").assertIsDisplayed()
@@ -399,13 +399,13 @@ class MovieLibraryTest {
 
         composeRule.runOnIdle {
             gateway.movieLibrary.value = MovieLibraryState.EmptyFiltered(
-                HomeScope("server", "user"), MovieLibraryQuery(genre = "Drama"), listOf("Drama"),
+                HomeScope("server", "user"), LibraryQuery(genre = "Drama"), listOf("Drama"),
             )
         }
         composeRule.onNodeWithText("No matching movies").assertIsDisplayed()
 
         composeRule.runOnIdle {
-            gateway.movieLibrary.value = MovieLibraryState.Failure("Server offline", query = MovieLibraryQuery(genre = "Drama"))
+            gateway.movieLibrary.value = MovieLibraryState.Failure("Server offline", query = LibraryQuery(genre = "Drama"))
         }
         composeRule.onNodeWithText("Movies unavailable").assertIsDisplayed()
         composeRule.onNodeWithText("Server offline").assertIsDisplayed()
@@ -477,9 +477,9 @@ class MovieLibraryTest {
     ) : EmbyGateway {
         override val connectionState = MutableStateFlow(GatewayConnectionState.Connected)
         override val movieLibrary = MutableStateFlow<MovieLibraryState>(initial)
-        var lastRefreshQuery: MovieLibraryQuery? = null
+        var lastRefreshQuery: LibraryQuery? = null
         var nextPageRequests = 0
-        override suspend fun refreshMovies(query: MovieLibraryQuery) {
+        override suspend fun refreshMovies(query: LibraryQuery) {
             lastRefreshQuery = query
             val ready = movieLibrary.value as? MovieLibraryState.Ready ?: return
             movieLibrary.value = ready.copy(query = query)
@@ -501,8 +501,8 @@ class MovieLibraryTest {
 
     private class FakePlayback : PlaybackCoordinator {
         override val isPlaying = MutableStateFlow(false)
-        var submitted: MoviePlaybackRequest? = null
-        override fun submit(request: MoviePlaybackRequest) { submitted = request }
+        var submitted: MediaPlaybackRequest? = null
+        override fun submit(request: MediaPlaybackRequest) { submitted = request }
     }
 
     private class RestoredServerSetup(returnDestination: String? = null) : ServerSetupBoundary {
@@ -529,7 +529,7 @@ class MovieLibraryTest {
             HomeScope("server", "user"),
             listOf(MoviePoster(MediaIdentity("server", "arrival"), "Arrival", 2016)),
             2,
-            MovieLibraryQuery(MovieSortField.Name, SortDirection.Ascending),
+            LibraryQuery(LibrarySortField.Name, SortDirection.Ascending),
             listOf("Drama", "Science Fiction"),
         )
         fun details() = MovieDetails(

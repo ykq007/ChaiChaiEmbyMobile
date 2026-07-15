@@ -14,7 +14,7 @@ interface EmbyGateway {
     suspend fun loadArtwork(artwork: ArtworkReference): ByteArray? = null
     val movieLibrary: StateFlow<MovieLibraryState>
         get() = EmptyMovieLibrary.flow
-    suspend fun refreshMovies(query: MovieLibraryQuery = MovieLibraryQuery()) = Unit
+    suspend fun refreshMovies(query: LibraryQuery = LibraryQuery()) = Unit
     suspend fun loadNextMoviePage() = Unit
     suspend fun retryMoviePage() = loadNextMoviePage()
     suspend fun loadMovieDetails(
@@ -22,12 +22,30 @@ interface EmbyGateway {
         authenticationReturnDestination: String? = null,
     ): MovieDetailsState =
         MovieDetailsState.Failure("Movie details couldn't be loaded.")
+    val seriesLibrary: StateFlow<SeriesLibraryState>
+        get() = EmptySeriesLibrary.flow
+    suspend fun refreshSeries(query: LibraryQuery = LibraryQuery()) = Unit
+    suspend fun loadNextSeriesPage() = Unit
+    suspend fun retrySeriesPage() = loadNextSeriesPage()
+    suspend fun loadSeriesDetails(
+        identity: MediaIdentity,
+        authenticationReturnDestination: String? = null,
+    ): SeriesDetailsState = SeriesDetailsState.Failure("Series details couldn't be loaded.")
+    suspend fun loadSeasonEpisodes(
+        seriesIdentity: MediaIdentity,
+        seasonIdentity: MediaIdentity,
+        authenticationReturnDestination: String? = null,
+    ): SeasonEpisodesState = SeasonEpisodesState.Failure("Episodes couldn't be loaded.")
+    suspend fun loadEpisodeDetails(
+        identity: MediaIdentity,
+        authenticationReturnDestination: String? = null,
+    ): EpisodeDetailsState = EpisodeDetailsState.Failure("Episode details couldn't be loaded.")
 }
 enum class GatewayConnectionState { Disconnected, Connected }
 enum class GatewayAuthenticationStatus { Valid, Expired, Unavailable }
 interface PlaybackCoordinator {
     val isPlaying: StateFlow<Boolean>
-    fun submit(request: MoviePlaybackRequest) = Unit
+    fun submit(request: MediaPlaybackRequest) = Unit
 }
 fun interface AppClock { fun now(): Instant }
 interface ConnectivityMonitor { val isOnline: StateFlow<Boolean> }
@@ -44,7 +62,7 @@ data class HomeScope(val serverId: String, val userId: String)
 
 data class MediaIdentity(val serverId: String, val itemId: String)
 
-enum class MovieSortField(val label: String) {
+enum class LibrarySortField(val label: String) {
     Name("Name"),
     DateAdded("Date added"),
     ReleaseDate("Release date"),
@@ -55,18 +73,21 @@ enum class SortDirection(val label: String) {
     Descending("Descending"),
 }
 
-data class MovieLibraryQuery(
-    val sortField: MovieSortField = MovieSortField.Name,
+data class LibraryQuery(
+    val sortField: LibrarySortField = LibrarySortField.Name,
     val sortDirection: SortDirection = SortDirection.Ascending,
     val genre: String? = null,
 )
+typealias MovieLibraryQuery = LibraryQuery
+typealias MovieSortField = LibrarySortField
 
-data class MoviePoster(
+data class MediaPoster(
     val identity: MediaIdentity,
     val title: String,
     val year: Int? = null,
     val artwork: ArtworkReference? = null,
 )
+typealias MoviePoster = MediaPoster
 
 sealed interface MovieLibraryState {
     data object Loading : MovieLibraryState
@@ -74,7 +95,7 @@ sealed interface MovieLibraryState {
         val scope: HomeScope,
         val items: List<MoviePoster>,
         val totalCount: Int,
-        val query: MovieLibraryQuery,
+        val query: LibraryQuery,
         val availableGenres: List<String> = emptyList(),
         val isRefreshing: Boolean = false,
         val isLoadingMore: Boolean = false,
@@ -83,22 +104,23 @@ sealed interface MovieLibraryState {
     ) : MovieLibraryState
     data class EmptyLibrary(
         val scope: HomeScope,
-        val query: MovieLibraryQuery = MovieLibraryQuery(),
+        val query: LibraryQuery = LibraryQuery(),
         val availableGenres: List<String> = emptyList(),
     ) : MovieLibraryState
     data class EmptyFiltered(
         val scope: HomeScope,
-        val query: MovieLibraryQuery,
+        val query: LibraryQuery,
         val availableGenres: List<String> = emptyList(),
     ) : MovieLibraryState
     data class Failure(
         val message: String,
         val scope: HomeScope? = null,
-        val query: MovieLibraryQuery = MovieLibraryQuery(),
+        val query: LibraryQuery = LibraryQuery(),
     ) : MovieLibraryState
 }
 
-data class MovieTrackAvailability(val audioTracks: Int = 0, val subtitleTracks: Int = 0)
+data class MediaTrackAvailability(val audioTracks: Int = 0, val subtitleTracks: Int = 0)
+typealias MovieTrackAvailability = MediaTrackAvailability
 
 data class MovieDetails(
     val identity: MediaIdentity,
@@ -128,11 +150,95 @@ sealed interface MovieDetailsState {
     data class Failure(val message: String) : MovieDetailsState
 }
 
-sealed interface MoviePlaybackRequest {
-    val identity: MediaIdentity
-    data class Resume(override val identity: MediaIdentity, val positionTicks: Long) : MoviePlaybackRequest
-    data class PlayFromBeginning(override val identity: MediaIdentity) : MoviePlaybackRequest
+typealias SeriesPoster = MediaPoster
+
+sealed interface SeriesLibraryState {
+    data object Loading : SeriesLibraryState
+    data class Ready(
+        val scope: HomeScope,
+        val items: List<SeriesPoster>,
+        val totalCount: Int,
+        val query: LibraryQuery,
+        val availableGenres: List<String> = emptyList(),
+        val isRefreshing: Boolean = false,
+        val isLoadingMore: Boolean = false,
+        val pageFailureMessage: String? = null,
+        val refreshFailureMessage: String? = null,
+    ) : SeriesLibraryState
+    data class EmptyLibrary(val scope: HomeScope, val query: LibraryQuery = LibraryQuery(), val availableGenres: List<String> = emptyList()) : SeriesLibraryState
+    data class EmptyFiltered(val scope: HomeScope, val query: LibraryQuery, val availableGenres: List<String> = emptyList()) : SeriesLibraryState
+    data class Failure(val message: String, val scope: HomeScope? = null, val query: LibraryQuery = LibraryQuery()) : SeriesLibraryState
 }
+
+data class SeasonSummary(val identity: MediaIdentity, val name: String, val indexNumber: Int? = null)
+
+data class SeriesDetails(
+    val identity: MediaIdentity,
+    val title: String,
+    val year: Int? = null,
+    val overview: String? = null,
+    val genres: List<String> = emptyList(),
+    val artwork: ArtworkReference? = null,
+    val backdrop: ArtworkReference? = null,
+    val seasons: List<SeasonSummary> = emptyList(),
+)
+
+sealed interface SeriesDetailsState {
+    data class Ready(val details: SeriesDetails) : SeriesDetailsState
+    data class Failure(val message: String) : SeriesDetailsState
+}
+
+data class EpisodeSummary(
+    val identity: MediaIdentity,
+    val title: String,
+    val seriesName: String? = null,
+    val seasonNumber: Int? = null,
+    val episodeNumber: Int? = null,
+    val overview: String? = null,
+    val runtimeTicks: Long? = null,
+    val playbackPositionTicks: Long = 0,
+    val played: Boolean = false,
+    val artwork: ArtworkReference? = null,
+) {
+    val hasMeaningfulResume: Boolean
+        get() = hasMeaningfulResume(playbackPositionTicks, runtimeTicks, played)
+}
+
+sealed interface SeasonEpisodesState {
+    data class Ready(val seriesIdentity: MediaIdentity, val season: SeasonSummary, val episodes: List<EpisodeSummary>) : SeasonEpisodesState
+    data class Empty(val seriesIdentity: MediaIdentity, val season: SeasonSummary) : SeasonEpisodesState
+    data class Failure(val message: String) : SeasonEpisodesState
+}
+
+data class EpisodeDetails(
+    val episode: EpisodeSummary,
+    val communityRating: Double? = null,
+    val criticRating: Double? = null,
+    val genres: List<String> = emptyList(),
+    val tracks: MediaTrackAvailability = MediaTrackAvailability(),
+    val backdrop: ArtworkReference? = null,
+    val scope: HomeScope,
+)
+
+sealed interface EpisodeDetailsState {
+    data class Ready(val details: EpisodeDetails) : EpisodeDetailsState
+    data class Failure(val message: String) : EpisodeDetailsState
+}
+
+sealed interface MediaPlaybackRequest {
+    val identity: MediaIdentity
+    val userId: String?
+    data class Resume(
+        override val identity: MediaIdentity,
+        val positionTicks: Long,
+        override val userId: String? = null,
+    ) : MediaPlaybackRequest
+    data class PlayFromBeginning(
+        override val identity: MediaIdentity,
+        override val userId: String? = null,
+    ) : MediaPlaybackRequest
+}
+typealias MoviePlaybackRequest = MediaPlaybackRequest
 
 enum class ArtworkKind(val routeName: String) { Primary("Primary"), Backdrop("Backdrop") }
 
@@ -191,6 +297,10 @@ private object EmptyHomeFeed {
 
 private object EmptyMovieLibrary {
     val flow: StateFlow<MovieLibraryState> = kotlinx.coroutines.flow.MutableStateFlow(MovieLibraryState.Loading)
+}
+
+private object EmptySeriesLibrary {
+    val flow: StateFlow<SeriesLibraryState> = kotlinx.coroutines.flow.MutableStateFlow(SeriesLibraryState.Loading)
 }
 
 data class AppBoundaries(

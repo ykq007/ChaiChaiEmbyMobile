@@ -20,6 +20,7 @@ import dev.chaichai.mobile.platform.server.KeystoreSessionVault
 import dev.chaichai.mobile.platform.server.ServerSetupCoordinator
 import dev.chaichai.mobile.platform.server.createRoomHomeCache
 import dev.chaichai.mobile.platform.server.createRoomMovieCache
+import dev.chaichai.mobile.platform.server.createRoomSeriesCache
 import java.util.UUID
 import java.time.Instant
 import dagger.Module
@@ -45,6 +46,7 @@ object ProductionBoundariesModule {
             vault,
             homeCache = createRoomHomeCache(context),
             movieCache = createRoomMovieCache(context),
+            seriesCache = createRoomSeriesCache(context),
             deviceId = deviceId,
         )
         val serverSetup = ServerSetupCoordinator(
