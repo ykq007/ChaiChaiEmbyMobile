@@ -55,8 +55,10 @@ class DeterministicHarnessTest {
             "Offline • Connected • Playback active • Checked 00:00 UTC",
             substring = true,
         ).assertIsDisplayed()
-        composeRule.onNodeWithText("Settings").performClick()
-        composeRule.onNode(hasText("Settings") and isHeading()).assertIsDisplayed()
+        listOf("Libraries", "Search", "Settings").forEach { destination ->
+            composeRule.onNodeWithText(destination).performClick()
+            composeRule.onNode(hasText(destination) and isHeading()).assertIsDisplayed()
+        }
 
         composeRule.runOnIdle {
             separatingHinge = SeparatingHinge(

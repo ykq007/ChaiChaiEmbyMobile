@@ -1,11 +1,8 @@
 package dev.chaichai.mobile
 
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.isHeading
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performClick
 import org.junit.Rule
 import org.junit.Test
 
@@ -14,12 +11,8 @@ class TopLevelNavigationTest {
     val composeRule = createAndroidComposeRule<MainActivity>()
 
     @Test
-    fun user_can_reach_every_top_level_destination_in_order() {
-        composeRule.onNode(hasText("Home") and isHeading()).assertIsDisplayed()
-
-        listOf("Libraries", "Search", "Settings").forEach { destination ->
-            composeRule.onNodeWithText(destination).performClick()
-            composeRule.onNode(hasText(destination) and isHeading()).assertIsDisplayed()
-        }
+    fun first_launch_requires_server_setup_before_top_level_navigation() {
+        composeRule.onNodeWithText("Connect to Emby").assertIsDisplayed()
+        composeRule.onNodeWithText("Server Address").assertIsDisplayed()
     }
 }

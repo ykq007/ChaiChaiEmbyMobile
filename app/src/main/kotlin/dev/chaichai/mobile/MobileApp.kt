@@ -32,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
@@ -47,15 +48,19 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.chaichai.mobile.core.contracts.AppBoundaries
 import dev.chaichai.mobile.core.contracts.GatewayConnectionState
+import dev.chaichai.mobile.core.contracts.GatewayAuthenticationStatus
 import dev.chaichai.mobile.design.system.LocalReducedMotion
 import dev.chaichai.mobile.feature.home.HomeScreen
 import dev.chaichai.mobile.feature.libraries.LibrariesScreen
 import dev.chaichai.mobile.feature.search.SearchScreen
 import dev.chaichai.mobile.feature.settings.SettingsScreen
+import dev.chaichai.mobile.feature.server.setup.ServerSetupScreen
+import dev.chaichai.mobile.core.contracts.ServerSetupState
 import dev.chaichai.mobile.platform.adaptive.AdaptiveNavigationPolicy
 import dev.chaichai.mobile.platform.adaptive.NavigationPlacement
 import dev.chaichai.mobile.platform.adaptive.WindowCharacteristics
 import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 
 enum class HingeOrientation { Vertical, Horizontal }
 
@@ -80,6 +85,16 @@ fun MobileApp(
     separatingHinge: SeparatingHinge?,
     modifier: Modifier = Modifier,
 ) {
+    val serverSetup = boundaries.serverSetup
+    val setupState = serverSetup?.state?.collectAsState()?.value
+    if (serverSetup != null && setupState !is ServerSetupState.Authenticated) {
+        ServerSetupScreen(serverSetup, modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing))
+        return
+    }
+    val restoredDestination = (setupState as? ServerSetupState.Authenticated)
+        ?.returnDestination
+        ?.takeIf { route -> TopLevelDestination.entries.any { it.route == route } }
+        ?: TopLevelDestination.Home.route
     BoxWithConstraints(modifier.fillMaxSize()) {
         val navController = rememberNavController()
         val density = LocalDensity.current
@@ -94,7 +109,7 @@ fun MobileApp(
                         .fillMaxHeight()
                         .align(if (useLeft) AbsoluteAlignment.CenterLeft else AbsoluteAlignment.CenterRight),
                 ) {
-                    AdaptiveShell(boundaries, navController, isHingeSeparated = true)
+                    AdaptiveShell(boundaries, navController, isHingeSeparated = true, restoredDestination = restoredDestination)
                 }
             }
 
@@ -108,11 +123,11 @@ fun MobileApp(
                         .height(if (useTop) topHeight else bottomHeight)
                         .align(if (useTop) Alignment.TopCenter else Alignment.BottomCenter),
                 ) {
-                    AdaptiveShell(boundaries, navController, isHingeSeparated = true)
+                    AdaptiveShell(boundaries, navController, isHingeSeparated = true, restoredDestination = restoredDestination)
                 }
             }
 
-            null -> AdaptiveShell(boundaries, navController, isHingeSeparated = false)
+            null -> AdaptiveShell(boundaries, navController, isHingeSeparated = false, restoredDestination = restoredDestination)
         }
     }
 }
@@ -122,6 +137,7 @@ private fun AdaptiveShell(
     boundaries: AppBoundaries,
     navController: NavHostController,
     isHingeSeparated: Boolean,
+    restoredDestination: String,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -155,17 +171,22 @@ private fun AdaptiveShell(
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentDestination = backStackEntry?.destination
         val reducedMotion = LocalReducedMotion.current
+        val scope = rememberCoroutineScope()
         val navigate: (TopLevelDestination) -> Unit = { destination ->
-            navController.navigate(destination.route) {
-                popUpTo(navController.graph.startDestinationId) { saveState = true }
-                launchSingleTop = true
-                restoreState = true
+            scope.launch {
+                if (boundaries.gateway.verifyAuthentication(destination.route) != GatewayAuthenticationStatus.Expired) {
+                    navController.navigate(destination.route) {
+                        popUpTo(navController.graph.startDestinationId) { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                }
             }
         }
         val content: @Composable (Modifier) -> Unit = { contentModifier ->
             NavHost(
                 navController = navController,
-                startDestination = TopLevelDestination.Home.route,
+                startDestination = restoredDestination,
                 modifier = contentModifier,
                 enterTransition = { if (reducedMotion) EnterTransition.None else fadeIn() },
                 exitTransition = { if (reducedMotion) ExitTransition.None else fadeOut() },
