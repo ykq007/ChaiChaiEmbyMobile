@@ -5,6 +5,8 @@ data class WindowCharacteristics(
     val usableHeightDp: Int,
     val hasSeparatingVerticalHinge: Boolean = false,
     val verticalPaneWidthsDp: List<Int> = emptyList(),
+    val hasSeparatingHorizontalHinge: Boolean = false,
+    val horizontalPaneHeightsDp: List<Int> = emptyList(),
 )
 
 enum class NavigationPlacement { Bottom, Rail }
@@ -15,6 +17,21 @@ data class AdaptiveLayout(
     val isHeightConstrained: Boolean,
     val contentWidthClass: ContentWidthClass,
     val supportsListDetail: Boolean,
+)
+
+enum class PlaybackTracksPresentation { ModalBottom, AnchoredSide }
+
+sealed interface PlaybackSafePane {
+    data object WholeWindow : PlaybackSafePane
+    data class Left(val widthDp: Int) : PlaybackSafePane
+    data class Right(val widthDp: Int) : PlaybackSafePane
+    data class Top(val heightDp: Int) : PlaybackSafePane
+    data class Bottom(val heightDp: Int) : PlaybackSafePane
+}
+
+data class PlaybackTracksLayout(
+    val presentation: PlaybackTracksPresentation,
+    val safePane: PlaybackSafePane,
 )
 
 object AdaptiveNavigationPolicy {
@@ -46,4 +63,26 @@ object AdaptiveNavigationPolicy {
             else -> ContentWidthClass.Compact
         },
     )
+
+    fun playbackTracks(window: WindowCharacteristics): PlaybackTracksLayout {
+        val pane = when {
+            window.hasSeparatingVerticalHinge && window.verticalPaneWidthsDp.size == 2 -> {
+                val (left, right) = window.verticalPaneWidthsDp
+                if (left >= right) PlaybackSafePane.Left(left) else PlaybackSafePane.Right(right)
+            }
+            window.hasSeparatingHorizontalHinge && window.horizontalPaneHeightsDp.size == 2 -> {
+                val (top, bottom) = window.horizontalPaneHeightsDp
+                if (top >= bottom) PlaybackSafePane.Top(top) else PlaybackSafePane.Bottom(bottom)
+            }
+            else -> PlaybackSafePane.WholeWindow
+        }
+        return PlaybackTracksLayout(
+            presentation = if (pane == PlaybackSafePane.WholeWindow && window.usableWidthDp >= ExpandedMinimumWidthDp) {
+                PlaybackTracksPresentation.AnchoredSide
+            } else {
+                PlaybackTracksPresentation.ModalBottom
+            },
+            safePane = pane,
+        )
+    }
 }

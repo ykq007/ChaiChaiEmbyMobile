@@ -4,6 +4,7 @@ import dev.chaichai.mobile.core.contracts.MediaPlaybackRequest
 import dev.chaichai.mobile.core.contracts.PlaybackCoordinator
 import dev.chaichai.mobile.core.contracts.PlaybackFailureKind
 import dev.chaichai.mobile.core.contracts.PlaybackState
+import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
 import dev.chaichai.mobile.platform.server.AuthoritativePlaybackPlan
 import dev.chaichai.mobile.platform.server.PlaybackCapabilities
 import dev.chaichai.mobile.platform.server.PlaybackFailure
@@ -31,7 +32,7 @@ interface PlaybackEngine {
     val isPaused: Boolean
         get() = snapshot.isPaused
     val events: Flow<PlaybackEngineEvent> get() = emptyFlow()
-    suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long)
+    suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean = false)
     suspend fun acknowledgePlayingReported()
     suspend fun playPause()
     suspend fun seekTo(positionTicks: Long)
@@ -39,6 +40,7 @@ interface PlaybackEngine {
 }
 data class PlaybackEngineSnapshot(val positionTicks: Long, val isPaused: Boolean)
 sealed interface PlaybackEngineEvent {
+    data object Ready : PlaybackEngineEvent
     data object Completed : PlaybackEngineEvent
     data object FatalError : PlaybackEngineEvent
     data class Progress(
@@ -67,12 +69,15 @@ class PlaybackCoordinatorImpl(
     private var exiting = false
     private var terminalAfterStop: PlaybackState? = null
     private var pendingRequest: MediaPlaybackRequest? = null
+    private var trackChangeJob: Job? = null
+    private var pendingTrackTransition: PendingTrackTransition? = null
 
     private val engineEventJob = scope.launch {
             engine.events.collect { event ->
                 when (event) {
+                    PlaybackEngineEvent.Ready -> confirmTrackTransition()
                     PlaybackEngineEvent.Completed -> exit()
-                    PlaybackEngineEvent.FatalError -> failActivePlayback()
+                    PlaybackEngineEvent.FatalError -> recoverTrackTransitionOrFail()
                     is PlaybackEngineEvent.Progress -> reportServiceProgress(event)
                     is PlaybackEngineEvent.Stopped -> finishServiceStop(event)
                 }
@@ -83,9 +88,13 @@ class PlaybackCoordinatorImpl(
         engineEventJob.cancel()
         timelineJob?.cancel()
         negotiationJob?.cancel()
+        trackChangeJob?.cancel()
+        pendingTrackTransition = null
     }
 
     override fun submit(request: MediaPlaybackRequest) {
+        trackChangeJob?.cancel()
+        pendingTrackTransition = null
         if (activePlan != null) {
             pendingRequest = request
             if (!exiting) {
@@ -128,7 +137,7 @@ class PlaybackCoordinatorImpl(
                     activePlan = result.plan
                     val startTicks = (start as? PlaybackStart.Resume)?.positionTicks ?: 0L
                     try {
-                        engine.prepare(result.plan, startTicks)
+                        engine.prepare(result.plan, startTicks, startPaused = false)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
@@ -175,12 +184,55 @@ class PlaybackCoordinatorImpl(
         }
     }
 
+    override fun selectTrack(selection: PlaybackTrackSelection) {
+        val current = mutableState.value as? PlaybackState.Active ?: return
+        val previousPlan = activePlan ?: return
+        if (current.isChangingTrack) return
+        val positionTicks = engine.positionTicks.coerceIn(0, previousPlan.runtimeTicks)
+        val wasPaused = engine.isPaused
+        mutableState.value = current.copy(
+            controlsVisible = true,
+            isChangingTrack = true,
+            trackChangeError = null,
+        )
+        trackChangeJob = scope.launch {
+            gateway.report(
+                PlaybackReport(previousPlan, PlaybackReportKind.Progress, positionTicks, wasPaused),
+            )
+            val request = previousPlan.request.copy(
+                start = PlaybackStart.Resume(positionTicks),
+                trackSelection = selection,
+                sessionReference = previousPlan.sessionReference,
+            )
+            when (val result = gateway.negotiate(request, capabilities)) {
+                is PlaybackNegotiationResult.Failed -> publishTrackRollback(current, previousPlan)
+                is PlaybackNegotiationResult.Ready -> {
+                    val transition = PendingTrackTransition(
+                        current, previousPlan, result.plan, positionTicks, wasPaused, restoring = false,
+                    )
+                    pendingTrackTransition = transition
+                    activePlan = result.plan
+                    try {
+                        engine.prepare(result.plan, positionTicks, wasPaused)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        beginTrackRestore(transition)
+                        return@launch
+                    }
+                }
+            }
+        }
+    }
+
     override fun retry() {
         lastRequest?.let(::submit)
     }
 
     override fun exit() {
         negotiationJob?.cancel()
+        trackChangeJob?.cancel()
+        pendingTrackTransition = null
         val plan = activePlan
         if (plan == null) {
             val identity = lastRequest?.identity ?: return
@@ -243,6 +295,57 @@ class PlaybackCoordinatorImpl(
         }
     }
 
+    private fun recoverTrackTransitionOrFail() {
+        val transition = pendingTrackTransition
+        if (transition == null) {
+            failActivePlayback()
+            return
+        }
+        if (transition.restoring) {
+            pendingTrackTransition = null
+            failActivePlayback()
+            return
+        }
+        trackChangeJob = scope.launch { beginTrackRestore(transition) }
+    }
+
+    private suspend fun beginTrackRestore(transition: PendingTrackTransition) {
+        if (pendingTrackTransition != transition) return
+        val restoring = transition.copy(restoring = true)
+        pendingTrackTransition = restoring
+        activePlan = restoring.previousPlan
+        try {
+            engine.prepare(restoring.previousPlan, restoring.positionTicks, restoring.wasPaused)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            pendingTrackTransition = null
+            failActivePlayback()
+        }
+    }
+
+    private fun confirmTrackTransition() {
+        val transition = pendingTrackTransition ?: return
+        pendingTrackTransition = null
+        trackChangeJob = scope.launch {
+            if (transition.restoring) {
+                activePlan = transition.previousPlan
+                gateway.report(report(transition.previousPlan, PlaybackReportKind.Playing))
+                engine.acknowledgePlayingReported()
+                mutableIsPlaying.value = !engine.isPaused
+                publishTrackRollback(transition.activeState, transition.previousPlan)
+                if (scheduleTimelineUpdates) startTimelineUpdates()
+            } else {
+                activePlan = transition.replacementPlan
+                gateway.report(report(transition.replacementPlan, PlaybackReportKind.Playing))
+                engine.acknowledgePlayingReported()
+                mutableIsPlaying.value = !engine.isPaused
+                publishActive(transition.activeState.title, controlsVisible = true)
+                if (scheduleTimelineUpdates) startTimelineUpdates()
+            }
+        }
+    }
+
     private fun finishServiceStop(event: PlaybackEngineEvent.Stopped) {
         val plan = activePlan ?: return
         val terminal = terminalAfterStop ?: PlaybackState.Failed(PlaybackFailureKind.SourceUnavailable)
@@ -273,6 +376,19 @@ class PlaybackCoordinatorImpl(
             runtimeTicks = plan.runtimeTicks,
             isPaused = snapshot.isPaused,
             controlsVisible = controlsVisible,
+            audioTracks = plan.audioTracks,
+            subtitleTracks = plan.subtitleTracks,
+        )
+    }
+
+    private fun publishTrackRollback(current: PlaybackState.Active, plan: AuthoritativePlaybackPlan) {
+        if (activePlan != plan) return
+        mutableState.value = current.copy(
+            positionTicks = engine.positionTicks,
+            isPaused = engine.isPaused,
+            controlsVisible = true,
+            isChangingTrack = false,
+            trackChangeError = "That track couldn't be applied. The previous track is still playing.",
         )
     }
 
@@ -281,4 +397,13 @@ class PlaybackCoordinatorImpl(
     private companion object {
         const val TIMELINE_INTERVAL_MILLIS = 1_000L
     }
+
+    private data class PendingTrackTransition(
+        val activeState: PlaybackState.Active,
+        val previousPlan: AuthoritativePlaybackPlan,
+        val replacementPlan: AuthoritativePlaybackPlan,
+        val positionTicks: Long,
+        val wasPaused: Boolean,
+        val restoring: Boolean,
+    )
 }

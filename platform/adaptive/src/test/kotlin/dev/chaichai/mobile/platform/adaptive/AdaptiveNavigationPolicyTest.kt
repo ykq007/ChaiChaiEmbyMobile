@@ -76,4 +76,35 @@ class AdaptiveNavigationPolicyTest {
         assertEquals(false, AdaptiveNavigationPolicy.layout(narrowDetail).supportsListDetail)
         assertEquals(NavigationPlacement.Bottom, AdaptiveNavigationPolicy.layout(eligible).navigationPlacement)
     }
+
+    @Test
+    fun `playback tracks use anchored side sheet only for expanded usable width`() {
+        assertEquals(
+            PlaybackTracksLayout(PlaybackTracksPresentation.ModalBottom, PlaybackSafePane.WholeWindow),
+            AdaptiveNavigationPolicy.playbackTracks(WindowCharacteristics(839, 700)),
+        )
+        assertEquals(
+            PlaybackTracksLayout(PlaybackTracksPresentation.AnchoredSide, PlaybackSafePane.WholeWindow),
+            AdaptiveNavigationPolicy.playbackTracks(WindowCharacteristics(840, 700)),
+        )
+    }
+
+    @Test
+    fun `playback tracks choose one unobstructed pane around separating hinges`() {
+        assertEquals(
+            PlaybackTracksLayout(PlaybackTracksPresentation.ModalBottom, PlaybackSafePane.Right(420)),
+            AdaptiveNavigationPolicy.playbackTracks(
+                WindowCharacteristics(420, 700, true, listOf(380, 420)),
+            ),
+        )
+        assertEquals(
+            PlaybackTracksLayout(PlaybackTracksPresentation.ModalBottom, PlaybackSafePane.Top(390)),
+            AdaptiveNavigationPolicy.playbackTracks(
+                WindowCharacteristics(
+                    800, 390, hasSeparatingHorizontalHinge = true,
+                    horizontalPaneHeightsDp = listOf(390, 280),
+                ),
+            ),
+        )
+    }
 }

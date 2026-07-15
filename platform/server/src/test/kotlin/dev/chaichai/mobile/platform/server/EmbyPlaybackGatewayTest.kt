@@ -9,6 +9,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Test
 import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.MediaIdentity
+import dev.chaichai.mobile.core.contracts.TrackDelivery
+import dev.chaichai.mobile.core.contracts.TrackQualifier
+import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
 
 class EmbyPlaybackGatewayTest {
     @Test
@@ -75,6 +78,96 @@ class EmbyPlaybackGatewayTest {
     }
 
     @Test
+    fun `authoritative tracks expose embedded external burn in and missing stream metadata`() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(json("""{
+              "PlaySessionId":"p","MediaSources":[{
+                "Id":"source","SupportsDirectPlay":true,"DirectStreamUrl":"/emby/video",
+                "DefaultAudioStreamIndex":1,"DefaultSubtitleStreamIndex":4,
+                "MediaStreams":[
+                  {"Index":1,"Type":"Audio","Language":"eng","Codec":"aac","IsDefault":true,"Title":"Stereo"},
+                  {"Index":2,"Type":"Audio","Language":"jpn","Codec":"aac","IsCommentary":true},
+                  {"Index":4,"Type":"Subtitle","Language":"eng","Codec":"ass","DeliveryMethod":"Embed","IsHearingImpaired":true},
+                  {"Index":5,"Type":"Subtitle","Language":"spa","Codec":"srt","DeliveryMethod":"External"},
+                  {"Index":6,"Type":"Subtitle","Codec":"pgs","DeliveryMethod":"Encode"},
+                  {"Type":"Subtitle","Language":"fra","Codec":"srt"}
+                ]
+              }]
+            }"""))
+
+            val plan = (gateway(server).negotiate(beginning(), capabilities()) as PlaybackNegotiationResult.Ready).plan
+
+            assertEquals(listOf(1, 2), plan.audioTracks.map { it.index })
+            assertEquals(listOf(4, 5, 6), plan.subtitleTracks.map { it.index })
+            assertEquals(listOf(TrackDelivery.Embedded, TrackDelivery.External, TrackDelivery.BurnIn), plan.subtitleTracks.map { it.delivery })
+            assertTrue(plan.audioTracks.first().isCurrent)
+            assertTrue(plan.audioTracks.first().isDefault)
+            assertEquals(listOf(TrackQualifier.Commentary), plan.audioTracks[1].qualifiers)
+            assertEquals(listOf(TrackQualifier.HearingImpaired), plan.subtitleTracks.first().qualifiers)
+        }
+    }
+
+    @Test
+    fun `track renegotiation preserves source session position and supports subtitle off`() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(json("""{
+              "PlaySessionId":"continued-session","MediaSources":[{
+                "Id":"source","SupportsTranscoding":true,"TranscodingUrl":"/emby/master.m3u8",
+                "DefaultAudioStreamIndex":2,"MediaStreams":[
+                  {"Index":2,"Type":"Audio","Language":"jpn","Codec":"aac"},
+                  {"Index":4,"Type":"Subtitle","Language":"eng","Codec":"ass","DeliveryMethod":"Encode"}
+                ]
+              }]
+            }"""))
+            val request = beginning().copy(
+                start = PlaybackStart.Resume(1_234_000_000),
+                trackSelection = PlaybackTrackSelection.subtitleOff(audioStreamIndex = null),
+                sessionReference = PlaybackSessionReference("source", "original-session"),
+            )
+
+            val plan = (gateway(server).negotiate(request, capabilities()) as PlaybackNegotiationResult.Ready).plan
+
+            assertEquals(null, plan.subtitleStreamIndex)
+            assertEquals("continued-session", plan.playSessionId)
+            val body = server.takeRequest().body!!.utf8()
+            assertTrue(body.contains("\"StartTimeTicks\":1234000000"))
+            assertTrue(body.contains("\"MediaSourceId\":\"source\""))
+            assertTrue(body.contains("\"PlaySessionId\":\"original-session\""))
+            assertTrue(body.contains("\"SubtitleStreamIndex\":-1"))
+        }
+    }
+
+    @Test
+    fun `renegotiation exposes server fallback stream indices as authoritative`() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(json("""{
+              "PlaySessionId":"continued","MediaSources":[{
+                "Id":"source","SupportsDirectPlay":true,"DirectStreamUrl":"/emby/video",
+                "DefaultAudioStreamIndex":1,"DefaultSubtitleStreamIndex":5,
+                "MediaStreams":[
+                  {"Index":1,"Type":"Audio"},{"Index":2,"Type":"Audio"},
+                  {"Index":4,"Type":"Subtitle"},{"Index":5,"Type":"Subtitle"}
+                ]
+              }]
+            }"""))
+            val request = beginning().copy(
+                trackSelection = PlaybackTrackSelection(audioStreamIndex = 2, subtitleStreamIndex = 4),
+                sessionReference = PlaybackSessionReference("source", "original"),
+            )
+
+            val plan = (gateway(server).negotiate(request, capabilities()) as PlaybackNegotiationResult.Ready).plan
+
+            assertEquals(1, plan.audioStreamIndex)
+            assertEquals(5, plan.subtitleStreamIndex)
+            assertTrue(plan.audioTracks.single { it.index == 1 }.isCurrent)
+            assertTrue(plan.subtitleTracks.single { it.index == 5 }.isCurrent)
+        }
+    }
+
+    @Test
     fun `foreign playback authority is rejected before required headers can leak`() = runTest {
         MockWebServer().use { server ->
             server.start()
@@ -119,7 +212,7 @@ class EmbyPlaybackGatewayTest {
             repeat(3) { server.enqueue(MockResponse.Builder().code(204).build()) }
             val gateway = gateway(server)
             val plan = AuthoritativePlaybackPlan(
-                beginning(), "source", "session", PlaybackMethod.Remux,
+                beginning(), PlaybackSessionReference("source", "session"), PlaybackMethod.Remux,
                 server.url("/emby/video"), mapOf("private" to "header"), 7_200_000_000, 1, null,
             )
 

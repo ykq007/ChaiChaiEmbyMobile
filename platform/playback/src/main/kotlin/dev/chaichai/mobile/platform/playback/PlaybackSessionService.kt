@@ -69,6 +69,7 @@ class PlaybackSessionService : MediaSessionService() {
         mediaSession = MediaSession.Builder(this, player).build()
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_READY) PlaybackServiceOwner.publish(PlaybackEngineEvent.Ready)
                 if (playbackState == Player.STATE_ENDED) PlaybackServiceOwner.publish(PlaybackEngineEvent.Completed)
             }
             override fun onPlayerError(error: PlaybackException) {
@@ -103,7 +104,7 @@ class PlaybackSessionService : MediaSessionService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession = mediaSession
 
     @UnstableApi
-    internal fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long) {
+    internal fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean) {
         stoppedPublished = false
         reportControlEvents = false
         val redirectRejectingClient = playbackHttpClient()
@@ -112,9 +113,9 @@ class PlaybackSessionService : MediaSessionService() {
         val source = DefaultMediaSourceFactory(dataSourceFactory).createMediaSource(
             MediaItem.Builder().setUri(plan.url.toString()).setMediaId(plan.request.itemId).build(),
         )
+        player.playWhenReady = !startPaused
         player.setMediaSource(source, startPositionTicks / TICKS_PER_MILLISECOND)
         player.prepare()
-        player.play()
     }
 
     internal fun acknowledgePlayingReported() { reportControlEvents = true }
@@ -217,11 +218,11 @@ class Media3ServicePlaybackEngine(private val context: Context) : PlaybackEngine
     override val events: SharedFlow<PlaybackEngineEvent> = PlaybackServiceOwner.events
 
     @UnstableApi
-    override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long) {
+    override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean) {
         context.startForegroundService(Intent(context, PlaybackSessionService::class.java))
         withContext(Dispatchers.Main.immediate) {
             PlaybackServiceOwner.awaitService().apply {
-                prepare(plan, startPositionTicks)
+                prepare(plan, startPositionTicks, startPaused)
                 PlaybackServiceOwner.updateSnapshot(positionTicks(), isPaused())
             }
         }

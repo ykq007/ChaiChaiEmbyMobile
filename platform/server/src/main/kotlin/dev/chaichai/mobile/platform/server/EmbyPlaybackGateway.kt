@@ -15,6 +15,11 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.MediaIdentity
+import dev.chaichai.mobile.core.contracts.PlaybackTrack
+import dev.chaichai.mobile.core.contracts.PlaybackTrackType
+import dev.chaichai.mobile.core.contracts.TrackDelivery
+import dev.chaichai.mobile.core.contracts.TrackQualifier
+import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
 
 sealed interface PlaybackStart {
     data object Beginning : PlaybackStart
@@ -25,6 +30,8 @@ data class ScopedPlaybackRequest(
     val scope: HomeScope,
     val identity: MediaIdentity,
     val start: PlaybackStart,
+    val trackSelection: PlaybackTrackSelection? = null,
+    val sessionReference: PlaybackSessionReference? = null,
 ) {
     init { require(scope.serverId == identity.serverId) { "Playback scope and media identity must share a server" } }
     val serverId: String get() = scope.serverId
@@ -41,21 +48,35 @@ data class PlaybackCapabilities(
     val transcodeProfiles: List<TranscodeCapability>,
     val subtitleProfiles: List<SubtitleCapability> = emptyList(),
 )
+
+data class PlaybackSessionReference(
+    val mediaSourceId: String,
+    val playSessionId: String,
+) {
+    init {
+        require(mediaSourceId.isNotBlank()) { "Media source identity is required" }
+        require(playSessionId.isNotBlank()) { "Play session identity is required" }
+    }
+}
 data class SubtitleCapability(val format: String, val method: String)
 
 enum class PlaybackMethod { DirectPlay, Remux, Transcode }
 
 data class AuthoritativePlaybackPlan(
     val request: ScopedPlaybackRequest,
-    val mediaSourceId: String,
-    val playSessionId: String,
+    val sessionReference: PlaybackSessionReference,
     val method: PlaybackMethod,
     val url: HttpUrl,
     val headers: Map<String, String>,
     val runtimeTicks: Long,
     val audioStreamIndex: Int?,
     val subtitleStreamIndex: Int?,
-)
+    val audioTracks: List<PlaybackTrack> = emptyList(),
+    val subtitleTracks: List<PlaybackTrack> = emptyList(),
+) {
+    val mediaSourceId: String get() = sessionReference.mediaSourceId
+    val playSessionId: String get() = sessionReference.playSessionId
+}
 
 enum class PlaybackFailure {
     UnsupportedMedia,
@@ -116,6 +137,10 @@ class EmbyPlaybackGateway(
                 },
                 subtitleProfiles = capabilities.subtitleProfiles.map { SubtitleProfileDto(it.format, it.method) },
             ),
+            mediaSourceId = request.sessionReference?.mediaSourceId,
+            playSessionId = request.sessionReference?.playSessionId,
+            audioStreamIndex = request.trackSelection?.audioStreamIndex,
+            subtitleStreamIndex = request.trackSelection?.let { it.subtitleStreamIndex ?: SUBTITLES_OFF_INDEX },
         )
         val httpRequest = authenticatedRequest(session)
             .url(
@@ -150,14 +175,21 @@ class EmbyPlaybackGateway(
                     PlaybackNegotiationResult.Ready(
                         AuthoritativePlaybackPlan(
                             request = request,
-                            mediaSourceId = selected.source.id,
-                            playSessionId = playSessionId,
+                            sessionReference = PlaybackSessionReference(selected.source.id, playSessionId),
                             method = selected.method,
                             url = selected.url,
                             headers = selected.source.requiredHttpHeaders,
                             runtimeTicks = selected.source.runtimeTicks ?: 0,
                             audioStreamIndex = selected.source.defaultAudioStreamIndex,
                             subtitleStreamIndex = selected.source.defaultSubtitleStreamIndex,
+                            audioTracks = selected.source.tracks(
+                                PlaybackTrackType.Audio,
+                                selected.source.defaultAudioStreamIndex,
+                            ),
+                            subtitleTracks = selected.source.tracks(
+                                PlaybackTrackType.Subtitle,
+                                selected.source.defaultSubtitleStreamIndex,
+                            ),
                         ),
                     )
                 }
@@ -224,6 +256,38 @@ class EmbyPlaybackGateway(
         return Candidate(this, selection.first, resolved, selection.first.ordinal)
     }
 
+    private fun PlaybackMediaSourceDto.tracks(
+        type: PlaybackTrackType,
+        currentIndex: Int?,
+    ): List<PlaybackTrack> = mediaStreams.mapNotNull { stream ->
+        val index = stream.index ?: return@mapNotNull null
+        val streamType = when (stream.type?.lowercase()) {
+            "audio" -> PlaybackTrackType.Audio
+            "subtitle" -> PlaybackTrackType.Subtitle
+            else -> return@mapNotNull null
+        }
+        if (streamType != type) return@mapNotNull null
+        PlaybackTrack(
+            index = index,
+            type = streamType,
+            language = stream.language?.takeIf(String::isNotBlank),
+            codec = stream.codec?.takeIf(String::isNotBlank),
+            title = stream.title?.takeIf(String::isNotBlank),
+            delivery = when (stream.deliveryMethod?.lowercase()) {
+                "external" -> TrackDelivery.External
+                "encode", "hls" -> TrackDelivery.BurnIn
+                else -> TrackDelivery.Embedded
+            },
+            isDefault = stream.isDefault,
+            isCurrent = index == currentIndex,
+            qualifiers = buildList {
+                if (stream.isHearingImpaired) add(TrackQualifier.HearingImpaired)
+                if (stream.isCommentary) add(TrackQualifier.Commentary)
+                if (stream.isVisuallyImpaired) add(TrackQualifier.VisuallyImpaired)
+            },
+        )
+    }
+
     private data class Candidate(
         val source: PlaybackMediaSourceDto,
         val method: PlaybackMethod,
@@ -247,6 +311,7 @@ class EmbyPlaybackGateway(
 
     private companion object {
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        const val SUBTITLES_OFF_INDEX = -1
     }
 }
 
@@ -259,6 +324,10 @@ private data class PlaybackInfoRequestDto(
     @SerialName("EnableDirectStream") val enableDirectStream: Boolean = true,
     @SerialName("EnableTranscoding") val enableTranscoding: Boolean = true,
     @SerialName("DeviceProfile") val deviceProfile: DeviceProfileDto,
+    @SerialName("MediaSourceId") val mediaSourceId: String? = null,
+    @SerialName("PlaySessionId") val playSessionId: String? = null,
+    @SerialName("AudioStreamIndex") val audioStreamIndex: Int? = null,
+    @SerialName("SubtitleStreamIndex") val subtitleStreamIndex: Int? = null,
 )
 
 @Serializable
@@ -310,6 +379,21 @@ private data class PlaybackMediaSourceDto(
     @SerialName("RequiredHttpHeaders") val requiredHttpHeaders: Map<String, String> = emptyMap(),
     @SerialName("DefaultAudioStreamIndex") val defaultAudioStreamIndex: Int? = null,
     @SerialName("DefaultSubtitleStreamIndex") val defaultSubtitleStreamIndex: Int? = null,
+    @SerialName("MediaStreams") val mediaStreams: List<PlaybackMediaStreamDto> = emptyList(),
+)
+
+@Serializable
+private data class PlaybackMediaStreamDto(
+    @SerialName("Index") val index: Int? = null,
+    @SerialName("Type") val type: String? = null,
+    @SerialName("Language") val language: String? = null,
+    @SerialName("Codec") val codec: String? = null,
+    @SerialName("Title") val title: String? = null,
+    @SerialName("DeliveryMethod") val deliveryMethod: String? = null,
+    @SerialName("IsDefault") val isDefault: Boolean = false,
+    @SerialName("IsHearingImpaired") val isHearingImpaired: Boolean = false,
+    @SerialName("IsCommentary") val isCommentary: Boolean = false,
+    @SerialName("IsVisuallyImpaired") val isVisuallyImpaired: Boolean = false,
 )
 
 @Serializable
