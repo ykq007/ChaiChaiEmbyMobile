@@ -22,7 +22,7 @@ jobs:
       - name: Install Android 17 SDK
         run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
       - name: Build, lint, and unit test
-        run: ./gradlew verifyModuleGraph test lint assembleRelease --stacktrace
+        run: ./gradlew verifyModuleGraph dependencies test lint assembleRelease --stacktrace
 
   ui-smoke:
     runs-on: ubuntu-latest
@@ -60,7 +60,7 @@ jobs:
         with:
           scan-type: fs
           severity: HIGH,CRITICAL
-          ignore-unfixed: true
+          ignore-unfixed: false
           exit-code: '1'
       - name: Scan repository history for secrets
         uses: gitleaks/gitleaks-action@v2

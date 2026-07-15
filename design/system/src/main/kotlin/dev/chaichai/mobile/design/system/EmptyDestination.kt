@@ -1,9 +1,11 @@
 package dev.chaichai.mobile.design.system
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -15,19 +17,24 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 fun EmptyDestination(title: String, description: String, modifier: Modifier = Modifier) {
-    Column(
+    Box(
         modifier = modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
+        contentAlignment = Alignment.CenterStart,
     ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.semantics { heading() },
-        )
-        Text(
-            text = description,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Column(
+            modifier = Modifier.widthIn(max = 640.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.headlineMedium,
+                modifier = Modifier.semantics { heading() },
+            )
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }

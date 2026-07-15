@@ -4,6 +4,8 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isHeading
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import dev.chaichai.mobile.core.contracts.AppBoundaries
 import dev.chaichai.mobile.core.contracts.AppClock
 import dev.chaichai.mobile.core.contracts.ConnectivityMonitor
@@ -22,25 +24,34 @@ class DeterministicHarnessTest {
 
     @Test
     fun controllable_boundaries_drive_the_real_app_shell() {
+        val gatewayState = MutableStateFlow(GatewayConnectionState.Connected)
+        val playbackState = MutableStateFlow(true)
+        val connectivityState = MutableStateFlow(false)
         val boundaries = AppBoundaries(
             gateway = object : EmbyGateway {
-                override val connectionState = MutableStateFlow(GatewayConnectionState.Connected)
+                override val connectionState = gatewayState
             },
             playback = object : PlaybackCoordinator {
-                override val isPlaying = MutableStateFlow(false)
+                override val isPlaying = playbackState
             },
             clock = AppClock { Instant.parse("2026-01-01T00:00:00Z") },
             connectivity = object : ConnectivityMonitor {
-                override val isOnline = MutableStateFlow(true)
+                override val isOnline = connectivityState
             },
         )
 
         composeRule.setContent {
             ChaiChaiTheme(reducedMotion = true) {
-                MobileApp(boundaries, hasSeparatingVerticalHinge = false)
+                MobileApp(boundaries, verticalHinge = null)
             }
         }
 
         composeRule.onNode(hasText("Home") and isHeading()).assertIsDisplayed()
+        composeRule.onNodeWithText(
+            "Offline • Connected • Playback active • Checked 00:00 UTC",
+            substring = true,
+        ).assertIsDisplayed()
+        composeRule.onNodeWithText("Settings").performClick()
+        composeRule.onNode(hasText("Settings") and isHeading()).assertIsDisplayed()
     }
 }

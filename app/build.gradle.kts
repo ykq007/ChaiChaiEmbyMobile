@@ -1,6 +1,8 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.google.devtools.ksp")
+    id("com.google.dagger.hilt.android")
 }
 
 android {
@@ -50,6 +52,8 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.9.6")
     implementation("androidx.window:window:1.5.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+    implementation("com.google.dagger:hilt-android:2.59.2")
+    ksp("com.google.dagger:hilt-compiler:2.59.2")
 
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")

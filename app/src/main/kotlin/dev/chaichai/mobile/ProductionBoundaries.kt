@@ -11,9 +11,19 @@ import dev.chaichai.mobile.core.contracts.GatewayConnectionState
 import dev.chaichai.mobile.core.contracts.PlaybackCoordinator
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.time.Instant
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.hilt.components.SingletonComponent
+import javax.inject.Singleton
 
-object ProductionBoundaries {
-    fun create(context: Context): AppBoundaries {
+@Module
+@InstallIn(SingletonComponent::class)
+object ProductionBoundariesModule {
+    @Provides
+    @Singleton
+    fun provideAppBoundaries(@ApplicationContext context: Context): AppBoundaries {
         val connectivityManager = context.getSystemService(ConnectivityManager::class.java)
         val activeNetwork = connectivityManager.activeNetwork
         val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
