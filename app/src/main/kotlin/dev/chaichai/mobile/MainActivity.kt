@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
                     },
                     onTogglePlaybackOrientation = ::togglePlaybackOrientation,
                     onTogglePlaybackFullscreen = ::togglePlaybackFullscreen,
+                    onPlaybackEnded = ::restorePlaybackWindow,
                 )
             }
         }
@@ -70,5 +71,11 @@ class MainActivity : ComponentActivity() {
             if (playbackFullscreen) hide(WindowInsetsCompat.Type.systemBars())
             else show(WindowInsetsCompat.Type.systemBars())
         }
+    }
+
+    private fun restorePlaybackWindow() {
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        playbackFullscreen = false
+        WindowCompat.getInsetsController(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
     }
 }

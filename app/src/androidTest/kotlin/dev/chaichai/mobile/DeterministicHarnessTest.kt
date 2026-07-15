@@ -35,7 +35,7 @@ class DeterministicHarnessTest {
             gateway = object : EmbyGateway {
                 override val connectionState = gatewayState
             },
-            playback = object : PlaybackCoordinator {
+            playback = object : NoOpPlaybackCoordinator() {
                 override val isPlaying = playbackState
             },
             clock = AppClock { Instant.parse("2026-01-01T00:00:00Z") },

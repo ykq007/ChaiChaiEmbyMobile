@@ -7,6 +7,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
 import org.junit.Test
+import dev.chaichai.mobile.core.contracts.HomeScope
+import dev.chaichai.mobile.core.contracts.MediaIdentity
 
 class EmbyPlaybackGatewayTest {
     @Test
@@ -24,7 +26,7 @@ class EmbyPlaybackGatewayTest {
             val gateway = gateway(server)
 
             val result = gateway.negotiate(
-                ScopedPlaybackRequest("server", "user", "movie", PlaybackStart.Resume(900_000_000)),
+                ScopedPlaybackRequest(HomeScope("server", "user"), MediaIdentity("server", "movie"), PlaybackStart.Resume(900_000_000)),
                 PlaybackCapabilities(
                     maxStreamingBitrate = 18_000_000,
                     maxAudioChannels = 6,
@@ -69,6 +71,23 @@ class EmbyPlaybackGatewayTest {
             assertEquals("remux", plan.mediaSourceId)
             assertEquals(PlaybackMethod.Remux, plan.method)
             assertEquals("/emby/Videos/m/stream.mp4", plan.url.encodedPath)
+        }
+    }
+
+    @Test
+    fun `foreign playback authority is rejected before required headers can leak`() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(json("""{"PlaySessionId":"p","MediaSources":[{
+              "Id":"foreign","SupportsDirectPlay":true,
+              "DirectStreamUrl":"https://attacker.example/video",
+              "RequiredHttpHeaders":{"X-Emby-Token":"must-not-leak"}
+            }]}"""))
+
+            val result = gateway(server).negotiate(beginning(), capabilities())
+
+            assertEquals(PlaybackFailure.SourceUnavailable, failed(result))
+            assertEquals(1, server.requestCount)
         }
     }
 
@@ -131,7 +150,9 @@ class EmbyPlaybackGatewayTest {
     )
 
     private fun valid(value: String) = (ServerAddress.parse(value) as AddressValidation.Valid).address
-    private fun beginning() = ScopedPlaybackRequest("server", "user", "movie", PlaybackStart.Beginning)
+    private fun beginning() = ScopedPlaybackRequest(
+        HomeScope("server", "user"), MediaIdentity("server", "movie"), PlaybackStart.Beginning,
+    )
     private fun capabilities() = PlaybackCapabilities(
         18_000_000, 6, listOf(DirectPlayCapability("mp4", "h264", "aac")),
         listOf(TranscodeCapability("hls", "h264", "aac")),

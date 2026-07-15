@@ -68,11 +68,11 @@ class MovieLibraryTest {
         composeRule.onNodeWithText("1 subtitle track").assertIsDisplayed()
         composeRule.onNodeWithText("Resume from 2:00").performClick()
         assertEquals(
-            MediaPlaybackRequest.Resume(MediaIdentity("server", "arrival"), 1_200_000_000, "user", "Arrival"),
+            MediaPlaybackRequest.Resume(MediaIdentity("server", "arrival"), 1_200_000_000, HomeScope("server", "user"), "Arrival"),
             playback.submitted,
         )
         composeRule.onNodeWithText("Play from beginning").performClick()
-        assertEquals(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "arrival"), "user", "Arrival"), playback.submitted)
+        assertEquals(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "arrival"), HomeScope("server", "user"), "Arrival"), playback.submitted)
     }
 
     @Test
@@ -499,7 +499,7 @@ class MovieLibraryTest {
             MovieDetailsState.Ready(movieDetails.copy(identity = identity))
     }
 
-    private class FakePlayback : PlaybackCoordinator {
+    private class FakePlayback : NoOpPlaybackCoordinator() {
         override val isPlaying = MutableStateFlow(false)
         var submitted: MediaPlaybackRequest? = null
         override fun submit(request: MediaPlaybackRequest) { submitted = request }

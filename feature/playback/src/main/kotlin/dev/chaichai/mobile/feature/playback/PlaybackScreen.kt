@@ -32,9 +32,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -49,8 +50,13 @@ fun PlaybackHost(
     modifier: Modifier = Modifier,
     onToggleOrientation: () -> Unit = {},
     onToggleFullscreen: () -> Unit = {},
+    onPlaybackEnded: () -> Unit = {},
 ) {
     val state by coordinator.state.collectAsState()
+    LaunchedEffect(state) {
+        if (state is PlaybackState.Exited || state is PlaybackState.Failed) onPlaybackEnded()
+    }
+    DisposableEffect(Unit) { onDispose(onPlaybackEnded) }
     BackHandler(enabled = state !is PlaybackState.Idle && state !is PlaybackState.Exited) { coordinator.exit() }
     when (val snapshot = state) {
         PlaybackState.Idle, is PlaybackState.Exited -> Unit
@@ -62,11 +68,11 @@ fun PlaybackHost(
 
 @Composable
 private fun PlaybackLoading(title: String, onBack: () -> Unit, modifier: Modifier) {
-    Box(modifier.fillMaxSize().background(Color.Black).windowInsetsPadding(WindowInsets.safeDrawing)) {
+    Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing)) {
         BackButton(onBack, Modifier.align(Alignment.TopStart))
         Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
             CircularProgressIndicator()
-            Text(if (title.isBlank()) "Preparing playback" else "Preparing $title", color = Color.White)
+            Text(if (title.isBlank()) "Preparing playback" else "Preparing $title", color = MaterialTheme.colorScheme.onSurface)
         }
     }
 }
@@ -92,12 +98,12 @@ private fun PlaybackControls(
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 BackButton(coordinator::exit)
-                Text(state.title.ifBlank { "Now playing" }, color = Color.White, modifier = Modifier.weight(1f))
+                Text(state.title.ifBlank { "Now playing" }, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                 IconButton(onClick = onToggleOrientation, modifier = Modifier.heightIn(min = 48.dp)) {
-                    Icon(Icons.Default.ScreenRotation, "Change orientation", tint = Color.White)
+                    Icon(Icons.Default.ScreenRotation, "Change orientation", tint = MaterialTheme.colorScheme.onSurface)
                 }
                 IconButton(onClick = onToggleFullscreen, modifier = Modifier.heightIn(min = 48.dp)) {
-                    Icon(Icons.Default.Fullscreen, "Fullscreen", tint = Color.White)
+                    Icon(Icons.Default.Fullscreen, "Fullscreen", tint = MaterialTheme.colorScheme.onSurface)
                 }
             }
             Row(
@@ -105,13 +111,13 @@ private fun PlaybackControls(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton({ coordinator.seekBy(-10 * TICKS_PER_SECOND) }, Modifier.heightIn(min = 64.dp)) {
-                    Icon(Icons.Default.SkipPrevious, "Rewind 10 seconds", tint = Color.White)
+                    Icon(Icons.Default.SkipPrevious, "Rewind 10 seconds", tint = MaterialTheme.colorScheme.onSurface)
                 }
                 IconButton(coordinator::playPause, Modifier.heightIn(min = 64.dp)) {
-                    Icon(if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, if (state.isPaused) "Play" else "Pause", tint = Color.White)
+                    Icon(if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, if (state.isPaused) "Play" else "Pause", tint = MaterialTheme.colorScheme.onSurface)
                 }
                 IconButton({ coordinator.seekBy(30 * TICKS_PER_SECOND) }, Modifier.heightIn(min = 64.dp)) {
-                    Icon(Icons.Default.SkipNext, "Forward 30 seconds", tint = Color.White)
+                    Icon(Icons.Default.SkipNext, "Forward 30 seconds", tint = MaterialTheme.colorScheme.onSurface)
                 }
             }
             Column {
@@ -124,8 +130,8 @@ private fun PlaybackControls(
                     },
                 )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(formatTicks(state.positionTicks), color = Color.White)
-                    Text("−${formatTicks((state.runtimeTicks - state.positionTicks).coerceAtLeast(0))}", color = Color.White)
+                    Text(formatTicks(state.positionTicks), color = MaterialTheme.colorScheme.onSurface)
+                    Text("−${formatTicks((state.runtimeTicks - state.positionTicks).coerceAtLeast(0))}", color = MaterialTheme.colorScheme.onSurface)
                 }
             }
         }
@@ -142,12 +148,12 @@ private fun PlaybackFailure(state: PlaybackState.Failed, coordinator: PlaybackCo
         dev.chaichai.mobile.core.contracts.PlaybackFailureKind.Network -> "Network unavailable" to "Check the connection and try again."
     }
     Column(
-        modifier.fillMaxSize().background(Color.Black).windowInsetsPadding(WindowInsets.safeDrawing).padding(24.dp),
+        modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing).padding(24.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(title, color = Color.White, style = MaterialTheme.typography.headlineMedium)
-        Text(guidance, color = Color.White, modifier = Modifier.padding(vertical = 12.dp))
+        Text(title, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.headlineMedium)
+        Text(guidance, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(vertical = 12.dp))
         Button(onClick = if (state.reason.canRetry) coordinator::retry else coordinator::exit) {
             Text(if (state.reason.canRetry) "Retry" else "Back")
         }
@@ -157,7 +163,7 @@ private fun PlaybackFailure(state: PlaybackState.Failed, coordinator: PlaybackCo
 @Composable
 private fun BackButton(onBack: () -> Unit, modifier: Modifier = Modifier) {
     IconButton(onClick = onBack, modifier = modifier.heightIn(min = 48.dp)) {
-        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to details", tint = Color.White)
+        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to details", tint = MaterialTheme.colorScheme.onSurface)
     }
 }
 

@@ -1,6 +1,7 @@
 package dev.chaichai.mobile.platform.playback
 
 import dev.chaichai.mobile.core.contracts.MediaIdentity
+import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.MediaPlaybackRequest
 import dev.chaichai.mobile.core.contracts.PlaybackFailureKind
 import dev.chaichai.mobile.core.contracts.PlaybackState
@@ -34,7 +35,7 @@ class PlaybackCoordinatorImplTest {
         val engine = FakeEngine()
         val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
 
-        coordinator.submit(MediaPlaybackRequest.Resume(MediaIdentity("server", "movie"), 900_000_000, "user", "Arrival"))
+        coordinator.submit(MediaPlaybackRequest.Resume(MediaIdentity("server", "movie"), 900_000_000, HomeScope("server", "user"), "Arrival"))
         advanceUntilIdle()
         coordinator.seekBy(300_000_000)
         advanceUntilIdle()
@@ -56,7 +57,7 @@ class PlaybackCoordinatorImplTest {
     @Test
     fun `pause and timeline seek preserve title and expose truthful player state`() = runTest {
         val coordinator = PlaybackCoordinatorImpl(this, FakeGateway(), FakeEngine(), capabilities(), false)
-        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), "user", "Arrival"))
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user"), "Arrival"))
         advanceUntilIdle()
 
         coordinator.playPause()
@@ -76,7 +77,7 @@ class PlaybackCoordinatorImplTest {
         PlaybackFailure.entries.forEach { failure ->
             val gateway = FakeGateway(PlaybackNegotiationResult.Failed(failure))
             val coordinator = PlaybackCoordinatorImpl(this, gateway, FakeEngine(), capabilities(), false)
-            coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), "user"))
+            coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
             advanceUntilIdle()
             assertEquals(failure.name, (coordinator.state.value as PlaybackState.Failed).reason.name)
             assertEquals(
@@ -92,7 +93,7 @@ class PlaybackCoordinatorImplTest {
         val gateway = FakeGateway()
         val engine = FakeEngine()
         val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), true)
-        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), "user"))
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
         runCurrent()
 
         advanceTimeBy(10_000)
@@ -103,6 +104,37 @@ class PlaybackCoordinatorImplTest {
         runCurrent()
         assertEquals(1, gateway.reports.count { it.kind == PlaybackReportKind.Stopped })
         assertEquals(PlaybackFailureKind.SourceUnavailable, (coordinator.state.value as PlaybackState.Failed).reason)
+        coordinator.close()
+    }
+
+    @Test
+    fun `timeline republishes the service position while playback is active`() = runTest {
+        val engine = FakeEngine()
+        val coordinator = PlaybackCoordinatorImpl(this, FakeGateway(), engine, capabilities(), false, true)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
+            MediaIdentity("server", "movie"), HomeScope("server", "user"), "Arrival",
+        ))
+        runCurrent()
+        engine.positionTicks = 120_000_000
+
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertEquals(120_000_000, (coordinator.state.value as PlaybackState.Active).positionTicks)
+        coordinator.close()
+    }
+
+    @Test
+    fun `mismatched request scope is rejected before negotiation`() = runTest {
+        val gateway = FakeGateway()
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, FakeEngine(), capabilities(), false)
+
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
+            MediaIdentity("server-a", "movie"), HomeScope("server-b", "user"),
+        ))
+
+        assertEquals(PlaybackFailureKind.SourceUnavailable, (coordinator.state.value as PlaybackState.Failed).reason)
+        assertEquals(null, gateway.request)
         coordinator.close()
     }
 
@@ -134,9 +166,9 @@ class PlaybackCoordinatorImplTest {
         override var positionTicks = 0L
         override var isPaused = false
         override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long) { positionTicks = startPositionTicks }
-        override fun playPause() { isPaused = !isPaused }
-        override fun seekTo(positionTicks: Long) { this.positionTicks = positionTicks }
-        override fun stop() = Unit
+        override suspend fun playPause() { isPaused = !isPaused }
+        override suspend fun seekTo(positionTicks: Long) { this.positionTicks = positionTicks }
+        override suspend fun stop() = Unit
     }
 }
 

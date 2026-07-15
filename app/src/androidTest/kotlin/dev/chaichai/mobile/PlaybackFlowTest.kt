@@ -61,7 +61,25 @@ class PlaybackFlowTest {
         assertEquals(1, playback.exitCount)
     }
 
-    private class FakePlayback : PlaybackCoordinator {
+    @Test
+    fun playback_end_restores_activity_window_state() {
+        val playback = FakePlayback()
+        var restoreCount = 0
+        compose.setContent {
+            ChaiChaiTheme(reducedMotion = false) {
+                PlaybackHost(playback, onPlaybackEnded = { restoreCount++ })
+            }
+        }
+
+        compose.runOnIdle {
+            playback.mutableState.value = PlaybackState.Exited(MediaIdentity("server", "movie"))
+        }
+        compose.waitForIdle()
+
+        assertEquals(1, restoreCount)
+    }
+
+    private class FakePlayback : NoOpPlaybackCoordinator() {
         val mutableState = MutableStateFlow<PlaybackState>(
             PlaybackState.Active(MediaIdentity("server", "movie"), "Arrival", 600_000_000, 7_200_000_000, false),
         )

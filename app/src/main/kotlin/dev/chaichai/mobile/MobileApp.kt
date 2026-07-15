@@ -163,6 +163,7 @@ fun MobileApp(
     modifier: Modifier = Modifier,
     onTogglePlaybackOrientation: () -> Unit = {},
     onTogglePlaybackFullscreen: () -> Unit = {},
+    onPlaybackEnded: () -> Unit = {},
 ) {
     val serverSetup = boundaries.serverSetup
     val setupState = serverSetup?.state?.collectAsState()?.value
@@ -301,6 +302,7 @@ fun MobileApp(
         Modifier.fillMaxSize(),
         onTogglePlaybackOrientation,
         onTogglePlaybackFullscreen,
+        onPlaybackEnded,
     )
     }
 }

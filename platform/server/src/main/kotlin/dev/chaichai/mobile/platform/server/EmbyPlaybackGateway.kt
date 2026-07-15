@@ -13,6 +13,8 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import dev.chaichai.mobile.core.contracts.HomeScope
+import dev.chaichai.mobile.core.contracts.MediaIdentity
 
 sealed interface PlaybackStart {
     data object Beginning : PlaybackStart
@@ -20,11 +22,15 @@ sealed interface PlaybackStart {
 }
 
 data class ScopedPlaybackRequest(
-    val serverId: String,
-    val userId: String,
-    val itemId: String,
+    val scope: HomeScope,
+    val identity: MediaIdentity,
     val start: PlaybackStart,
-)
+) {
+    init { require(scope.serverId == identity.serverId) { "Playback scope and media identity must share a server" } }
+    val serverId: String get() = scope.serverId
+    val userId: String get() = scope.userId
+    val itemId: String get() = identity.itemId
+}
 
 data class DirectPlayCapability(val container: String, val videoCodec: String, val audioCodec: String)
 data class TranscodeCapability(val container: String, val videoCodec: String, val audioCodec: String)
@@ -209,6 +215,12 @@ class EmbyPlaybackGateway(
             else -> return null
         }
         val resolved = address.apiUrl("").toString().toHttpUrl().resolve(selection.second!!) ?: return null
+        val resolvedAuthority = ServerAuthority(
+            resolved.scheme,
+            resolved.host.lowercase(),
+            resolved.port,
+        )
+        if (resolvedAuthority != address.authority) return null
         return Candidate(this, selection.first, resolved, selection.first.ordinal)
     }
 

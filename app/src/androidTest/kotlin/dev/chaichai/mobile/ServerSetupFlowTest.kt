@@ -190,7 +190,7 @@ class ServerSetupFlowTest {
         },
     ) = AppBoundaries(
         gateway = gateway,
-        playback = object : PlaybackCoordinator { override val isPlaying = MutableStateFlow(false) },
+        playback = object : NoOpPlaybackCoordinator() {},
         clock = AppClock { Instant.EPOCH },
         connectivity = object : ConnectivityMonitor { override val isOnline = MutableStateFlow(true) },
         serverSetup = setup,

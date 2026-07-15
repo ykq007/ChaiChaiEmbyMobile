@@ -239,7 +239,7 @@ class AggregatedSearchTest {
 
     private fun boundaries(gateway: EmbyGateway) = AppBoundaries(
         gateway,
-        object : PlaybackCoordinator {
+        object : NoOpPlaybackCoordinator() {
             override val isPlaying = MutableStateFlow(false)
             override fun submit(request: MediaPlaybackRequest) = Unit
         },

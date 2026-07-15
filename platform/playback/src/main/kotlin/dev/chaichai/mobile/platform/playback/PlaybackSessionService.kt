@@ -3,6 +3,8 @@ package dev.chaichai.mobile.platform.playback
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -31,6 +33,16 @@ import androidx.media3.ui.PlayerView
 class PlaybackSessionService : MediaSessionService() {
     private lateinit var player: ExoPlayer
     private lateinit var mediaSession: MediaSession
+    private val snapshotHandler = Handler(Looper.getMainLooper())
+    private val snapshotRunnable = object : Runnable {
+        override fun run() {
+            PlaybackServiceOwner.updateSnapshot(
+                player.currentPosition * TICKS_PER_MILLISECOND,
+                !player.playWhenReady,
+            )
+            snapshotHandler.postDelayed(this, SNAPSHOT_INTERVAL_MILLIS)
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -51,6 +63,7 @@ class PlaybackSessionService : MediaSessionService() {
             }
         })
         PlaybackServiceOwner.attach(this)
+        snapshotHandler.post(snapshotRunnable)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession = mediaSession
@@ -67,7 +80,7 @@ class PlaybackSessionService : MediaSessionService() {
         player.play()
     }
 
-    internal fun playPause() { if (player.isPlaying) player.pause() else player.play() }
+    internal fun playPause() { if (player.playWhenReady) player.pause() else player.play() }
     internal fun seekTo(positionTicks: Long) { player.seekTo(positionTicks / TICKS_PER_MILLISECOND) }
     internal fun positionTicks(): Long = player.currentPosition * TICKS_PER_MILLISECOND
     internal fun isPaused(): Boolean = !player.playWhenReady
@@ -75,13 +88,17 @@ class PlaybackSessionService : MediaSessionService() {
     internal fun playerForSurface(): Player = player
 
     override fun onDestroy() {
+        snapshotHandler.removeCallbacks(snapshotRunnable)
         PlaybackServiceOwner.detach(this)
         mediaSession.release()
         player.release()
         super.onDestroy()
     }
 
-    private companion object { const val TICKS_PER_MILLISECOND = 10_000L }
+    private companion object {
+        const val TICKS_PER_MILLISECOND = 10_000L
+        const val SNAPSHOT_INTERVAL_MILLIS = 250L
+    }
 }
 
 @UnstableApi
@@ -103,6 +120,8 @@ internal object PlaybackServiceOwner {
     private val current = AtomicReference<PlaybackSessionService?>()
     @Volatile private var ready = CompletableDeferred<PlaybackSessionService>()
     private val mutableEvents = MutableSharedFlow<PlaybackEngineEvent>(extraBufferCapacity = 4)
+    @Volatile private var snapshotPositionTicks = 0L
+    @Volatile private var snapshotPaused = true
     val events: SharedFlow<PlaybackEngineEvent> = mutableEvents
 
     fun attach(service: PlaybackSessionService) {
@@ -118,43 +137,46 @@ internal object PlaybackServiceOwner {
     fun serviceOrNull() = current.get()
     suspend fun awaitService() = ready.await()
     fun publish(event: PlaybackEngineEvent) { mutableEvents.tryEmit(event) }
+    fun updateSnapshot(positionTicks: Long, paused: Boolean) {
+        snapshotPositionTicks = positionTicks
+        snapshotPaused = paused
+    }
+    fun positionTicks() = snapshotPositionTicks
+    fun isPaused() = snapshotPaused
 }
 
 class Media3ServicePlaybackEngine(private val context: Context) : PlaybackEngine {
-    @Volatile private var cachedPositionTicks = 0L
-    @Volatile private var cachedPaused = true
-    @Volatile private var lastResumeElapsedMillis = android.os.SystemClock.elapsedRealtime()
-    override val positionTicks: Long
-        get() = cachedPositionTicks + if (cachedPaused) 0 else {
-            (android.os.SystemClock.elapsedRealtime() - lastResumeElapsedMillis) * 10_000L
-        }
-    override val isPaused: Boolean get() = cachedPaused
+    override val positionTicks: Long get() = PlaybackServiceOwner.positionTicks()
+    override val isPaused: Boolean get() = PlaybackServiceOwner.isPaused()
     override val events: SharedFlow<PlaybackEngineEvent> = PlaybackServiceOwner.events
 
     @UnstableApi
     override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long) {
         context.startForegroundService(Intent(context, PlaybackSessionService::class.java))
-        cachedPositionTicks = startPositionTicks
-        cachedPaused = false
-        lastResumeElapsedMillis = android.os.SystemClock.elapsedRealtime()
         withContext(Dispatchers.Main.immediate) {
-            PlaybackServiceOwner.awaitService().prepare(plan, startPositionTicks)
+            PlaybackServiceOwner.awaitService().apply {
+                prepare(plan, startPositionTicks)
+                PlaybackServiceOwner.updateSnapshot(positionTicks(), isPaused())
+            }
         }
     }
 
-    override fun playPause() {
-        cachedPositionTicks = positionTicks
-        cachedPaused = !cachedPaused
-        lastResumeElapsedMillis = android.os.SystemClock.elapsedRealtime()
-        android.os.Handler(context.mainLooper).post { PlaybackServiceOwner.serviceOrNull()?.playPause() }
+    override suspend fun playPause() = withContext(Dispatchers.Main.immediate) {
+        PlaybackServiceOwner.serviceOrNull()?.apply {
+            playPause()
+            PlaybackServiceOwner.updateSnapshot(positionTicks(), isPaused())
+        }
+        Unit
     }
-    override fun seekTo(positionTicks: Long) {
-        cachedPositionTicks = positionTicks
-        lastResumeElapsedMillis = android.os.SystemClock.elapsedRealtime()
-        android.os.Handler(context.mainLooper).post { PlaybackServiceOwner.serviceOrNull()?.seekTo(positionTicks) }
+    override suspend fun seekTo(positionTicks: Long) = withContext(Dispatchers.Main.immediate) {
+        PlaybackServiceOwner.serviceOrNull()?.apply {
+            seekTo(positionTicks)
+            PlaybackServiceOwner.updateSnapshot(positionTicks(), isPaused())
+        }
+        Unit
     }
-    override fun stop() {
-        cachedPaused = true
-        android.os.Handler(context.mainLooper).post { PlaybackServiceOwner.serviceOrNull()?.stopPlayback() }
+    override suspend fun stop() = withContext(Dispatchers.Main.immediate) {
+        PlaybackServiceOwner.serviceOrNull()?.stopPlayback()
+        PlaybackServiceOwner.updateSnapshot(positionTicks, true)
     }
 }

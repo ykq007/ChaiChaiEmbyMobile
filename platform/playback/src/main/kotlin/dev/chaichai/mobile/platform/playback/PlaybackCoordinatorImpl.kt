@@ -28,9 +28,9 @@ interface PlaybackEngine {
     val isPaused: Boolean
     val events: Flow<PlaybackEngineEvent> get() = emptyFlow()
     suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long)
-    fun playPause()
-    fun seekTo(positionTicks: Long)
-    fun stop()
+    suspend fun playPause()
+    suspend fun seekTo(positionTicks: Long)
+    suspend fun stop()
 }
 sealed interface PlaybackEngineEvent {
     data object Completed : PlaybackEngineEvent
@@ -43,6 +43,7 @@ class PlaybackCoordinatorImpl(
     private val engine: PlaybackEngine,
     private val capabilities: PlaybackCapabilities,
     private val schedulePeriodicReports: Boolean = true,
+    private val scheduleTimelineUpdates: Boolean = schedulePeriodicReports,
 ) : PlaybackCoordinator, AutoCloseable {
     private val mutableState = MutableStateFlow<PlaybackState>(PlaybackState.Idle)
     override val state: StateFlow<PlaybackState> = mutableState
@@ -51,6 +52,7 @@ class PlaybackCoordinatorImpl(
     private var activePlan: AuthoritativePlaybackPlan? = null
     private var lastRequest: MediaPlaybackRequest? = null
     private var periodicJob: Job? = null
+    private var timelineJob: Job? = null
     private var negotiationJob: Job? = null
     private var exiting = false
 
@@ -66,6 +68,7 @@ class PlaybackCoordinatorImpl(
     override fun close() {
         engineEventJob.cancel()
         periodicJob?.cancel()
+        timelineJob?.cancel()
         negotiationJob?.cancel()
     }
 
@@ -73,9 +76,9 @@ class PlaybackCoordinatorImpl(
         lastRequest = request
         exiting = false
         periodicJob?.cancel()
+        timelineJob?.cancel()
         negotiationJob?.cancel()
-        val userId = request.userId
-        if (userId.isNullOrBlank() || request.identity.serverId.isBlank() || request.identity.itemId.isBlank()) {
+        if (request.scope.userId.isBlank() || request.scope.serverId != request.identity.serverId || request.identity.itemId.isBlank()) {
             mutableState.value = PlaybackState.Failed(PlaybackFailureKind.SourceUnavailable)
             return
         }
@@ -90,9 +93,8 @@ class PlaybackCoordinatorImpl(
                 is MediaPlaybackRequest.PlayFromBeginning -> PlaybackStart.Beginning
             }
             val scoped = ScopedPlaybackRequest(
-                request.identity.serverId,
-                userId,
-                request.identity.itemId,
+                request.scope,
+                request.identity,
                 start,
             )
             when (val result = gateway.negotiate(scoped, capabilities)) {
@@ -109,6 +111,7 @@ class PlaybackCoordinatorImpl(
                     publishActive(title, controlsVisible = true)
                     gateway.report(report(result.plan, PlaybackReportKind.Playing))
                     if (schedulePeriodicReports) startPeriodicReports()
+                    if (scheduleTimelineUpdates) startTimelineUpdates()
                 }
             }
         }
@@ -122,10 +125,10 @@ class PlaybackCoordinatorImpl(
     override fun playPause() {
         val current = mutableState.value as? PlaybackState.Active ?: return
         val plan = activePlan ?: return
-        engine.playPause()
-        mutableIsPlaying.value = !engine.isPaused
-        publishActive(current.title, controlsVisible = true)
         scope.launch {
+            engine.playPause()
+            mutableIsPlaying.value = !engine.isPaused
+            publishActive(current.title, controlsVisible = true)
             gateway.report(report(plan, PlaybackReportKind.Progress, if (engine.isPaused) {
                 dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Pause
             } else dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Unpause))
@@ -139,9 +142,11 @@ class PlaybackCoordinatorImpl(
     override fun seekTo(positionTicks: Long) {
         val current = mutableState.value as? PlaybackState.Active ?: return
         val plan = activePlan ?: return
-        engine.seekTo(positionTicks.coerceIn(0, plan.runtimeTicks))
-        publishActive(current.title, controlsVisible = true)
-        scope.launch { gateway.report(report(plan, PlaybackReportKind.Progress, dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek)) }
+        scope.launch {
+            engine.seekTo(positionTicks.coerceIn(0, plan.runtimeTicks))
+            publishActive(current.title, controlsVisible = true)
+            gateway.report(report(plan, PlaybackReportKind.Progress, dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek))
+        }
     }
 
     override fun retry() {
@@ -160,6 +165,7 @@ class PlaybackCoordinatorImpl(
         if (exiting) return
         exiting = true
         periodicJob?.cancel()
+        timelineJob?.cancel()
         scope.launch {
             gateway.report(report(plan, PlaybackReportKind.Progress))
             stopPlan(plan)
@@ -184,6 +190,18 @@ class PlaybackCoordinatorImpl(
         }
     }
 
+    private fun startTimelineUpdates() {
+        val plan = activePlan ?: return
+        timelineJob?.cancel()
+        timelineJob = scope.launch {
+            while (activePlan == plan) {
+                delay(TIMELINE_INTERVAL_MILLIS)
+                val active = mutableState.value as? PlaybackState.Active ?: continue
+                if (activePlan == plan) publishActive(active.title, active.controlsVisible)
+            }
+        }
+    }
+
     private suspend fun stopPlan(plan: AuthoritativePlaybackPlan) {
         gateway.report(report(plan, PlaybackReportKind.Stopped))
     }
@@ -201,6 +219,7 @@ class PlaybackCoordinatorImpl(
         if (exiting) return
         exiting = true
         periodicJob?.cancel()
+        timelineJob?.cancel()
         scope.launch {
             stopPlan(plan)
             engine.stop()
@@ -227,5 +246,6 @@ class PlaybackCoordinatorImpl(
 
     private companion object {
         const val PROGRESS_INTERVAL_MILLIS = 10_000L
+        const val TIMELINE_INTERVAL_MILLIS = 1_000L
     }
 }

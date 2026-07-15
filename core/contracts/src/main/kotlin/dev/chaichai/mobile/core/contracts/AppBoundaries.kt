@@ -49,14 +49,13 @@ enum class GatewayAuthenticationStatus { Valid, Expired, Unavailable }
 interface PlaybackCoordinator {
     val isPlaying: StateFlow<Boolean>
     val state: StateFlow<PlaybackState>
-        get() = EmptyPlaybackState.flow
-    fun submit(request: MediaPlaybackRequest) = Unit
-    fun toggleControls() = Unit
-    fun playPause() = Unit
-    fun seekBy(deltaTicks: Long) = Unit
-    fun seekTo(positionTicks: Long) = Unit
-    fun retry() = Unit
-    fun exit() = Unit
+    fun submit(request: MediaPlaybackRequest)
+    fun toggleControls()
+    fun playPause()
+    fun seekBy(deltaTicks: Long)
+    fun seekTo(positionTicks: Long)
+    fun retry()
+    fun exit()
 }
 fun interface AppClock { fun now(): Instant }
 interface ConnectivityMonitor { val isOnline: StateFlow<Boolean> }
@@ -285,16 +284,16 @@ sealed interface EpisodeDetailsState {
 
 sealed interface MediaPlaybackRequest {
     val identity: MediaIdentity
-    val userId: String?
+    val scope: HomeScope
     data class Resume(
         override val identity: MediaIdentity,
         val positionTicks: Long,
-        override val userId: String? = null,
+        override val scope: HomeScope,
         val title: String = "",
     ) : MediaPlaybackRequest
     data class PlayFromBeginning(
         override val identity: MediaIdentity,
-        override val userId: String? = null,
+        override val scope: HomeScope,
         val title: String = "",
     ) : MediaPlaybackRequest
 }
@@ -322,9 +321,6 @@ sealed interface PlaybackState {
     data class Exited(val identity: MediaIdentity) : PlaybackState
 }
 
-private object EmptyPlaybackState {
-    val flow: StateFlow<PlaybackState> = kotlinx.coroutines.flow.MutableStateFlow(PlaybackState.Idle)
-}
 typealias MoviePlaybackRequest = MediaPlaybackRequest
 
 enum class ArtworkKind(val routeName: String) { Primary("Primary"), Backdrop("Backdrop") }
