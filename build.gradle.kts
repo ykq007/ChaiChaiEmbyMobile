@@ -13,7 +13,7 @@ tasks.register("verifyModuleGraph") {
     group = "verification"
     description = "Fails when one feature module depends directly on another."
     inputs.files(
-        fileTree("feature") { include("*/build.gradle.kts") },
+        fileTree("feature") { include("*/build.gradle*") },
         file("gradle/feature-module.gradle"),
     )
     doLast {

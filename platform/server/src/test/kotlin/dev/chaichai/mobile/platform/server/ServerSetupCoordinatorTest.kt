@@ -14,6 +14,61 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class ServerSetupCoordinatorTest {
     @Test
+    fun https_to_http_redirect_requires_a_new_cleartext_confirmation() = runTest {
+        val entered = valid("https://media.example/emby")
+        val redirected = valid("http://media.example/emby")
+        val coordinator = ServerSetupCoordinator(
+            this,
+            FakeProbe(ProbeResult.Success(entered, redirected, server(), 1)),
+            FakeAuthenticator(success(redirected)),
+            FakeVault(),
+            "device",
+        )
+        advanceUntilIdle()
+
+        coordinator.submitAddress(entered.value)
+        advanceUntilIdle()
+        assertEquals(redirected.value, (coordinator.state.value as ServerSetupState.CleartextRisk).address)
+
+        coordinator.acceptCleartextRisk()
+        assertTrue(coordinator.state.value is ServerSetupState.ConfirmServer)
+    }
+
+    @Test
+    fun http_to_https_redirect_tls_failure_offers_bypass_for_the_https_authority() = runTest {
+        val entered = valid("http://media.example/emby")
+        val redirected = valid("https://secure.example/emby")
+        val probe = SequencedProbe(
+            mutableListOf(
+                ProbeResult.Failure(ProbeFailure.Tls, redirected),
+                ProbeResult.Success(entered, redirected, server(), 1),
+            ),
+        )
+        val coordinator = ServerSetupCoordinator(
+            this, probe, FakeAuthenticator(success(redirected)), FakeVault(), "device",
+        )
+        advanceUntilIdle()
+
+        coordinator.submitAddress(entered.value)
+        coordinator.acceptCleartextRisk()
+        advanceUntilIdle()
+        assertEquals(redirected.value, (coordinator.state.value as ServerSetupState.CertificateRisk).address)
+        coordinator.acceptCertificateBypass()
+        advanceUntilIdle()
+
+        assertEquals(redirected.authority, probe.bypasses.last())
+        assertTrue(coordinator.state.value is ServerSetupState.ConfirmServer)
+    }
+
+    @Test
+    fun session_debug_output_redacts_access_token() {
+        val session = stored(valid("https://media.example"))
+
+        assertFalse(session.toString().contains("token"))
+        assertTrue(session.toString().contains("<redacted>"))
+    }
+
+    @Test
     fun certificate_bypass_confirmation_scopes_to_the_failed_redirect_authority() = runTest {
         val entered = valid("https://one.example/emby")
         val redirected = valid("https://two.example/emby")
@@ -106,6 +161,27 @@ class ServerSetupCoordinatorTest {
         )
     }
 
+    @Test
+    fun expired_restored_session_is_cleared_and_returns_to_sign_in() = runTest {
+        val address = valid("https://media.example/emby")
+        val vault = FakeVault(stored(address))
+        val coordinator = ServerSetupCoordinator(
+            this,
+            FakeProbe(ProbeResult.Failure(ProbeFailure.Unreachable)),
+            FakeAuthenticator(success(address)),
+            vault,
+            "device",
+            SessionVerifier { dev.chaichai.mobile.core.contracts.GatewayAuthenticationStatus.Expired },
+        )
+
+        advanceUntilIdle()
+
+        val signIn = coordinator.state.value as ServerSetupState.SignIn
+        assertEquals("Ada", signIn.username)
+        assertEquals(SetupFailure.InvalidCredentials, signIn.error)
+        assertNull(vault.session)
+    }
+
     private class FakeProbe(private val result: ProbeResult) : ServerProbe {
         override suspend fun probe(initialAddress: ServerAddress, certificateBypassAuthority: ServerAuthority?) = result
     }
@@ -138,7 +214,9 @@ class ServerSetupCoordinatorTest {
     private fun valid(value: String) = (ServerAddress.parse(value) as AddressValidation.Valid).address
     private fun server() = DiscoveredServer("server", "Cinema", "4.9.5.0", Compatibility.Supported)
     private fun success(address: ServerAddress) = AuthenticationResult.Success(
-        AuthenticatedSession(address, "server", "user", "Ada", "token"),
+        AuthenticatedSession(address, "server", "user", "Ada", AccessToken.fromRaw("token")),
     )
-    private fun stored(address: ServerAddress) = StoredSession(address, "server", "user", "Ada", "token", null, "Cinema")
+    private fun stored(address: ServerAddress) = StoredSession(
+        address, "server", "user", "Ada", AccessToken.fromRaw("token"), null, "Cinema",
+    )
 }

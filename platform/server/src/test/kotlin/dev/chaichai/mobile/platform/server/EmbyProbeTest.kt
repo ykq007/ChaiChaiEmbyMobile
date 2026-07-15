@@ -58,6 +58,28 @@ class EmbyProbeTest {
         }
     }
 
+    @Test
+    fun supported_4_8_line_is_recognized() = runTest {
+        assertEquals(Compatibility.Supported, probeVersion("4.8.11.0").server.compatibility)
+    }
+
+    @Test
+    fun older_server_is_best_effort_until_a_required_contract_is_proven_incompatible() = runTest {
+        assertEquals(Compatibility.BestEffort, probeVersion("3.5.2.0").server.compatibility)
+    }
+
+    private suspend fun probeVersion(version: String): ProbeResult.Success {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(
+                MockResponse.Builder()
+                    .body("""{"Id":"server-1","ServerName":"Cinema","Version":"$version"}""")
+                    .build(),
+            )
+            return EmbyProbe().probe(valid(server.url("/emby").toString())) as ProbeResult.Success
+        }
+    }
+
     private fun valid(value: String): ServerAddress =
         (ServerAddress.parse(value) as AddressValidation.Valid).address
 }

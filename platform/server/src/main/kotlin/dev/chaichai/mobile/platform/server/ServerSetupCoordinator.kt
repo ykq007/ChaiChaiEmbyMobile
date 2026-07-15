@@ -3,6 +3,7 @@ package dev.chaichai.mobile.platform.server
 import dev.chaichai.mobile.core.contracts.ServerSetupBoundary
 import dev.chaichai.mobile.core.contracts.ServerSetupState
 import dev.chaichai.mobile.core.contracts.SetupFailure
+import dev.chaichai.mobile.core.contracts.GatewayAuthenticationStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -14,7 +15,7 @@ data class StoredSession(
     val serverId: String,
     val userId: String,
     val username: String,
-    val accessToken: String,
+    val accessToken: AccessToken,
     val certificateBypassAuthority: ServerAuthority?,
     val serverName: String,
 )
@@ -31,6 +32,7 @@ class ServerSetupCoordinator(
     private val authenticator: InteractiveAuthenticator,
     private val vault: SessionVault,
     private val deviceId: String,
+    private val sessionVerifier: SessionVerifier = SessionVerifier { GatewayAuthenticationStatus.Valid },
 ) : ServerSetupBoundary {
     private val mutableState = MutableStateFlow<ServerSetupState>(ServerSetupState.Restoring)
     override val state: StateFlow<ServerSetupState> = mutableState.asStateFlow()
@@ -38,6 +40,7 @@ class ServerSetupCoordinator(
     private var enteredAddress: ServerAddress? = null
     private var discovered: ProbeResult.Success? = null
     private var certificateBypassAuthority: ServerAuthority? = null
+    private var acknowledgedCleartextAuthority: ServerAuthority? = null
     private var pendingReturnDestination: String? = null
 
     init {
@@ -54,7 +57,20 @@ class ServerSetupCoordinator(
                     DiscoveredServer(restored.serverId, restored.serverName, "", Compatibility.BestEffort),
                     0,
                 )
-                mutableState.value = ServerSetupState.Authenticated(restored.serverName, restored.username)
+                when (sessionVerifier.verify(restored)) {
+                    GatewayAuthenticationStatus.Expired -> {
+                        vault.clear()
+                        mutableState.value = ServerSetupState.SignIn(
+                            restored.address.value,
+                            restored.serverName,
+                            restored.username,
+                            SetupFailure.InvalidCredentials,
+                        )
+                    }
+                    GatewayAuthenticationStatus.Valid,
+                    GatewayAuthenticationStatus.Unavailable,
+                    -> mutableState.value = ServerSetupState.Authenticated(restored.serverName, restored.username)
+                }
             }
         }
     }
@@ -69,6 +85,7 @@ class ServerSetupCoordinator(
                 enteredAddress = validation.address
                 discovered = null
                 certificateBypassAuthority = null
+                acknowledgedCleartextAuthority = null
                 if (validation.address.isCleartext) {
                     mutableState.value = ServerSetupState.CleartextRisk(validation.address.value)
                 } else {
@@ -79,7 +96,11 @@ class ServerSetupCoordinator(
     }
 
     override fun acceptCleartextRisk() {
-        if (mutableState.value is ServerSetupState.CleartextRisk) beginProbe()
+        val risk = mutableState.value as? ServerSetupState.CleartextRisk ?: return
+        val address = (ServerAddress.parse(risk.address) as? AddressValidation.Valid)?.address ?: return
+        acknowledgedCleartextAuthority = address.authority
+        val existing = discovered
+        if (existing?.finalAddress == address) showConfirmation(existing) else beginProbe()
     }
 
     override fun acceptCertificateBypass() {
@@ -175,19 +196,16 @@ class ServerSetupCoordinator(
                     if (result.finalAddress.authority != certificateBypassAuthority) {
                         certificateBypassAuthority = null
                     }
-                    mutableState.value = ServerSetupState.ConfirmServer(
-                        enteredAddress = result.initialAddress.value,
-                        finalAddress = result.finalAddress.value,
-                        serverName = result.server.name,
-                        version = result.server.version,
-                        compatibilityWarning = if (result.server.compatibility == Compatibility.BestEffort) {
-                            "This server version is outside the verified 4.9 and 4.8 Supported Server Lines. Continue with best-effort compatibility."
-                        } else null,
-                    )
+                    if (result.finalAddress.isCleartext && acknowledgedCleartextAuthority != result.finalAddress.authority) {
+                        mutableState.value = ServerSetupState.CleartextRisk(result.finalAddress.value)
+                    } else {
+                        showConfirmation(result)
+                    }
                 }
                 is ProbeResult.Failure -> {
-                    if (result.reason == ProbeFailure.Tls && !address.isCleartext) {
-                        mutableState.value = ServerSetupState.CertificateRisk((result.address ?: address).value)
+                    val failedAddress = result.address ?: address
+                    if (result.reason == ProbeFailure.Tls && !failedAddress.isCleartext) {
+                        mutableState.value = ServerSetupState.CertificateRisk(failedAddress.value)
                     } else {
                         mutableState.value = ServerSetupState.Failure(
                             reason = result.reason.toSetupFailure(),
@@ -198,6 +216,18 @@ class ServerSetupCoordinator(
                 }
             }
         }
+    }
+
+    private fun showConfirmation(result: ProbeResult.Success) {
+        mutableState.value = ServerSetupState.ConfirmServer(
+            enteredAddress = result.initialAddress.value,
+            finalAddress = result.finalAddress.value,
+            serverName = result.server.name,
+            version = result.server.version,
+            compatibilityWarning = if (result.server.compatibility == Compatibility.BestEffort) {
+                "This server version is outside the verified 4.9 and 4.8 Supported Server Lines. Continue with best-effort compatibility."
+            } else null,
+        )
     }
 
     private fun AuthenticationFailure.toSetupFailure() = when (this) {

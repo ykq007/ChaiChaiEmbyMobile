@@ -32,7 +32,8 @@ class EmbyAuthenticatorTest {
             val session = (result as AuthenticationResult.Success).session
             assertEquals("server-1", session.serverId)
             assertEquals("user-7", session.userId)
-            assertEquals("token-secret", session.accessToken)
+            assertEquals("token-secret", session.accessToken.encoded())
+            assertFalse(session.toString().contains("token-secret"))
             val request = server.takeRequest()
             assertEquals("/family/emby/Users/AuthenticateByName", request.url.encodedPath)
             assertTrue(request.headers["X-Emby-Authorization"]!!.contains("DeviceId=\"stable-device\""))

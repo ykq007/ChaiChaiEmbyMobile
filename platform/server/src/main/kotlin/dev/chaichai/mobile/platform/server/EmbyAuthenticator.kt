@@ -19,8 +19,18 @@ data class AuthenticatedSession(
     val serverId: String,
     val userId: String,
     val username: String,
-    val accessToken: String,
+    val accessToken: AccessToken,
 )
+
+class AccessToken private constructor(private val value: String) {
+    internal fun encoded(): String = value
+
+    override fun toString(): String = "<redacted>"
+
+    companion object {
+        internal fun fromRaw(value: String): AccessToken = AccessToken(value)
+    }
+}
 
 enum class AuthenticationFailure {
     InvalidCredentials,
@@ -118,7 +128,7 @@ class EmbyAuthenticator(
                     serverId = serverId,
                     userId = authenticated.user.id,
                     username = authenticated.user.name.ifBlank { username },
-                    accessToken = authenticated.accessToken,
+                    accessToken = AccessToken.fromRaw(authenticated.accessToken),
                 ),
             )
         }

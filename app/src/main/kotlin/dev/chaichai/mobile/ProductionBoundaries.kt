@@ -6,17 +6,14 @@ import android.net.NetworkCapabilities
 import dev.chaichai.mobile.core.contracts.AppBoundaries
 import dev.chaichai.mobile.core.contracts.AppClock
 import dev.chaichai.mobile.core.contracts.ConnectivityMonitor
-import dev.chaichai.mobile.core.contracts.EmbyGateway
-import dev.chaichai.mobile.core.contracts.GatewayConnectionState
 import dev.chaichai.mobile.core.contracts.PlaybackCoordinator
+import dev.chaichai.mobile.core.contracts.ServerSetupState
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import dev.chaichai.mobile.core.contracts.ServerSetupState
+import dev.chaichai.mobile.platform.server.AuthenticatedEmbyGateway
 import dev.chaichai.mobile.platform.server.EmbyAuthenticator
 import dev.chaichai.mobile.platform.server.EmbyProbe
 import dev.chaichai.mobile.platform.server.KeystoreSessionVault
@@ -41,23 +38,26 @@ object ProductionBoundariesModule {
         val deviceId = preferences.getString("device_id", null) ?: UUID.randomUUID().toString().also {
             preferences.edit().putString("device_id", it).apply()
         }
+        val vault = KeystoreSessionVault(context)
+        val gateway = AuthenticatedEmbyGateway(vault)
         val serverSetup = ServerSetupCoordinator(
             applicationScope,
             EmbyProbe(),
             EmbyAuthenticator(),
-            KeystoreSessionVault(context),
+            vault,
             deviceId,
+            gateway,
         )
+        gateway.onAuthenticationExpired = serverSetup::authenticationExpired
+        applicationScope.launch {
+            serverSetup.state.collect { gateway.setConnected(it is ServerSetupState.Authenticated) }
+        }
         val connectivityManager = context.getSystemService(ConnectivityManager::class.java)
         val activeNetwork = connectivityManager.activeNetwork
         val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
         val online = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
         return AppBoundaries(
-            gateway = object : EmbyGateway {
-                override val connectionState = serverSetup.state
-                    .map { if (it is ServerSetupState.Authenticated) GatewayConnectionState.Connected else GatewayConnectionState.Disconnected }
-                    .stateIn(applicationScope, SharingStarted.Eagerly, GatewayConnectionState.Disconnected)
-            },
+            gateway = gateway,
             playback = object : PlaybackCoordinator {
                 override val isPlaying = MutableStateFlow(false)
             },

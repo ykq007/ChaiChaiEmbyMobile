@@ -38,8 +38,14 @@ class ServerSetupFlowTest {
         composeRule.onNodeWithText("http://media.example/emby").assertIsDisplayed()
         composeRule.onNodeWithText("Confirm and sign in").performClick()
         composeRule.onNodeWithText("Sign in to Cinema").assertIsDisplayed()
+        composeRule.onNodeWithText("Username").performTextInput("Ada")
+        composeRule.onNodeWithText("Password").performTextInput("secret-password")
+        composeRule.onNodeWithText("Sign in", useUnmergedTree = true).performClick()
+        composeRule.onNode(hasText("Home") and isHeading()).assertIsDisplayed()
 
         assertEquals("http://media.example/original", setup.submittedAddress)
+        assertEquals("Ada", setup.authenticatedUsername)
+        assertEquals("secret-password", setup.authenticatedPassword)
     }
 
     @Test
@@ -57,6 +63,8 @@ class ServerSetupFlowTest {
     private class FakeSetup : ServerSetupBoundary {
         override val state = MutableStateFlow<ServerSetupState>(ServerSetupState.EnterAddress())
         var submittedAddress = ""
+        var authenticatedUsername = ""
+        var authenticatedPassword = ""
         override fun submitAddress(address: String) {
             submittedAddress = address
             state.value = ServerSetupState.CleartextRisk(address)
@@ -70,7 +78,11 @@ class ServerSetupFlowTest {
         override fun confirmServer() {
             state.value = ServerSetupState.SignIn("http://media.example/emby", "Cinema")
         }
-        override fun authenticate(username: String, password: String) = Unit
+        override fun authenticate(username: String, password: String) {
+            authenticatedUsername = username
+            authenticatedPassword = password
+            state.value = ServerSetupState.Authenticated("Cinema", username)
+        }
         override fun retry() = Unit
         override fun authenticationExpired(requestedDestination: String?) = Unit
     }

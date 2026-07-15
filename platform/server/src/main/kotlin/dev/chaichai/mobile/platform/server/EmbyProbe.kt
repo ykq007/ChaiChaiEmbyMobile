@@ -106,9 +106,6 @@ class EmbyProbe(
                     return@withContext ProbeResult.Failure(ProbeFailure.InvalidResponse, current)
                 }
                 val compatibility = compatibilityOf(info.version)
-                if (compatibility == Compatibility.Incompatible) {
-                    return@withContext ProbeResult.Failure(ProbeFailure.IncompatibleServer, current)
-                }
                 return@withContext ProbeResult.Success(
                     initialAddress = initialAddress,
                     finalAddress = current,
@@ -122,8 +119,7 @@ class EmbyProbe(
 
     private fun compatibilityOf(version: String): Compatibility {
         val numbers = version.split('.').mapNotNull(String::toIntOrNull)
-        if (numbers.size < 2 || numbers[0] < 4) return Compatibility.Incompatible
-        return if (numbers[0] == 4 && numbers[1] in SUPPORTED_MINOR_LINES) {
+        return if (numbers.size >= 2 && numbers[0] == 4 && numbers[1] in SUPPORTED_MINOR_LINES) {
             Compatibility.Supported
         } else {
             Compatibility.BestEffort

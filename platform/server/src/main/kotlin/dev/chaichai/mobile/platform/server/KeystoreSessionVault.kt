@@ -36,7 +36,7 @@ class KeystoreSessionVault(context: Context) : SessionVault {
                 record.serverId,
                 record.userId,
                 record.username,
-                record.accessToken,
+                AccessToken.fromRaw(record.accessToken),
                 record.bypassScheme?.let { scheme ->
                     ServerAuthority(scheme, record.bypassHost.orEmpty(), record.bypassPort ?: return@let null)
                 },
@@ -50,12 +50,13 @@ class KeystoreSessionVault(context: Context) : SessionVault {
 
     override fun save(session: StoredSession) {
         val scope = scopeOf(session.serverId, session.userId)
+        val previousScope = preferences.getString(CURRENT_SCOPE, null)
         val record = SessionRecord(
             address = session.address.value,
             serverId = session.serverId,
             userId = session.userId,
             username = session.username,
-            accessToken = session.accessToken,
+            accessToken = session.accessToken.encoded(),
             bypassScheme = session.certificateBypassAuthority?.scheme,
             bypassHost = session.certificateBypassAuthority?.host,
             bypassPort = session.certificateBypassAuthority?.port,
@@ -68,7 +69,9 @@ class KeystoreSessionVault(context: Context) : SessionVault {
             iv = encode(cipher.iv),
             ciphertext = encode(cipher.doFinal(json.encodeToString(record).toByteArray(StandardCharsets.UTF_8))),
         )
-        preferences.edit()
+        preferences.edit().apply {
+            if (previousScope != null && previousScope != scope) remove(sessionKey(previousScope))
+        }
             .putString(sessionKey(scope), json.encodeToString(encrypted))
             .putString(CURRENT_SCOPE, scope)
             .apply()
