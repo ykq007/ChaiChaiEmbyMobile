@@ -662,6 +662,25 @@ private fun ReadySeriesGrid(
 }
 
 @Composable
+fun SeriesDetailsScreen(
+    gateway: EmbyGateway,
+    identity: MediaIdentity,
+    playback: PlaybackCoordinator,
+    isHeightConstrained: Boolean,
+    modifier: Modifier = Modifier,
+    authenticationReturnDestination: String? = null,
+    initialSeasonIdentity: MediaIdentity? = null,
+) = SeriesDetailsPane(
+    gateway,
+    identity,
+    playback,
+    isHeightConstrained,
+    modifier,
+    authenticationReturnDestination,
+    initialSeasonIdentity,
+)
+
+@Composable
 private fun SeriesDetailsPane(
     gateway: EmbyGateway,
     identity: MediaIdentity,
@@ -669,10 +688,13 @@ private fun SeriesDetailsPane(
     isHeightConstrained: Boolean,
     modifier: Modifier,
     authenticationReturnDestination: String?,
+    initialSeasonIdentity: MediaIdentity? = null,
 ) {
     var retry by rememberSaveable(identity.serverId, identity.itemId) { androidx.compose.runtime.mutableIntStateOf(0) }
     var detailState by androidx.compose.runtime.remember(identity) { androidx.compose.runtime.mutableStateOf<SeriesDetailsState?>(null) }
-    var selectedSeasonId by rememberSaveable(identity.serverId, identity.itemId) { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    var selectedSeasonId by rememberSaveable(identity.serverId, identity.itemId) {
+        androidx.compose.runtime.mutableStateOf(initialSeasonIdentity?.itemId)
+    }
     var selectedEpisodeId by rememberSaveable(identity.serverId, identity.itemId) { androidx.compose.runtime.mutableStateOf<String?>(null) }
     var episodesState by androidx.compose.runtime.remember(identity, selectedSeasonId) { androidx.compose.runtime.mutableStateOf<SeasonEpisodesState?>(null) }
     LaunchedEffect(gateway, identity, retry) { detailState = gateway.loadSeriesDetails(identity, authenticationReturnDestination) }
@@ -763,6 +785,23 @@ private fun EpisodeRow(gateway: EmbyGateway, episode: EpisodeSummary, traversalO
 }
 
 @Composable
+fun EpisodeDetailsScreen(
+    gateway: EmbyGateway,
+    identity: MediaIdentity,
+    playback: PlaybackCoordinator,
+    modifier: Modifier = Modifier,
+    authenticationReturnDestination: String? = null,
+) = EpisodeDetailsPane(
+    gateway,
+    identity,
+    playback,
+    modifier,
+    authenticationReturnDestination,
+    onBack = {},
+    showBack = false,
+)
+
+@Composable
 private fun EpisodeDetailsPane(
     gateway: EmbyGateway,
     identity: MediaIdentity,
@@ -770,6 +809,7 @@ private fun EpisodeDetailsPane(
     modifier: Modifier,
     authenticationReturnDestination: String?,
     onBack: () -> Unit,
+    showBack: Boolean = true,
 ) {
     var retry by rememberSaveable(identity.serverId, identity.itemId) { androidx.compose.runtime.mutableIntStateOf(0) }
     var state by androidx.compose.runtime.remember(identity) { androidx.compose.runtime.mutableStateOf<EpisodeDetailsState?>(null) }
@@ -777,7 +817,7 @@ private fun EpisodeDetailsPane(
     when (val snapshot = state) {
         null -> Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         is EpisodeDetailsState.Failure -> MessageState("Episode unavailable", snapshot.message, "Retry") { retry += 1 }
-        is EpisodeDetailsState.Ready -> EpisodeDetailsContent(gateway, snapshot.details, playback, modifier, onBack)
+        is EpisodeDetailsState.Ready -> EpisodeDetailsContent(gateway, snapshot.details, playback, modifier, onBack, showBack)
     }
 }
 
@@ -788,6 +828,7 @@ private fun EpisodeDetailsContent(
     playback: PlaybackCoordinator,
     modifier: Modifier,
     onBack: () -> Unit,
+    showBack: Boolean = true,
 ) {
     val episode = details.episode
     Column(
@@ -795,7 +836,7 @@ private fun EpisodeDetailsContent(
             .semantics { isTraversalGroup = true },
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        OutlinedButton(onClick = onBack) { Text("Back to episodes") }
+        if (showBack) OutlinedButton(onClick = onBack) { Text("Back to episodes") }
         (details.backdrop ?: episode.artwork)?.let { artwork ->
             AuthenticatedArtwork(
                 artwork, "Artwork for ${episode.title}", { gateway.loadArtwork(artwork) },

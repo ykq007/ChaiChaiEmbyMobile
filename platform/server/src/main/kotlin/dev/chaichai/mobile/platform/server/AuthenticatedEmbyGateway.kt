@@ -27,16 +27,27 @@ import dev.chaichai.mobile.core.contracts.SeasonSummary
 import dev.chaichai.mobile.core.contracts.SeriesDetails
 import dev.chaichai.mobile.core.contracts.SeriesDetailsState
 import dev.chaichai.mobile.core.contracts.SeriesLibraryState
+import dev.chaichai.mobile.core.contracts.SearchMediaType
+import dev.chaichai.mobile.core.contracts.SearchResult
+import dev.chaichai.mobile.core.contracts.SearchResultGroup
+import dev.chaichai.mobile.core.contracts.SearchState
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import java.io.IOException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -53,6 +64,7 @@ class AuthenticatedEmbyGateway(
     private val homeCache: HomeCache = InMemoryHomeCache(),
     private val movieCache: MovieCache = InMemoryMovieCache(),
     private val seriesCache: SeriesCache = InMemorySeriesCache(),
+    private val searchCache: SearchCache = InMemorySearchCache(),
     private val deviceId: String,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : EmbyGateway, SessionVerifier {
@@ -66,10 +78,14 @@ class AuthenticatedEmbyGateway(
     private val mutableSeriesLibrary = MutableStateFlow<SeriesLibraryState>(SeriesLibraryState.Loading)
     private val seriesOperationMutex = Mutex()
     override val seriesLibrary: StateFlow<SeriesLibraryState> = mutableSeriesLibrary
+    private val mutableSearchState = MutableStateFlow<SearchState>(SearchState.Initial)
+    override val searchState: StateFlow<SearchState> = mutableSearchState
     private val json = Json { ignoreUnknownKeys = true }
     private var homeGeneration = 0L
     private var movieGeneration = 0L
     private var seriesGeneration = 0L
+    private var searchGeneration = 0L
+    private var activeSearchCall: Call? = null
     private var authenticationGeneration = 0L
     private var activeCredential: ActiveCredential? = null
 
@@ -89,9 +105,15 @@ class AuthenticatedEmbyGateway(
             homeGeneration += 1
             movieGeneration += 1
             seriesGeneration += 1
+            searchGeneration += 1
+            synchronized(this) {
+                activeSearchCall?.cancel()
+                activeSearchCall = null
+            }
             mutableHomeFeed.value = HomeFeedState.Loading
             mutableMovieLibrary.value = MovieLibraryState.Loading
             mutableSeriesLibrary.value = SeriesLibraryState.Loading
+            mutableSearchState.value = SearchState.Initial
             GatewayConnectionState.Disconnected
         }
     }
@@ -325,6 +347,52 @@ class AuthenticatedEmbyGateway(
 
     override suspend fun retrySeriesPage() = loadNextSeriesPage()
 
+    override suspend fun search(query: String) = withContext(ioDispatcher) {
+        val normalizedQuery = query.trim()
+        val generation = synchronized(this@AuthenticatedEmbyGateway) {
+            activeSearchCall?.cancel()
+            activeSearchCall = null
+            ++searchGeneration
+        }
+        if (normalizedQuery.length < 2) {
+            mutableSearchState.value = SearchState.Initial
+            return@withContext
+        }
+        val session = vault.restore()
+        if (session == null) {
+            mutableSearchState.value = SearchState.Failure(
+                normalizedQuery,
+                "Sign in again to search your server.",
+            )
+            return@withContext
+        }
+        val scope = HomeScope(session.serverId, session.userId)
+        val authentication = authenticationGeneration
+        val restored = searchCache.load(scope, normalizedQuery).orEmpty()
+        if (!isActiveSearchRequest(scope, generation, session, authentication)) return@withContext
+        mutableSearchState.value = SearchState.Searching(normalizedQuery, restored)
+        val state = try {
+            val groups = fetchSearchResults(session, scope, normalizedQuery, generation)
+            if (!isActiveSearchRequest(scope, generation, session, authentication)) return@withContext
+            searchCache.save(scope, normalizedQuery, groups)
+            if (!isActiveSearchRequest(scope, generation, session, authentication)) return@withContext
+            if (groups.all { it.items.isEmpty() }) SearchState.Empty(scope, normalizedQuery)
+            else SearchState.Results(scope, normalizedQuery, groups)
+        } catch (_: AuthenticationExpiredException) {
+            expireAuthentication(session, authentication, "search")
+            return@withContext
+        } catch (_: Exception) {
+            if (!isActiveSearchRequest(scope, generation, session, authentication)) return@withContext
+            SearchState.Failure(
+                normalizedQuery,
+                "Search couldn't be completed. Check the connection and retry.",
+                scope,
+                restored,
+            )
+        }
+        if (isActiveSearchRequest(scope, generation, session, authentication)) mutableSearchState.value = state
+    }
+
     override suspend fun loadSeriesDetails(
         identity: MediaIdentity,
         authenticationReturnDestination: String?,
@@ -490,6 +558,49 @@ class AuthenticatedEmbyGateway(
             }
     }
 
+    private suspend fun fetchSearchResults(
+        session: StoredSession,
+        scope: HomeScope,
+        query: String,
+        generation: Long,
+    ): List<SearchResultGroup> {
+        val url = session.address.apiUrl("Users/${session.userId}/Items").toString().toHttpUrl().newBuilder()
+            .addQueryParameter("SearchTerm", query)
+            .addQueryParameter("Recursive", "true")
+            .addQueryParameter("IncludeItemTypes", "Movie,Series,Season,Episode")
+            .addQueryParameter("Fields", "ProductionYear,PrimaryImageAspectRatio")
+            .addQueryParameter("EnableImageTypes", "Primary")
+            .addQueryParameter("ImageTypeLimit", "1")
+            .addQueryParameter("Limit", SearchResultLimit.toString())
+            .build()
+        val request = authenticatedRequest(session).url(url).get().build()
+        val call = clients.forRequest(session.address.authority, session.certificateBypassAuthority).newCall(request)
+        synchronized(this) {
+            if (generation != searchGeneration) {
+                call.cancel()
+                throw CancellationException("Search was superseded")
+            }
+            activeSearchCall = call
+        }
+        val results = try {
+            call.awaitResponse().use { response ->
+                response.requireAuthenticatedSuccess("Search request failed")
+                val root = json.parseToJsonElement(response.body.string()) as? JsonObject ?: JsonObject(emptyMap())
+                (root["Items"] as? JsonArray).orEmpty().mapNotNull { element ->
+                    val dto = json.decodeFromJsonElement<SearchItemDto>(element)
+                    dto.toContract(scope)
+                }
+            }
+        } finally {
+            synchronized(this) {
+                if (activeSearchCall === call) activeSearchCall = null
+            }
+        }
+        return SearchMediaType.entries.map { type ->
+            SearchResultGroup(type, results.filter { it.mediaType == type })
+        }
+    }
+
     private fun fetchSeriesPage(session: StoredSession, query: LibraryQuery, startIndex: Int): SeriesPage {
         val url = session.address.apiUrl("Users/${session.userId}/Items").toString().toHttpUrl().newBuilder().apply {
             addQueryParameter("Recursive", "true")
@@ -619,6 +730,13 @@ class AuthenticatedEmbyGateway(
         authentication: Long,
     ): Boolean = generation == seriesGeneration && isActiveScope(scope) && isActiveCredential(session, authentication)
 
+    private fun isActiveSearchRequest(
+        scope: HomeScope,
+        generation: Long,
+        session: StoredSession,
+        authentication: Long,
+    ): Boolean = generation == searchGeneration && isActiveScope(scope) && isActiveCredential(session, authentication)
+
     private fun isActiveHomeRequest(
         scope: HomeScope,
         generation: Long,
@@ -720,6 +838,51 @@ class AuthenticatedEmbyGateway(
     private data class HomeUserDataDto(
         @kotlinx.serialization.SerialName("PlaybackPositionTicks") val playbackPositionTicks: Long = 0,
     )
+
+    @Serializable
+    private data class SearchItemDto(
+        @kotlinx.serialization.SerialName("Id") val id: String? = null,
+        @kotlinx.serialization.SerialName("Name") val name: String? = null,
+        @kotlinx.serialization.SerialName("Type") val type: String? = null,
+        @kotlinx.serialization.SerialName("ProductionYear") val year: Int? = null,
+        @kotlinx.serialization.SerialName("SeriesId") val seriesId: String? = null,
+        @kotlinx.serialization.SerialName("SeriesName") val seriesName: String? = null,
+        @kotlinx.serialization.SerialName("SeasonId") val seasonId: String? = null,
+        @kotlinx.serialization.SerialName("ParentIndexNumber") val seasonNumber: Int? = null,
+        @kotlinx.serialization.SerialName("IndexNumber") val indexNumber: Int? = null,
+        @kotlinx.serialization.SerialName("ImageTags") val imageTags: Map<String, String> = emptyMap(),
+    ) {
+        fun toContract(scope: HomeScope): SearchResult? {
+            val itemId = id ?: return null
+            val mediaType = when (type) {
+                "Movie" -> SearchMediaType.Movie
+                "Series" -> SearchMediaType.Series
+                "Season" -> SearchMediaType.Season
+                "Episode" -> SearchMediaType.Episode
+                else -> return null
+            }
+            val identity = MediaIdentity(scope.serverId, itemId)
+            if (mediaType == SearchMediaType.Season && seriesId == null) return null
+            return SearchResult(
+                scope = scope,
+                identity = identity,
+                mediaType = mediaType,
+                title = name ?: when (mediaType) {
+                    SearchMediaType.Movie -> "Untitled movie"
+                    SearchMediaType.Series -> "Untitled series"
+                    SearchMediaType.Season -> "Untitled season"
+                    SearchMediaType.Episode -> "Untitled episode"
+                },
+                year = year,
+                seriesName = seriesName,
+                seasonNumber = if (mediaType == SearchMediaType.Season) indexNumber else seasonNumber,
+                episodeNumber = if (mediaType == SearchMediaType.Episode) indexNumber else null,
+                seriesIdentity = seriesId?.let { MediaIdentity(scope.serverId, it) },
+                seasonIdentity = seasonId?.let { MediaIdentity(scope.serverId, it) },
+                artwork = imageTags["Primary"]?.let { ArtworkReference(identity, it) },
+            )
+        }
+    }
 
     @Serializable
     private data class MovieListItemDto(
@@ -942,7 +1105,23 @@ class AuthenticatedEmbyGateway(
         onAuthenticationExpired?.invoke(destination)
     }
 
-    private companion object { const val MoviePageSize = 40 }
+    private companion object {
+        const val MoviePageSize = 40
+        const val SearchResultLimit = 200
+    }
+}
+
+private suspend fun Call.awaitResponse(): Response = suspendCancellableCoroutine { continuation ->
+    continuation.invokeOnCancellation { cancel() }
+    enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            if (continuation.isActive) continuation.resumeWithException(e)
+        }
+
+        override fun onResponse(call: Call, response: Response) {
+            if (continuation.isActive) continuation.resume(response) else response.close()
+        }
+    })
 }
 
 private class AuthenticationExpiredException : Exception()
