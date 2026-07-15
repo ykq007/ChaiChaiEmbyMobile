@@ -1,10 +1,13 @@
 package dev.chaichai.mobile.platform.playback
 
+import android.app.Activity
+import android.app.Application
 import android.content.Context
 import android.content.Intent
-import android.os.IBinder
 import android.os.Handler
+import android.os.IBinder
 import android.os.Looper
+import android.os.Bundle
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -37,11 +40,30 @@ class PlaybackSessionService : MediaSessionService() {
     private var snapshotCount = 0
     private var stoppedPublished = false
     private var reportControlEvents = false
+    private var startedActivityCount = 0
+    private val activityLifecycleCallbacks = object : Application.ActivityLifecycleCallbacks {
+        override fun onActivityStarted(activity: Activity) { startedActivityCount++ }
+        override fun onActivityStopped(activity: Activity) {
+            startedActivityCount = (startedActivityCount - 1).coerceAtLeast(0)
+            if (startedActivityCount == 0) {
+                publishControlProgress(
+                    dev.chaichai.mobile.platform.server.PlaybackProgressEvent.TimeUpdate,
+                    player.currentPosition * TICKS_PER_MILLISECOND,
+                    player.isPausedForReporting(),
+                )
+            }
+        }
+        override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+        override fun onActivityResumed(activity: Activity) = Unit
+        override fun onActivityPaused(activity: Activity) = Unit
+        override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+        override fun onActivityDestroyed(activity: Activity) = Unit
+    }
     private val snapshotRunnable = object : Runnable {
         override fun run() {
             PlaybackServiceOwner.updateSnapshot(
                 player.currentPosition * TICKS_PER_MILLISECOND,
-                !player.playWhenReady,
+                player.isPausedForReporting(),
             )
             snapshotCount++
             if (snapshotCount % SNAPSHOTS_PER_PROGRESS == 0 && player.mediaItemCount > 0) {
@@ -49,7 +71,7 @@ class PlaybackSessionService : MediaSessionService() {
                     PlaybackEngineEvent.Progress(
                         dev.chaichai.mobile.platform.server.PlaybackProgressEvent.TimeUpdate,
                         player.currentPosition * TICKS_PER_MILLISECOND,
-                        !player.playWhenReady,
+                        player.isPausedForReporting(),
                     ),
                 )
             }
@@ -76,11 +98,18 @@ class PlaybackSessionService : MediaSessionService() {
                 PlaybackServiceOwner.publish(PlaybackEngineEvent.FatalError)
             }
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                publishReportedPlaybackState()
+            }
+            override fun onPlaybackSuppressionReasonChanged(playbackSuppressionReason: Int) {
+                publishReportedPlaybackState()
+            }
+            private fun publishReportedPlaybackState() {
+                val isPaused = player.isPausedForReporting()
                 publishControlProgress(
-                    if (playWhenReady) dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Unpause
-                    else dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Pause,
+                    if (isPaused) dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Pause
+                    else dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Unpause,
                     player.currentPosition * TICKS_PER_MILLISECOND,
-                    !playWhenReady,
+                    isPaused,
                 )
             }
             override fun onPositionDiscontinuity(
@@ -92,12 +121,13 @@ class PlaybackSessionService : MediaSessionService() {
                     publishControlProgress(
                         dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek,
                         newPosition.positionMs * TICKS_PER_MILLISECOND,
-                        !player.playWhenReady,
+                        player.isPausedForReporting(),
                     )
                 }
             }
         })
         PlaybackServiceOwner.attach(this)
+        application.registerActivityLifecycleCallbacks(activityLifecycleCallbacks)
         snapshotHandler.post(snapshotRunnable)
     }
 
@@ -132,7 +162,7 @@ class PlaybackSessionService : MediaSessionService() {
     internal fun playPause() { if (player.playWhenReady) player.pause() else player.play() }
     internal fun seekTo(positionTicks: Long) { player.seekTo(positionTicks / TICKS_PER_MILLISECOND) }
     internal fun positionTicks(): Long = player.currentPosition * TICKS_PER_MILLISECOND
-    internal fun isPaused(): Boolean = !player.playWhenReady
+    internal fun isPaused(): Boolean = player.isPausedForReporting()
     internal fun stopPlayback() {
         publishStoppedOnce()
         player.stop()
@@ -142,6 +172,7 @@ class PlaybackSessionService : MediaSessionService() {
 
     override fun onDestroy() {
         snapshotHandler.removeCallbacks(snapshotRunnable)
+        application.unregisterActivityLifecycleCallbacks(activityLifecycleCallbacks)
         publishStoppedOnce()
         PlaybackServiceOwner.detach(this)
         mediaSession.release()
@@ -161,11 +192,14 @@ class PlaybackSessionService : MediaSessionService() {
         PlaybackServiceOwner.publish(
             PlaybackEngineEvent.Stopped(
                 player.currentPosition * TICKS_PER_MILLISECOND,
-                !player.playWhenReady,
+                player.isPausedForReporting(),
             ),
         )
     }
 }
+
+private fun Player.isPausedForReporting(): Boolean =
+    !playWhenReady || playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE
 
 internal fun playbackHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .followRedirects(false)

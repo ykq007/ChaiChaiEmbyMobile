@@ -1,7 +1,11 @@
 package dev.chaichai.mobile
 
+import androidx.activity.ComponentActivity
+import androidx.activity.BackEventCompat
+import android.view.View
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.ComposeAccessibilityValidator
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -17,6 +21,8 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.platform.LocalDensity
 import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.MediaPlaybackRequest
 import dev.chaichai.mobile.core.contracts.PlaybackCoordinator
@@ -30,16 +36,21 @@ import dev.chaichai.mobile.core.contracts.TrackQualifier
 import dev.chaichai.mobile.design.system.ChaiChaiTheme
 import dev.chaichai.mobile.feature.playback.PlaybackHost
 import dev.chaichai.mobile.platform.adaptive.PlaybackSafePane
-import dev.chaichai.mobile.platform.adaptive.PlaybackTracksLayout
 import dev.chaichai.mobile.platform.adaptive.PlaybackTracksPresentation
+import dev.chaichai.mobile.platform.adaptive.PlaybackWindowLayout
+import dev.chaichai.mobile.platform.adaptive.PlaybackSystemBars
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import androidx.test.espresso.accessibility.AccessibilityChecks
+import com.google.android.apps.common.testing.accessibility.framework.AccessibilityViewCheckResult
+import org.hamcrest.Description
+import org.hamcrest.TypeSafeMatcher
 
 class PlaybackFlowTest {
-    @get:Rule val compose = createComposeRule()
+    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     @Test
     fun familiar_cinema_controls_seek_exit_and_toggle_adaptive_affordances() {
@@ -130,9 +141,10 @@ class PlaybackFlowTest {
                 PlaybackHost(
                     playback,
                     Modifier.size(1000.dp, 700.dp),
-                    tracksLayout = PlaybackTracksLayout(
-                        PlaybackTracksPresentation.AnchoredSide,
+                    windowLayout = PlaybackWindowLayout(
                         PlaybackSafePane.WholeWindow,
+                        PlaybackSystemBars.Visible,
+                        PlaybackTracksPresentation.AnchoredSide,
                     ),
                 )
             }
@@ -153,9 +165,10 @@ class PlaybackFlowTest {
                 PlaybackHost(
                     playback,
                     Modifier.size(1000.dp, 700.dp),
-                    tracksLayout = PlaybackTracksLayout(
-                        PlaybackTracksPresentation.ModalBottom,
+                    windowLayout = PlaybackWindowLayout(
                         PlaybackSafePane.Right(500),
+                        PlaybackSystemBars.Visible,
+                        PlaybackTracksPresentation.ModalBottom,
                     ),
                 )
             }
@@ -177,9 +190,10 @@ class PlaybackFlowTest {
                 ChaiChaiTheme(reducedMotion = true) {
                     PlaybackHost(
                         playback,
-                        tracksLayout = PlaybackTracksLayout(
-                            PlaybackTracksPresentation.ModalBottom,
+                        windowLayout = PlaybackWindowLayout(
                             PlaybackSafePane.Right(140),
+                            PlaybackSystemBars.Visible,
+                            PlaybackTracksPresentation.ModalBottom,
                         ),
                     )
                 }
@@ -223,6 +237,141 @@ class PlaybackFlowTest {
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
     }
 
+    @Test
+    fun hinge_keeps_all_essential_controls_together_on_the_safe_pane() {
+        val playback = FakePlayback()
+        compose.setContent {
+            ChaiChaiTheme(reducedMotion = true) {
+                PlaybackHost(
+                    playback,
+                    Modifier.size(400.dp, 700.dp),
+                    windowLayout = PlaybackWindowLayout(PlaybackSafePane.Right(180), PlaybackSystemBars.Visible),
+                )
+            }
+        }
+
+        val pane = compose.onNodeWithTag("playback-controls", useUnmergedTree = true)
+            .getUnclippedBoundsInRoot()
+        assertTrue(pane.left >= 220.dp)
+        compose.onNodeWithContentDescription("Back to details").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Change orientation").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Fullscreen").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Tracks").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Rewind 10 seconds").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Pause").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Forward 30 seconds").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Playback position 1:00 of 12:00").assertExists()
+    }
+
+    @Test
+    fun large_text_keeps_transport_tracks_and_timeline_reachable_without_motion() {
+        val playback = FakePlayback()
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(1f, fontScale = 2f)) {
+                ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback, Modifier.size(360.dp, 640.dp)) }
+            }
+        }
+
+        compose.onNodeWithContentDescription("Pause").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Tracks").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Playback position 1:00 of 12:00").assertExists()
+    }
+
+    @Test
+    fun accessibility_exploration_keeps_controls_visible_after_video_tap() {
+        val playback = FakePlayback()
+        compose.setContent {
+            ChaiChaiTheme(reducedMotion = true) {
+                PlaybackHost(playback, keepControlsVisible = true)
+            }
+        }
+
+        compose.onNodeWithTag("playback-screen").performClick()
+
+        compose.onNodeWithContentDescription("Pause").assertIsDisplayed()
+        assertEquals(0, playback.toggleControlsCount)
+    }
+
+    @Test
+    fun talkback_traversal_is_header_then_transport_then_timeline() {
+        compose.setContent {
+            ChaiChaiTheme(reducedMotion = true) { PlaybackHost(FakePlayback()) }
+        }
+
+        compose.onNodeWithTag("playback-controls", useUnmergedTree = true)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.IsTraversalGroup, true))
+        compose.onNodeWithTag("playback-header", useUnmergedTree = true)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 0f))
+        compose.onNodeWithTag("playback-transport", useUnmergedTree = true)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 1f))
+        compose.onNodeWithTag("playback-timeline", useUnmergedTree = true)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 2f))
+    }
+
+    @Test
+    fun playback_controls_pass_automated_compose_accessibility_checks() {
+        val validator = AccessibilityChecks.enable()
+            .setRunChecksFromRootView(true)
+            .setSuppressingResultMatcher(
+                object : TypeSafeMatcher<AccessibilityViewCheckResult>() {
+                    override fun describeTo(description: Description) {
+                        description.appendText("Compose host view's virtual-node label false positive")
+                    }
+
+                    override fun matchesSafely(result: AccessibilityViewCheckResult): Boolean =
+                        result.view?.javaClass?.name == "androidx.compose.ui.platform.AndroidComposeView" &&
+                            result.sourceCheckClass.simpleName == "SpeakableTextPresentCheck"
+                },
+            )
+        try {
+            compose.setComposeAccessibilityValidator(
+                object : ComposeAccessibilityValidator {
+                    override fun check(view: View) = validator.check(view)
+                },
+            )
+            compose.setContent {
+                ChaiChaiTheme(reducedMotion = true) { PlaybackHost(FakePlayback()) }
+            }
+
+            // Compose invokes the configured validator before semantics actions.
+            compose.onNodeWithContentDescription("Pause").performClick()
+            compose.onNodeWithContentDescription("Tracks").performClick()
+            compose.onNodeWithTag("tracks-bottom-sheet", useUnmergedTree = true).assertExists()
+        } finally {
+            AccessibilityChecks.disable()
+        }
+    }
+
+    @Test
+    fun back_dismisses_tracks_before_exiting_playback() {
+        val playback = FakePlayback()
+        compose.setContent { ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback) } }
+        compose.onNodeWithContentDescription("Tracks").performClick()
+
+        predictiveBack(cancel = true)
+        compose.waitForIdle()
+        compose.onNodeWithTag("tracks-bottom-sheet", useUnmergedTree = true).assertExists()
+        assertEquals(0, playback.exitCount)
+
+        predictiveBack(cancel = false)
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("tracks-bottom-sheet", useUnmergedTree = true).assertDoesNotExist()
+        assertEquals(0, playback.exitCount)
+        predictiveBack(cancel = false)
+        compose.waitForIdle()
+        assertEquals(1, playback.exitCount)
+    }
+
+    private fun predictiveBack(cancel: Boolean) {
+        compose.activityRule.scenario.onActivity {
+            val dispatcher = it.onBackPressedDispatcher
+            dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 0f, 0f, BackEventCompat.EDGE_LEFT))
+            dispatcher.dispatchOnBackProgressed(BackEventCompat(20f, 0f, 0.5f, BackEventCompat.EDGE_LEFT))
+            if (cancel) dispatcher.dispatchOnBackCancelled() else dispatcher.onBackPressed()
+        }
+    }
+
     private class FakePlayback : NoOpPlaybackCoordinator() {
         val mutableState = MutableStateFlow<PlaybackState>(
             PlaybackState.Active(MediaIdentity("server", "movie"), "Arrival", 600_000_000, 7_200_000_000, false),
@@ -233,12 +382,19 @@ class PlaybackFlowTest {
         var playPauseCount = 0
         var exitCount = 0
         var retryCount = 0
+        var toggleControlsCount = 0
         var selection: PlaybackTrackSelection? = null
         override fun submit(request: MediaPlaybackRequest) = Unit
         override fun seekBy(deltaTicks: Long) { seekDelta += deltaTicks }
         override fun playPause() { playPauseCount++ }
         override fun exit() { exitCount++ }
         override fun retry() { retryCount++ }
+        override fun toggleControls() {
+            toggleControlsCount++
+            mutableState.value = (mutableState.value as PlaybackState.Active).copy(
+                controlsVisible = !(mutableState.value as PlaybackState.Active).controlsVisible,
+            )
+        }
         override fun selectTrack(selection: PlaybackTrackSelection) { this.selection = selection }
     }
 

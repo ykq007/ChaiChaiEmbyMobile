@@ -80,26 +80,34 @@ class AdaptiveNavigationPolicyTest {
     @Test
     fun `playback tracks use anchored side sheet only for expanded usable width`() {
         assertEquals(
-            PlaybackTracksLayout(PlaybackTracksPresentation.ModalBottom, PlaybackSafePane.WholeWindow),
-            AdaptiveNavigationPolicy.playbackTracks(WindowCharacteristics(839, 700)),
+            PlaybackWindowLayout(
+                PlaybackSafePane.WholeWindow,
+                PlaybackSystemBars.Immersive,
+                PlaybackTracksPresentation.ModalBottom,
+            ),
+            AdaptiveNavigationPolicy.playbackWindowLayout(WindowCharacteristics(839, 700)),
         )
         assertEquals(
-            PlaybackTracksLayout(PlaybackTracksPresentation.AnchoredSide, PlaybackSafePane.WholeWindow),
-            AdaptiveNavigationPolicy.playbackTracks(WindowCharacteristics(840, 700)),
+            PlaybackWindowLayout(
+                PlaybackSafePane.WholeWindow,
+                PlaybackSystemBars.Immersive,
+                PlaybackTracksPresentation.AnchoredSide,
+            ),
+            AdaptiveNavigationPolicy.playbackWindowLayout(WindowCharacteristics(840, 700)),
         )
     }
 
     @Test
     fun `playback tracks choose one unobstructed pane around separating hinges`() {
         assertEquals(
-            PlaybackTracksLayout(PlaybackTracksPresentation.ModalBottom, PlaybackSafePane.Right(420)),
-            AdaptiveNavigationPolicy.playbackTracks(
+            PlaybackWindowLayout(PlaybackSafePane.Right(420), PlaybackSystemBars.Visible),
+            AdaptiveNavigationPolicy.playbackWindowLayout(
                 WindowCharacteristics(420, 700, true, listOf(380, 420)),
             ),
         )
         assertEquals(
-            PlaybackTracksLayout(PlaybackTracksPresentation.ModalBottom, PlaybackSafePane.Top(390)),
-            AdaptiveNavigationPolicy.playbackTracks(
+            PlaybackWindowLayout(PlaybackSafePane.Top(390), PlaybackSystemBars.Immersive),
+            AdaptiveNavigationPolicy.playbackWindowLayout(
                 WindowCharacteristics(
                     800, 390, hasSeparatingHorizontalHinge = true,
                     horizontalPaneHeightsDp = listOf(390, 280),
@@ -107,4 +115,17 @@ class AdaptiveNavigationPolicyTest {
             ),
         )
     }
+
+    @Test
+    fun `compact landscape playback is immersive while portrait remains supported`() {
+        assertEquals(
+            PlaybackWindowLayout(PlaybackSafePane.WholeWindow, PlaybackSystemBars.Immersive),
+            AdaptiveNavigationPolicy.playbackWindowLayout(WindowCharacteristics(800, 420)),
+        )
+        assertEquals(
+            PlaybackWindowLayout(PlaybackSafePane.WholeWindow, PlaybackSystemBars.Visible),
+            AdaptiveNavigationPolicy.playbackWindowLayout(WindowCharacteristics(420, 800)),
+        )
+    }
+
 }

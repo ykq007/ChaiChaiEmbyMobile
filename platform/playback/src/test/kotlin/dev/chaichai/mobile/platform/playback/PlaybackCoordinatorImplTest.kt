@@ -145,6 +145,67 @@ class PlaybackCoordinatorImplTest {
     }
 
     @Test
+    fun `audio focus or noisy output interruption updates the active session without renegotiation`() = runTest {
+        val gateway = FakeGateway()
+        val engine = FakeEngine()
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
+            MediaIdentity("server", "movie"), HomeScope("server", "user"), "Arrival",
+        ))
+        runCurrent()
+
+        engine.positionTicks = 450_000_000
+        engine.isPaused = true
+        engine.eventsFlow.emit(
+            PlaybackEngineEvent.Progress(
+                dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Pause,
+                450_000_000,
+                true,
+            ),
+        )
+        runCurrent()
+
+        val active = coordinator.state.value as PlaybackState.Active
+        assertEquals(MediaIdentity("server", "movie"), active.identity)
+        assertEquals(450_000_000, active.positionTicks)
+        assertTrue(active.isPaused)
+        assertFalse(coordinator.isPlaying.value)
+        assertEquals(1, gateway.requests.size)
+        coordinator.close()
+    }
+
+    @Test
+    fun `service owned background event reports its snapshot and leaves playback active`() = runTest {
+        val gateway = FakeGateway()
+        val engine = FakeEngine()
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
+            MediaIdentity("server", "movie"), HomeScope("server", "user"), "Arrival",
+        ))
+        runCurrent()
+        coordinator.toggleControls()
+        assertFalse((coordinator.state.value as PlaybackState.Active).controlsVisible)
+        engine.positionTicks = 700_000_000
+
+        engine.eventsFlow.emit(
+            PlaybackEngineEvent.Progress(
+                dev.chaichai.mobile.platform.server.PlaybackProgressEvent.TimeUpdate,
+                700_000_000,
+                false,
+            ),
+        )
+        runCurrent()
+
+        val background = gateway.reports.last()
+        assertEquals(PlaybackReportKind.Progress, background.kind)
+        assertEquals(700_000_000, background.positionTicks)
+        assertTrue(coordinator.state.value is PlaybackState.Active)
+        assertFalse((coordinator.state.value as PlaybackState.Active).controlsVisible)
+        assertEquals(0, engine.stopCount)
+        coordinator.close()
+    }
+
+    @Test
     fun `playing is reported before service control events are enabled`() = runTest {
         val gateway = FakeGateway()
         val engine = FakeEngine()
@@ -407,6 +468,7 @@ class PlaybackCoordinatorImplTest {
         var prepareFailure: Exception? = null
         var autoReady = true
         var acknowledgedPlaying = false
+        var stopCount = 0
         val preparePauseStates = mutableListOf<Boolean>()
         override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean) {
             prepareFailure?.let { throw it }
@@ -432,6 +494,7 @@ class PlaybackCoordinatorImplTest {
             ))
         }
         override suspend fun stop() {
+            stopCount++
             eventsFlow.emit(PlaybackEngineEvent.Stopped(positionTicks, isPaused))
         }
     }

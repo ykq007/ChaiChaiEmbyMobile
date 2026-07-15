@@ -40,7 +40,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,11 +51,14 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.traversalIndex
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.lazy.LazyColumn
@@ -69,13 +71,14 @@ import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
 import dev.chaichai.mobile.core.contracts.PlaybackTrackType
 import dev.chaichai.mobile.core.contracts.TrackDelivery
 import dev.chaichai.mobile.core.contracts.TrackQualifier
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import dev.chaichai.mobile.platform.adaptive.PlaybackSafePane
-import dev.chaichai.mobile.platform.adaptive.PlaybackTracksLayout
 import dev.chaichai.mobile.platform.adaptive.PlaybackTracksPresentation
+import dev.chaichai.mobile.platform.adaptive.PlaybackWindowLayout
+import dev.chaichai.mobile.platform.adaptive.PlaybackSystemBars
 import java.util.Locale
 
 @Composable
@@ -85,34 +88,49 @@ fun PlaybackHost(
     onToggleOrientation: () -> Unit = {},
     onToggleFullscreen: () -> Unit = {},
     onPlaybackEnded: () -> Unit = {},
-    tracksLayout: PlaybackTracksLayout = PlaybackTracksLayout(
-        PlaybackTracksPresentation.ModalBottom,
+    windowLayout: PlaybackWindowLayout = PlaybackWindowLayout(
         PlaybackSafePane.WholeWindow,
+        PlaybackSystemBars.Visible,
     ),
+    keepControlsVisible: Boolean = false,
 ) {
     val state by coordinator.state.collectAsState()
+    val playbackKey = (state as? PlaybackState.Active)?.identity?.let { "${it.serverId}:${it.itemId}" } ?: "none"
+    var showTracks by rememberSaveable(playbackKey) { mutableStateOf(false) }
     LaunchedEffect(state) {
         if (state is PlaybackState.Exited || state is PlaybackState.Failed) onPlaybackEnded()
     }
-    DisposableEffect(Unit) { onDispose(onPlaybackEnded) }
-    BackHandler(enabled = state !is PlaybackState.Idle && state !is PlaybackState.Exited) { coordinator.exit() }
+    PredictiveBackHandler(enabled = state !is PlaybackState.Idle && state !is PlaybackState.Exited) { progress ->
+        progress.collect { }
+        if (showTracks) showTracks = false else coordinator.exit()
+    }
     when (val snapshot = state) {
         PlaybackState.Idle, is PlaybackState.Exited -> Unit
-        is PlaybackState.Negotiating -> PlaybackLoading(snapshot.title, coordinator::exit, modifier)
+        is PlaybackState.Negotiating -> PlaybackLoading(
+            snapshot.title, coordinator::exit, windowLayout, modifier,
+        )
         is PlaybackState.Active -> PlaybackControls(
-            snapshot, coordinator, onToggleOrientation, onToggleFullscreen, tracksLayout, modifier,
+            snapshot, coordinator, onToggleOrientation, onToggleFullscreen,
+            windowLayout, keepControlsVisible, showTracks, { showTracks = it }, modifier,
         )
         is PlaybackState.Failed -> PlaybackFailure(snapshot, coordinator, modifier)
     }
 }
 
 @Composable
-private fun PlaybackLoading(title: String, onBack: () -> Unit, modifier: Modifier) {
-    Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing)) {
-        BackButton(onBack, Modifier.align(Alignment.TopStart))
-        Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-            CircularProgressIndicator()
-            Text(if (title.isBlank()) "Preparing playback" else "Preparing $title", color = MaterialTheme.colorScheme.onSurface)
+private fun PlaybackLoading(
+    title: String,
+    onBack: () -> Unit,
+    windowLayout: PlaybackWindowLayout,
+    modifier: Modifier,
+) {
+    Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
+        Box(safePane(windowLayout.safePane).windowInsetsPadding(WindowInsets.safeDrawing)) {
+            BackButton(onBack, Modifier.align(Alignment.TopStart))
+            Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator()
+                Text(if (title.isBlank()) "Preparing playback" else "Preparing $title", color = MaterialTheme.colorScheme.onSurface)
+            }
         }
     }
 }
@@ -123,13 +141,18 @@ private fun PlaybackControls(
     coordinator: PlaybackCoordinator,
     onToggleOrientation: () -> Unit,
     onToggleFullscreen: () -> Unit,
-    tracksLayout: PlaybackTracksLayout,
+    windowLayout: PlaybackWindowLayout,
+    keepControlsVisible: Boolean,
+    showTracks: Boolean,
+    onShowTracksChanged: (Boolean) -> Unit,
     modifier: Modifier,
 ) {
-    var showTracks by rememberSaveable(state.identity.serverId, state.identity.itemId) { mutableStateOf(false) }
+    LaunchedEffect(keepControlsVisible, state.controlsVisible) {
+        if (keepControlsVisible && !state.controlsVisible) coordinator.toggleControls()
+    }
     Box(
         modifier.fillMaxSize().then(
-            if (showTracks) Modifier else Modifier.clickable(
+            if (showTracks || keepControlsVisible) Modifier else Modifier.clickable(
                 onClickLabel = if (state.controlsVisible) "Hide playback controls" else "Show playback controls",
                 onClick = coordinator::toggleControls,
             ),
@@ -137,39 +160,29 @@ private fun PlaybackControls(
     ) {
         if (!state.controlsVisible) return@Box
         Column(
-            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(12.dp).then(
+            safePane(windowLayout.safePane)
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .padding(12.dp)
+                .testTag("playback-controls")
+                .semantics { isTraversalGroup = true }
+                .then(
                 if (showTracks) Modifier.clearAndSetSemantics { } else Modifier,
             ),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                BackButton(coordinator::exit)
-                Text(state.title.ifBlank { "Now playing" }, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-                IconButton(onClick = onToggleOrientation, modifier = Modifier.heightIn(min = 48.dp)) {
-                    Icon(Icons.Default.ScreenRotation, "Change orientation", tint = MaterialTheme.colorScheme.onSurface)
-                }
-                IconButton(onClick = onToggleFullscreen, modifier = Modifier.heightIn(min = 48.dp)) {
-                    Icon(Icons.Default.Fullscreen, "Fullscreen", tint = MaterialTheme.colorScheme.onSurface)
-                }
-                IconButton(onClick = { showTracks = true }, modifier = Modifier.heightIn(min = 48.dp)) {
-                    Icon(Icons.Default.Subtitles, "Tracks", tint = MaterialTheme.colorScheme.onSurface)
-                }
+            Box(Modifier.fillMaxWidth().testTag("playback-header").semantics { traversalIndex = 0f }) {
+                PlaybackHeader(
+                    state.title,
+                    coordinator::exit,
+                    onToggleOrientation,
+                    onToggleFullscreen,
+                    onTracks = { onShowTracksChanged(true) },
+                )
             }
-            Row(
-                Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterHorizontally),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton({ coordinator.seekBy(-10 * TICKS_PER_SECOND) }, Modifier.heightIn(min = 64.dp)) {
-                    Icon(Icons.Default.SkipPrevious, "Rewind 10 seconds", tint = MaterialTheme.colorScheme.onSurface)
-                }
-                IconButton(coordinator::playPause, Modifier.heightIn(min = 64.dp)) {
-                    Icon(if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, if (state.isPaused) "Play" else "Pause", tint = MaterialTheme.colorScheme.onSurface)
-                }
-                IconButton({ coordinator.seekBy(30 * TICKS_PER_SECOND) }, Modifier.heightIn(min = 64.dp)) {
-                    Icon(Icons.Default.SkipNext, "Forward 30 seconds", tint = MaterialTheme.colorScheme.onSurface)
-                }
+            Box(Modifier.fillMaxWidth().testTag("playback-transport").semantics { traversalIndex = 1f }) {
+                PrimaryTransport(state, coordinator)
             }
-            Column {
+            Column(Modifier.testTag("playback-timeline").semantics { traversalIndex = 2f }) {
                 Slider(
                     value = state.positionTicks.toFloat(),
                     onValueChange = { coordinator.seekTo(it.toLong()) },
@@ -185,11 +198,10 @@ private fun PlaybackControls(
             }
         }
         if (showTracks) {
-            BackHandler { showTracks = false }
             TracksSurface(
                 state = state,
-                layout = tracksLayout,
-                onDismiss = { showTracks = false },
+                layout = windowLayout,
+                onDismiss = { onShowTracksChanged(false) },
                 onSelect = coordinator::selectTrack,
             )
         }
@@ -197,9 +209,88 @@ private fun PlaybackControls(
 }
 
 @Composable
+private fun PrimaryTransport(state: PlaybackState.Active, coordinator: PlaybackCoordinator) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(
+                if (maxWidth < 240.dp) 0.dp else 28.dp,
+                Alignment.CenterHorizontally,
+            ),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton({ coordinator.seekBy(-10 * TICKS_PER_SECOND) }, Modifier.size(48.dp)) {
+                Icon(Icons.Default.SkipPrevious, "Rewind 10 seconds", tint = MaterialTheme.colorScheme.onSurface)
+            }
+            IconButton(coordinator::playPause, Modifier.size(48.dp)) {
+                Icon(
+                    if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                    if (state.isPaused) "Play" else "Pause",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            IconButton({ coordinator.seekBy(30 * TICKS_PER_SECOND) }, Modifier.size(48.dp)) {
+                Icon(Icons.Default.SkipNext, "Forward 30 seconds", tint = MaterialTheme.colorScheme.onSurface)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaybackHeader(
+    title: String,
+    onBack: () -> Unit,
+    onToggleOrientation: () -> Unit,
+    onToggleFullscreen: () -> Unit,
+    onTracks: () -> Unit,
+) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val titleContent: @Composable (Modifier) -> Unit = { titleModifier ->
+            Text(
+                title.ifBlank { "Now playing" },
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = titleModifier,
+            )
+        }
+        val secondaryControls: @Composable () -> Unit = {
+            IconButton(onClick = onToggleOrientation, modifier = Modifier.size(48.dp)) {
+                Icon(Icons.Default.ScreenRotation, "Change orientation", tint = MaterialTheme.colorScheme.onSurface)
+            }
+            IconButton(onClick = onToggleFullscreen, modifier = Modifier.size(48.dp)) {
+                Icon(Icons.Default.Fullscreen, "Fullscreen", tint = MaterialTheme.colorScheme.onSurface)
+            }
+            IconButton(onClick = onTracks, modifier = Modifier.size(48.dp)) {
+                Icon(Icons.Default.Subtitles, "Tracks", tint = MaterialTheme.colorScheme.onSurface)
+            }
+        }
+        if (maxWidth < 360.dp) {
+            Column(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    BackButton(onBack)
+                    titleContent(Modifier.weight(1f))
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) { secondaryControls() }
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                BackButton(onBack)
+                titleContent(Modifier.weight(1f))
+                secondaryControls()
+            }
+        }
+    }
+}
+
+@Composable
 private fun TracksSurface(
     state: PlaybackState.Active,
-    layout: PlaybackTracksLayout,
+    layout: PlaybackWindowLayout,
     onDismiss: () -> Unit,
     onSelect: (PlaybackTrackSelection) -> Unit,
 ) {
@@ -211,7 +302,7 @@ private fun TracksSurface(
     BoxWithConstraints(
         safePane(layout.safePane)
             .testTag(
-                if (layout.presentation == PlaybackTracksPresentation.AnchoredSide) {
+                if (layout.tracksPresentation == PlaybackTracksPresentation.AnchoredSide) {
                     "tracks-side-sheet"
                 } else {
                     "tracks-bottom-sheet"
@@ -230,7 +321,7 @@ private fun TracksSurface(
         Surface(
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 6.dp,
-            modifier = if (layout.presentation == PlaybackTracksPresentation.AnchoredSide) {
+            modifier = if (layout.tracksPresentation == PlaybackTracksPresentation.AnchoredSide) {
                 Modifier.align(Alignment.CenterEnd).width(400.dp).fillMaxHeight()
                     .windowInsetsPadding(WindowInsets.safeDrawing)
             } else {

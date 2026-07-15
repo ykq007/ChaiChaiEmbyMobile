@@ -92,10 +92,10 @@ import dev.chaichai.mobile.core.contracts.ServerSetupState
 import dev.chaichai.mobile.platform.adaptive.AdaptiveNavigationPolicy
 import dev.chaichai.mobile.platform.adaptive.ContentWidthClass
 import dev.chaichai.mobile.platform.adaptive.NavigationPlacement
-import dev.chaichai.mobile.platform.adaptive.PlaybackTracksLayout
 import dev.chaichai.mobile.platform.adaptive.PlaybackTracksPresentation
 import dev.chaichai.mobile.platform.adaptive.PlaybackSafePane
 import dev.chaichai.mobile.platform.adaptive.WindowCharacteristics
+import dev.chaichai.mobile.platform.adaptive.PlaybackSystemBars
 import kotlin.math.roundToInt
 import kotlin.math.max
 import kotlinx.coroutines.launch
@@ -168,6 +168,8 @@ fun MobileApp(
     onTogglePlaybackOrientation: () -> Unit = {},
     onTogglePlaybackFullscreen: () -> Unit = {},
     onPlaybackEnded: () -> Unit = {},
+    onPlaybackSystemBarsChanged: (PlaybackSystemBars) -> Unit = {},
+    keepPlaybackControlsVisible: Boolean = false,
 ) {
     val serverSetup = boundaries.serverSetup
     val setupState = serverSetup?.state?.collectAsState()?.value
@@ -330,7 +332,14 @@ fun MobileApp(
             )
         }
         }
-        val tracksLayout = AdaptiveNavigationPolicy.playbackTracks(window)
+        val playbackWindowLayout = AdaptiveNavigationPolicy.playbackWindowLayout(window)
+        val playbackSystemBars = if (
+            playbackWindowLayout.systemBars == PlaybackSystemBars.Immersive &&
+            (playbackState is PlaybackState.Negotiating || playbackState is PlaybackState.Active)
+        ) PlaybackSystemBars.Immersive else PlaybackSystemBars.Visible
+        LaunchedEffect(playbackSystemBars) {
+            onPlaybackSystemBarsChanged(playbackSystemBars)
+        }
         if (playbackState is PlaybackState.Active) Media3VideoSurface(Modifier.fillMaxSize())
         PlaybackHost(
             boundaries.playback,
@@ -338,7 +347,8 @@ fun MobileApp(
             onTogglePlaybackOrientation,
             onTogglePlaybackFullscreen,
             onPlaybackEnded,
-            tracksLayout = tracksLayout,
+            windowLayout = playbackWindowLayout,
+            keepControlsVisible = keepPlaybackControlsVisible,
         )
         }
 }

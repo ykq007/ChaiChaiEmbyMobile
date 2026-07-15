@@ -29,10 +29,13 @@ sealed interface PlaybackSafePane {
     data class Bottom(val heightDp: Int) : PlaybackSafePane
 }
 
-data class PlaybackTracksLayout(
-    val presentation: PlaybackTracksPresentation,
+data class PlaybackWindowLayout(
     val safePane: PlaybackSafePane,
+    val systemBars: PlaybackSystemBars,
+    val tracksPresentation: PlaybackTracksPresentation = PlaybackTracksPresentation.ModalBottom,
 )
+
+enum class PlaybackSystemBars { Visible, Immersive }
 
 object AdaptiveNavigationPolicy {
     private const val RailMinimumWidthDp = 600
@@ -64,8 +67,27 @@ object AdaptiveNavigationPolicy {
         },
     )
 
-    fun playbackTracks(window: WindowCharacteristics): PlaybackTracksLayout {
-        val pane = when {
+    fun playbackWindowLayout(window: WindowCharacteristics): PlaybackWindowLayout {
+        val pane = playbackSafePane(window)
+        return PlaybackWindowLayout(
+            safePane = pane,
+            systemBars = if (window.usableWidthDp > window.usableHeightDp) {
+                PlaybackSystemBars.Immersive
+            } else {
+                PlaybackSystemBars.Visible
+            },
+            tracksPresentation = if (
+                pane == PlaybackSafePane.WholeWindow && window.usableWidthDp >= ExpandedMinimumWidthDp
+            ) {
+                PlaybackTracksPresentation.AnchoredSide
+            } else {
+                PlaybackTracksPresentation.ModalBottom
+            },
+        )
+    }
+
+    private fun playbackSafePane(window: WindowCharacteristics): PlaybackSafePane =
+        when {
             window.hasSeparatingVerticalHinge && window.verticalPaneWidthsDp.size == 2 -> {
                 val (left, right) = window.verticalPaneWidthsDp
                 if (left >= right) PlaybackSafePane.Left(left) else PlaybackSafePane.Right(right)
@@ -76,13 +98,4 @@ object AdaptiveNavigationPolicy {
             }
             else -> PlaybackSafePane.WholeWindow
         }
-        return PlaybackTracksLayout(
-            presentation = if (pane == PlaybackSafePane.WholeWindow && window.usableWidthDp >= ExpandedMinimumWidthDp) {
-                PlaybackTracksPresentation.AnchoredSide
-            } else {
-                PlaybackTracksPresentation.ModalBottom
-            },
-            safePane = pane,
-        )
-    }
 }
