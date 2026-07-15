@@ -6,7 +6,6 @@ import android.net.NetworkCapabilities
 import dev.chaichai.mobile.core.contracts.AppBoundaries
 import dev.chaichai.mobile.core.contracts.AppClock
 import dev.chaichai.mobile.core.contracts.ConnectivityMonitor
-import dev.chaichai.mobile.core.contracts.PlaybackCoordinator
 import dev.chaichai.mobile.core.contracts.ServerSetupState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -18,6 +17,10 @@ import dev.chaichai.mobile.platform.server.EmbyAuthenticator
 import dev.chaichai.mobile.platform.server.EmbyProbe
 import dev.chaichai.mobile.platform.server.KeystoreSessionVault
 import dev.chaichai.mobile.platform.server.ServerSetupCoordinator
+import dev.chaichai.mobile.platform.server.EmbyPlaybackGateway
+import dev.chaichai.mobile.platform.playback.Media3ServicePlaybackEngine
+import dev.chaichai.mobile.platform.playback.PlaybackCoordinatorImpl
+import dev.chaichai.mobile.platform.playback.androidPlaybackCapabilities
 import dev.chaichai.mobile.platform.server.createRoomHomeCache
 import dev.chaichai.mobile.platform.server.createRoomMovieCache
 import dev.chaichai.mobile.platform.server.createRoomSeriesCache
@@ -69,9 +72,12 @@ object ProductionBoundariesModule {
         val online = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
         return AppBoundaries(
             gateway = gateway,
-            playback = object : PlaybackCoordinator {
-                override val isPlaying = MutableStateFlow(false)
-            },
+            playback = PlaybackCoordinatorImpl(
+                applicationScope,
+                EmbyPlaybackGateway(vault, deviceId = deviceId),
+                Media3ServicePlaybackEngine(context),
+                androidPlaybackCapabilities(),
+            ),
             clock = AppClock { Instant.now() },
             connectivity = object : ConnectivityMonitor {
                 override val isOnline = MutableStateFlow(online)

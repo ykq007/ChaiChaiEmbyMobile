@@ -426,7 +426,7 @@ class SpotlightHomeTest {
         }
         val boundaries = AppBoundaries(
             activeGateway,
-            object : PlaybackCoordinator { override val isPlaying = MutableStateFlow(false) },
+            object : NoOpPlaybackCoordinator() {},
             AppClock { Instant.parse("2026-01-01T00:00:00Z") },
             object : ConnectivityMonitor { override val isOnline = MutableStateFlow(true) },
             homeMediaActions = actionBoundary,

@@ -2,9 +2,13 @@ package dev.chaichai.mobile
 
 import android.animation.ValueAnimator
 import android.os.Bundle
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.window.layout.FoldingFeature
@@ -16,6 +20,7 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @Inject lateinit var boundaries: dev.chaichai.mobile.core.contracts.AppBoundaries
+    private var playbackFullscreen = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,8 +49,33 @@ class MainActivity : ComponentActivity() {
                             },
                         )
                     },
+                    onTogglePlaybackOrientation = ::togglePlaybackOrientation,
+                    onTogglePlaybackFullscreen = ::togglePlaybackFullscreen,
+                    onPlaybackEnded = ::restorePlaybackWindow,
                 )
             }
         }
+    }
+
+    private fun togglePlaybackOrientation() {
+        requestedOrientation = if (resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    private fun togglePlaybackFullscreen() {
+        playbackFullscreen = !playbackFullscreen
+        WindowCompat.getInsetsController(window, window.decorView).run {
+            if (playbackFullscreen) hide(WindowInsetsCompat.Type.systemBars())
+            else show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    private fun restorePlaybackWindow() {
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        playbackFullscreen = false
+        WindowCompat.getInsetsController(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
     }
 }

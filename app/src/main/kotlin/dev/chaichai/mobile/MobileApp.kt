@@ -84,6 +84,9 @@ import dev.chaichai.mobile.feature.search.SearchScreen
 import dev.chaichai.mobile.feature.search.SearchHingePanes
 import dev.chaichai.mobile.feature.settings.SettingsScreen
 import dev.chaichai.mobile.feature.server.setup.ServerSetupScreen
+import dev.chaichai.mobile.feature.playback.PlaybackHost
+import dev.chaichai.mobile.platform.playback.Media3VideoSurface
+import dev.chaichai.mobile.core.contracts.PlaybackState
 import dev.chaichai.mobile.core.contracts.ServerSetupState
 import dev.chaichai.mobile.platform.adaptive.AdaptiveNavigationPolicy
 import dev.chaichai.mobile.platform.adaptive.ContentWidthClass
@@ -158,6 +161,9 @@ fun MobileApp(
     boundaries: AppBoundaries,
     separatingHinge: SeparatingHinge?,
     modifier: Modifier = Modifier,
+    onTogglePlaybackOrientation: () -> Unit = {},
+    onTogglePlaybackFullscreen: () -> Unit = {},
+    onPlaybackEnded: () -> Unit = {},
 ) {
     val serverSetup = boundaries.serverSetup
     val setupState = serverSetup?.state?.collectAsState()?.value
@@ -188,6 +194,7 @@ fun MobileApp(
         ?.takeIf(::isRestorableDestination)
         ?: TopLevelDestination.Home.route
     val homeUiState = rememberHomeUiState()
+    val playbackState by boundaries.playback.state.collectAsState()
     val librarySelection = scopedLibrarySelection
         ?.takeIf { it.scope == activeLibraryScope }
         ?.identity
@@ -196,7 +203,8 @@ fun MobileApp(
             activeLibraryScope?.let { scope -> ScopedLibrarySelection(scope, selected) }
         }
     }
-    BoxWithConstraints(modifier.fillMaxSize()) {
+    Box(modifier.fillMaxSize()) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
         val navController = rememberNavController()
         val density = LocalDensity.current
         val layoutDirection = LocalLayoutDirection.current
@@ -287,6 +295,15 @@ fun MobileApp(
                 adaptiveContentState = adaptiveContentState,
             )
         }
+    }
+    if (playbackState is PlaybackState.Active) Media3VideoSurface(Modifier.fillMaxSize())
+    PlaybackHost(
+        boundaries.playback,
+        Modifier.fillMaxSize(),
+        onTogglePlaybackOrientation,
+        onTogglePlaybackFullscreen,
+        onPlaybackEnded,
+    )
     }
 }
 

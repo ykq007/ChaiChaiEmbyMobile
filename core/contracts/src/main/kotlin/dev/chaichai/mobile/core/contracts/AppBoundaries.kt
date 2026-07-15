@@ -48,7 +48,14 @@ enum class GatewayConnectionState { Disconnected, Connected }
 enum class GatewayAuthenticationStatus { Valid, Expired, Unavailable }
 interface PlaybackCoordinator {
     val isPlaying: StateFlow<Boolean>
-    fun submit(request: MediaPlaybackRequest) = Unit
+    val state: StateFlow<PlaybackState>
+    fun submit(request: MediaPlaybackRequest)
+    fun toggleControls()
+    fun playPause()
+    fun seekBy(deltaTicks: Long)
+    fun seekTo(positionTicks: Long)
+    fun retry()
+    fun exit()
 }
 fun interface AppClock { fun now(): Instant }
 interface ConnectivityMonitor { val isOnline: StateFlow<Boolean> }
@@ -185,6 +192,7 @@ data class MovieDetails(
     val tracks: MovieTrackAvailability = MovieTrackAvailability(),
     val artwork: ArtworkReference? = null,
     val backdrop: ArtworkReference? = null,
+    val scope: HomeScope? = null,
 ) {
     val hasMeaningfulResume: Boolean
         get() = hasMeaningfulResume(playbackPositionTicks, runtimeTicks, played)
@@ -276,17 +284,43 @@ sealed interface EpisodeDetailsState {
 
 sealed interface MediaPlaybackRequest {
     val identity: MediaIdentity
-    val userId: String?
+    val scope: HomeScope
     data class Resume(
         override val identity: MediaIdentity,
         val positionTicks: Long,
-        override val userId: String? = null,
+        override val scope: HomeScope,
+        val title: String = "",
     ) : MediaPlaybackRequest
     data class PlayFromBeginning(
         override val identity: MediaIdentity,
-        override val userId: String? = null,
+        override val scope: HomeScope,
+        val title: String = "",
     ) : MediaPlaybackRequest
 }
+
+enum class PlaybackFailureKind(val canRetry: Boolean) {
+    UnsupportedMedia(false),
+    TranscodingRefused(false),
+    SourceUnavailable(true),
+    AuthorizationExpired(false),
+    Network(true),
+}
+
+sealed interface PlaybackState {
+    data object Idle : PlaybackState
+    data class Negotiating(val title: String) : PlaybackState
+    data class Active(
+        val identity: MediaIdentity,
+        val title: String,
+        val positionTicks: Long,
+        val runtimeTicks: Long,
+        val isPaused: Boolean,
+        val controlsVisible: Boolean = true,
+    ) : PlaybackState
+    data class Failed(val reason: PlaybackFailureKind) : PlaybackState
+    data class Exited(val identity: MediaIdentity) : PlaybackState
+}
+
 typealias MoviePlaybackRequest = MediaPlaybackRequest
 
 enum class ArtworkKind(val routeName: String) { Primary("Primary"), Backdrop("Backdrop") }
