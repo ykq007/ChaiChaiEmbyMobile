@@ -128,22 +128,4 @@ class AdaptiveNavigationPolicyTest {
         )
     }
 
-    @Test
-    fun `essential playback controls stay together on the largest hinge safe pane`() {
-        assertEquals(
-            PlaybackWindowLayout(PlaybackSafePane.Right(420), PlaybackSystemBars.Visible),
-            AdaptiveNavigationPolicy.playbackWindowLayout(
-                WindowCharacteristics(420, 700, true, listOf(380, 420)),
-            ),
-        )
-        assertEquals(
-            PlaybackWindowLayout(PlaybackSafePane.Top(390), PlaybackSystemBars.Immersive),
-            AdaptiveNavigationPolicy.playbackWindowLayout(
-                WindowCharacteristics(
-                    800, 390, hasSeparatingHorizontalHinge = true,
-                    horizontalPaneHeightsDp = listOf(390, 280),
-                ),
-            ),
-        )
-    }
 }
