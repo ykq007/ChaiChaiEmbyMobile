@@ -171,9 +171,10 @@ class AuthenticatedEmbyGateway(
         } ?: MovieLibraryState.Loading
         val refreshed = try {
             val genres = fetchGenres(session)
-            val page = fetchMoviePage(session, query, 0)
+            val firstPage = fetchMoviePage(session, query, 0)
             if (!isActiveMovieRequest(scope, generation, session, authentication)) return@withContext
-            val reconciledItems = reconcileRefreshedMovieItems(page, cached)
+            val page = revalidateRestoredMoviePages(session, query, firstPage, cached)
+            val reconciledItems = page.items
             movieCache.saveLibrary(scope, query, reconciledItems, page.totalCount, genres)
             if (!isActiveMovieRequest(scope, generation, session, authentication)) return@withContext
             when {
@@ -548,16 +549,28 @@ class AuthenticatedEmbyGateway(
 
     private data class MoviePage(val items: List<MoviePoster>, val totalCount: Int)
 
-    private fun reconcileRefreshedMovieItems(
+    private suspend fun revalidateRestoredMoviePages(
+        session: StoredSession,
+        query: MovieLibraryQuery,
         firstPage: MoviePage,
         cached: MovieLibrarySnapshot?,
-    ): List<MoviePoster> {
-        if (firstPage.items.isEmpty()) return emptyList()
+    ): MoviePage {
+        if (firstPage.items.isEmpty()) return firstPage
         val cachedItems = cached?.items.orEmpty()
         val cachedFirstPageIdentities = cachedItems.take(MoviePageSize).map { it.identity }
         val refreshedFirstPageIdentities = firstPage.items.map { it.identity }
-        if (cachedFirstPageIdentities != refreshedFirstPageIdentities) return firstPage.items
-        return (firstPage.items + cachedItems.drop(MoviePageSize)).take(firstPage.totalCount)
+        if (cachedFirstPageIdentities != refreshedFirstPageIdentities) return firstPage
+        val refreshedItems = firstPage.items.toMutableList()
+        var totalCount = firstPage.totalCount
+        var offset = MoviePageSize
+        while (offset < minOf(cachedItems.size, totalCount)) {
+            val page = fetchMoviePage(session, query, offset)
+            refreshedItems += page.items
+            totalCount = page.totalCount
+            if (page.items.isEmpty()) break
+            offset += MoviePageSize
+        }
+        return MoviePage(refreshedItems.take(totalCount), totalCount)
     }
 
     private data class ActiveCredential(val serverId: String, val userId: String, val token: String) {

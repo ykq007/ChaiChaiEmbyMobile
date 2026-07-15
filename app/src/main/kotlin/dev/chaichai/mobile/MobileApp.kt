@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
@@ -113,6 +115,11 @@ fun MobileApp(
 ) {
     val serverSetup = boundaries.serverSetup
     val setupState = serverSetup?.state?.collectAsState()?.value
+    var librarySelection by rememberSaveable(
+        "mobile-app-library-selection",
+        stateSaver = MovieLibrarySelectionSaver,
+    ) { mutableStateOf<MediaIdentity?>(null) }
+    val libraryGridState = rememberLazyGridState()
     if (serverSetup != null && setupState !is ServerSetupState.Authenticated) {
         ServerSetupScreen(serverSetup, modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing))
         return
@@ -122,10 +129,6 @@ fun MobileApp(
         ?.takeIf(::isRestorableDestination)
         ?: TopLevelDestination.Home.route
     val homeUiState = rememberHomeUiState()
-    var librarySelection by rememberSaveable(
-        "mobile-app-library-selection",
-        stateSaver = MovieLibrarySelectionSaver,
-    ) { mutableStateOf<MediaIdentity?>(null) }
     BoxWithConstraints(modifier.fillMaxSize()) {
         val navController = rememberNavController()
         val density = LocalDensity.current
@@ -155,6 +158,7 @@ fun MobileApp(
                         verticalHingePanes = panes,
                         librarySelection = librarySelection,
                         onLibrarySelectionChanged = { librarySelection = it },
+                        libraryGridState = libraryGridState,
                     )
                     return@BoxWithConstraints
                 }
@@ -169,6 +173,7 @@ fun MobileApp(
                         boundaries, navController, true, restoredDestination, homeUiState,
                         librarySelection = librarySelection,
                         onLibrarySelectionChanged = { librarySelection = it },
+                        libraryGridState = libraryGridState,
                     )
                 }
             }
@@ -187,6 +192,7 @@ fun MobileApp(
                         boundaries, navController, true, restoredDestination, homeUiState,
                         librarySelection = librarySelection,
                         onLibrarySelectionChanged = { librarySelection = it },
+                        libraryGridState = libraryGridState,
                     )
                 }
             }
@@ -195,6 +201,7 @@ fun MobileApp(
                 boundaries, navController, false, restoredDestination, homeUiState,
                 librarySelection = librarySelection,
                 onLibrarySelectionChanged = { librarySelection = it },
+                libraryGridState = libraryGridState,
             )
         }
     }
@@ -210,6 +217,7 @@ private fun AdaptiveShell(
     verticalHingePanes: VerticalHingePanes? = null,
     librarySelection: MediaIdentity?,
     onLibrarySelectionChanged: (MediaIdentity?) -> Unit,
+    libraryGridState: LazyGridState,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -300,6 +308,7 @@ private fun AdaptiveShell(
                         initialSelection = librarySelection,
                         onSelectionChanged = onLibrarySelectionChanged,
                         detailsAuthenticationReturnDestination = TopLevelDestination.Libraries.route,
+                        gridState = libraryGridState,
                         onOpenDetails = { identity ->
                             navController.navigate(identity.movieDetailsRoute())
                         },

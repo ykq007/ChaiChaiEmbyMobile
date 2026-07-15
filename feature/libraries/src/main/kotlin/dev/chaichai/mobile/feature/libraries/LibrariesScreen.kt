@@ -84,10 +84,10 @@ fun LibrariesScreen(
     initialSelection: MediaIdentity? = null,
     onSelectionChanged: (MediaIdentity?) -> Unit = {},
     detailsAuthenticationReturnDestination: String? = null,
+    gridState: LazyGridState = rememberLazyGridState(),
 ) {
     val state by gateway.movieLibrary.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    val gridState = rememberLazyGridState()
     val initialQuery = (gateway.movieLibrary.value as? MovieLibraryState.Ready)?.query ?: MovieLibraryQuery()
     var savedSort by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(initialQuery.sortField.ordinal) }
     var savedDirection by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(initialQuery.sortDirection.ordinal) }
@@ -100,8 +100,21 @@ fun LibrariesScreen(
     var selected by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf(initialSelection)
     }
+    val activeServerId = when (val snapshot = state) {
+        is MovieLibraryState.Ready -> snapshot.scope.serverId
+        is MovieLibraryState.EmptyLibrary -> snapshot.scope.serverId
+        is MovieLibraryState.EmptyFiltered -> snapshot.scope.serverId
+        is MovieLibraryState.Failure -> snapshot.scope?.serverId
+        MovieLibraryState.Loading -> null
+    }
     LaunchedEffect(initialSelection) {
         if (initialSelection != null && selected != initialSelection) selected = initialSelection
+    }
+    LaunchedEffect(activeServerId, selected) {
+        if (activeServerId != null && selected?.serverId != null && selected?.serverId != activeServerId) {
+            selected = null
+            onSelectionChanged(null)
+        }
     }
     LaunchedEffect(gateway) {
         if (gateway.movieLibrary.value is MovieLibraryState.Loading) gateway.refreshMovies(savedQuery)

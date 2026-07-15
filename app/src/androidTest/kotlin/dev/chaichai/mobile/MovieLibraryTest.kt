@@ -169,6 +169,34 @@ class MovieLibraryTest {
     }
 
     @Test
+    fun live_hinge_transition_keeps_the_library_scroll_journey() {
+        val movies = (0 until 100).map {
+            MoviePoster(MediaIdentity("server", "movie-$it"), "Movie $it")
+        }
+        val gateway = FakeMovieGateway(ready().copy(items = movies, totalCount = movies.size))
+        val hinge = androidx.compose.runtime.mutableStateOf<SeparatingHinge?>(null)
+        composeRule.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                themed {
+                    MobileApp(
+                        appBoundaries(gateway, FakePlayback()),
+                        hinge.value,
+                        Modifier.requiredSize(840.dp, 700.dp),
+                    )
+                }
+            }
+        }
+        composeRule.onNodeWithText("Libraries").performClick()
+        composeRule.onNodeWithTag("movie-grid").performScrollToIndex(80)
+
+        composeRule.runOnIdle {
+            hinge.value = SeparatingHinge(400, 0, 420, 700, HingeOrientation.Vertical)
+        }
+
+        composeRule.onNodeWithText("Movie 0").assertDoesNotExist()
+    }
+
+    @Test
     fun expanded_list_detail_selection_preserves_the_collection_scroll_position() {
         val movies = (0 until 100).map {
             MoviePoster(MediaIdentity("server", "movie-$it"), "Movie $it", 2000 + it)
@@ -247,6 +275,29 @@ class MovieLibraryTest {
                 )
             }
         }
+
+        composeRule.onNodeWithText("Language changes everything.").assertIsDisplayed()
+    }
+
+    @Test
+    fun inline_selection_survives_the_real_signed_out_and_reauthenticated_ui_transition() {
+        val gateway = FakeMovieGateway(ready())
+        val setup = RestoredServerSetup()
+        composeRule.setContent {
+            themed {
+                MobileApp(
+                    appBoundaries(gateway, FakePlayback()).copy(serverSetup = setup),
+                    separatingHinge = null,
+                )
+            }
+        }
+        composeRule.onNodeWithText("Libraries").performClick()
+        composeRule.onNodeWithText("Arrival").performClick()
+        composeRule.onNodeWithText("Language changes everything.").assertIsDisplayed()
+
+        composeRule.runOnIdle { setup.signOut() }
+        composeRule.onNodeWithText("Sign in").assertIsDisplayed()
+        composeRule.runOnIdle { setup.restore("libraries") }
 
         composeRule.onNodeWithText("Language changes everything.").assertIsDisplayed()
     }
@@ -397,7 +448,7 @@ class MovieLibraryTest {
         override fun submit(request: MoviePlaybackRequest) { submitted = request }
     }
 
-    private class RestoredServerSetup(returnDestination: String) : ServerSetupBoundary {
+    private class RestoredServerSetup(returnDestination: String? = null) : ServerSetupBoundary {
         override val state = MutableStateFlow<ServerSetupState>(
             ServerSetupState.Authenticated("Cinema", "Ada", returnDestination),
         )
@@ -408,6 +459,12 @@ class MovieLibraryTest {
         override fun authenticate(username: String, password: String) = Unit
         override fun retry() = Unit
         override fun authenticationExpired(requestedDestination: String?) = Unit
+        fun signOut() {
+            state.value = ServerSetupState.SignIn("https://media.example", "Cinema", "Ada")
+        }
+        fun restore(returnDestination: String?) {
+            state.value = ServerSetupState.Authenticated("Cinema", "Ada", returnDestination)
+        }
     }
 
     private companion object {

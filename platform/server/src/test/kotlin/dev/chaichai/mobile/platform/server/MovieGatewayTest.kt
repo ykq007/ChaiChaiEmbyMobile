@@ -259,6 +259,7 @@ class MovieGatewayTest {
             server.start()
             server.enqueue(ok("""{"Items":[]}"""))
             server.enqueue(ok(page("Fresh", 80, 0, 40)))
+            server.enqueue(ok(page("Fresh", 80, 40, 40)))
             val scope = HomeScope("server", "user")
             val query = MovieLibraryQuery(MovieSortField.DateAdded, SortDirection.Descending)
             val cachedItems = (0 until 80).map {
@@ -278,8 +279,51 @@ class MovieGatewayTest {
             val ready = gateway.movieLibrary.value as MovieLibraryState.Ready
             assertEquals(80, ready.items.size)
             assertEquals("Fresh 0", ready.items.first().title)
-            assertEquals("Cached 79", ready.items.last().title)
+            assertEquals("Fresh 79", ready.items.last().title)
             assertEquals(80, cache.loadLibrary(scope, query)!!.items.size)
+        }
+    }
+
+    @Test
+    fun unchanged_first_page_revalidates_tail_deletion_reorder_and_metadata() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(ok("""{"Items":[]}"""))
+            server.enqueue(ok(page("Fresh", 79, 0, 40)))
+            val tailIds = (40 until 80).filterNot { it == 60 }.toMutableList().apply {
+                val index = indexOf(50)
+                this[index] = 51
+                this[index + 1] = 50
+            }
+            server.enqueue(ok(tailIds.joinToString(",", "{\"Items\":[", "],\"TotalRecordCount\":79}") {
+                "{\"Id\":\"movie-$it\",\"Name\":\"Updated $it\"}"
+            }))
+            val scope = HomeScope("server", "user")
+            val query = MovieLibraryQuery(MovieSortField.DateAdded, SortDirection.Descending)
+            val cache = InMemoryMovieCache().apply {
+                saveLibrary(
+                    scope,
+                    query,
+                    (0 until 80).map { MoviePoster(MediaIdentity("server", "movie-$it"), "Cached $it") },
+                    80,
+                    emptyList(),
+                )
+            }
+            val gateway = AuthenticatedEmbyGateway(
+                FakeVault(stored(valid(server.url("/emby").toString()))),
+                movieCache = cache,
+                deviceId = "test-device",
+            )
+
+            gateway.refreshMovies(query)
+
+            val ready = gateway.movieLibrary.value as MovieLibraryState.Ready
+            assertEquals(79, ready.items.size)
+            assertFalse(ready.items.any { it.identity.itemId == "movie-60" })
+            assertEquals(listOf("movie-51", "movie-50"), ready.items.slice(50..51).map { it.identity.itemId })
+            assertEquals("Updated 79", ready.items.last().title)
+            val requests = List(3) { server.takeRequest() }
+            assertEquals("40", requests[2].url.queryParameter("StartIndex"))
         }
     }
 
