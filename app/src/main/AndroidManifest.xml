@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:name=".ChaiChaiApplication"
@@ -11,6 +12,7 @@
         android:icon="@drawable/ic_launcher"
         android:label="ChaiChai"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.ChaiChai"
         tools:targetApi="s">
         <activity

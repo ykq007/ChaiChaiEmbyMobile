@@ -52,6 +52,8 @@ import dev.chaichai.mobile.feature.home.HomeScreen
 import dev.chaichai.mobile.feature.libraries.LibrariesScreen
 import dev.chaichai.mobile.feature.search.SearchScreen
 import dev.chaichai.mobile.feature.settings.SettingsScreen
+import dev.chaichai.mobile.feature.server.setup.ServerSetupScreen
+import dev.chaichai.mobile.core.contracts.ServerSetupState
 import dev.chaichai.mobile.platform.adaptive.AdaptiveNavigationPolicy
 import dev.chaichai.mobile.platform.adaptive.NavigationPlacement
 import dev.chaichai.mobile.platform.adaptive.WindowCharacteristics
@@ -80,6 +82,16 @@ fun MobileApp(
     separatingHinge: SeparatingHinge?,
     modifier: Modifier = Modifier,
 ) {
+    val serverSetup = boundaries.serverSetup
+    val setupState = serverSetup?.state?.collectAsState()?.value
+    if (serverSetup != null && setupState !is ServerSetupState.Authenticated) {
+        ServerSetupScreen(serverSetup, modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing))
+        return
+    }
+    val restoredDestination = (setupState as? ServerSetupState.Authenticated)
+        ?.returnDestination
+        ?.takeIf { route -> TopLevelDestination.entries.any { it.route == route } }
+        ?: TopLevelDestination.Home.route
     BoxWithConstraints(modifier.fillMaxSize()) {
         val navController = rememberNavController()
         val density = LocalDensity.current
@@ -94,7 +106,7 @@ fun MobileApp(
                         .fillMaxHeight()
                         .align(if (useLeft) AbsoluteAlignment.CenterLeft else AbsoluteAlignment.CenterRight),
                 ) {
-                    AdaptiveShell(boundaries, navController, isHingeSeparated = true)
+                    AdaptiveShell(boundaries, navController, isHingeSeparated = true, restoredDestination = restoredDestination)
                 }
             }
 
@@ -108,11 +120,11 @@ fun MobileApp(
                         .height(if (useTop) topHeight else bottomHeight)
                         .align(if (useTop) Alignment.TopCenter else Alignment.BottomCenter),
                 ) {
-                    AdaptiveShell(boundaries, navController, isHingeSeparated = true)
+                    AdaptiveShell(boundaries, navController, isHingeSeparated = true, restoredDestination = restoredDestination)
                 }
             }
 
-            null -> AdaptiveShell(boundaries, navController, isHingeSeparated = false)
+            null -> AdaptiveShell(boundaries, navController, isHingeSeparated = false, restoredDestination = restoredDestination)
         }
     }
 }
@@ -122,6 +134,7 @@ private fun AdaptiveShell(
     boundaries: AppBoundaries,
     navController: NavHostController,
     isHingeSeparated: Boolean,
+    restoredDestination: String,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -165,7 +178,7 @@ private fun AdaptiveShell(
         val content: @Composable (Modifier) -> Unit = { contentModifier ->
             NavHost(
                 navController = navController,
-                startDestination = TopLevelDestination.Home.route,
+                startDestination = restoredDestination,
                 modifier = contentModifier,
                 enterTransition = { if (reducedMotion) EnterTransition.None else fadeIn() },
                 exitTransition = { if (reducedMotion) ExitTransition.None else fadeOut() },

@@ -21,8 +21,10 @@ include(
     ":core:contracts",
     ":design:system",
     ":platform:adaptive",
+    ":platform:server",
     ":feature:home",
     ":feature:libraries",
     ":feature:search",
     ":feature:settings",
+    ":feature:server-setup",
 )

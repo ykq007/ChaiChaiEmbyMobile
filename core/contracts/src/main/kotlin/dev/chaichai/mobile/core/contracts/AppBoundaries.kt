@@ -14,4 +14,5 @@ data class AppBoundaries(
     val playback: PlaybackCoordinator,
     val clock: AppClock,
     val connectivity: ConnectivityMonitor,
+    val serverSetup: ServerSetupBoundary? = null,
 )
