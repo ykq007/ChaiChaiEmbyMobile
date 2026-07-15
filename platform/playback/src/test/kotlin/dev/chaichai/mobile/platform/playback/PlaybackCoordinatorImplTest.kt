@@ -17,6 +17,7 @@ import dev.chaichai.mobile.platform.server.PlaybackMethod
 import dev.chaichai.mobile.platform.server.PlaybackNegotiationResult
 import dev.chaichai.mobile.platform.server.PlaybackReport
 import dev.chaichai.mobile.platform.server.PlaybackReportKind
+import dev.chaichai.mobile.platform.server.PlaybackSessionReference
 import dev.chaichai.mobile.platform.server.ScopedPlaybackRequest
 import dev.chaichai.mobile.platform.server.TranscodeCapability
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -271,8 +272,7 @@ class PlaybackCoordinatorImplTest {
         assertEquals(1_200_000_000, state.positionTicks)
         assertTrue(state.isPaused)
         assertTrue(state.audioTracks.single { it.index == 2 }.isCurrent)
-        assertEquals("source", gateway.requests.last().mediaSourceId)
-        assertEquals("session", gateway.requests.last().playSessionId)
+        assertEquals(PlaybackSessionReference("source", "session"), gateway.requests.last().sessionReference)
         assertEquals(1_200_000_000, gateway.requests.last().startPositionTicks)
         assertEquals(listOf(false, true), engine.preparePauseStates)
         coordinator.close()
@@ -324,7 +324,7 @@ class PlaybackCoordinatorImplTest {
             }
             return result ?: PlaybackNegotiationResult.Ready(
                 AuthoritativePlaybackPlan(
-                    request, "source", "session", PlaybackMethod.DirectPlay,
+                    request, PlaybackSessionReference("source", "session"), PlaybackMethod.DirectPlay,
                     "https://example.test/video".toHttpUrl(), emptyMap(), 7_200_000_000,
                     request.trackSelection?.audioStreamIndex,
                     request.trackSelection?.subtitleStreamIndex,

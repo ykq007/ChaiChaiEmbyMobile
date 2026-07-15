@@ -328,7 +328,7 @@ data class PlaybackTrackSelection(
     val subtitleStreamIndex: Int? = null,
 ) {
     companion object {
-        val SubtitleOff = PlaybackTrackSelection()
+        fun subtitleOff(audioStreamIndex: Int?) = PlaybackTrackSelection(audioStreamIndex, null)
     }
 }
 

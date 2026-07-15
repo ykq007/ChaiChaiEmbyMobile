@@ -91,6 +91,9 @@ import dev.chaichai.mobile.core.contracts.ServerSetupState
 import dev.chaichai.mobile.platform.adaptive.AdaptiveNavigationPolicy
 import dev.chaichai.mobile.platform.adaptive.ContentWidthClass
 import dev.chaichai.mobile.platform.adaptive.NavigationPlacement
+import dev.chaichai.mobile.platform.adaptive.PlaybackTracksLayout
+import dev.chaichai.mobile.platform.adaptive.PlaybackTracksPresentation
+import dev.chaichai.mobile.platform.adaptive.PlaybackSafePane
 import dev.chaichai.mobile.platform.adaptive.WindowCharacteristics
 import kotlin.math.roundToInt
 import kotlin.math.max
@@ -296,15 +299,54 @@ fun MobileApp(
             )
         }
     }
-    if (playbackState is PlaybackState.Active) Media3VideoSurface(Modifier.fillMaxSize())
-    PlaybackHost(
-        boundaries.playback,
-        Modifier.fillMaxSize(),
-        onTogglePlaybackOrientation,
-        onTogglePlaybackFullscreen,
-        onPlaybackEnded,
-        hasSeparatingHinge = separatingHinge != null,
-    )
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val density = LocalDensity.current
+        val layoutDirection = LocalLayoutDirection.current
+        val safeDrawing = WindowInsets.safeDrawing
+        val leftInsetDp = with(density) { safeDrawing.getLeft(density, layoutDirection).toDp().value }
+        val rightInsetDp = with(density) { safeDrawing.getRight(density, layoutDirection).toDp().value }
+        val topInsetDp = with(density) { safeDrawing.getTop(density).toDp().value }
+        val bottomInsetDp = with(density) { safeDrawing.getBottom(density).toDp().value }
+        val usableWidth = (maxWidth.value - leftInsetDp - rightInsetDp).coerceAtLeast(0f)
+        val usableHeight = (maxHeight.value - topInsetDp - bottomInsetDp).coerceAtLeast(0f)
+        val playbackWindow = when (separatingHinge?.orientation) {
+            HingeOrientation.Vertical -> {
+                val start = (with(density) { separatingHinge.leftPx.toDp().value } - leftInsetDp).coerceAtLeast(0f)
+                val end = (
+                    maxWidth.value - with(density) { separatingHinge.rightPx.toDp().value } - rightInsetDp
+                ).coerceAtLeast(0f)
+                WindowCharacteristics(
+                    usableWidthDp = max(start, end).roundToInt(),
+                    usableHeightDp = usableHeight.roundToInt(),
+                    hasSeparatingVerticalHinge = true,
+                    verticalPaneWidthsDp = listOf(start.roundToInt(), end.roundToInt()),
+                )
+            }
+            HingeOrientation.Horizontal -> {
+                val top = (with(density) { separatingHinge.topPx.toDp().value } - topInsetDp).coerceAtLeast(0f)
+                val bottom = (
+                    maxHeight.value - with(density) { separatingHinge.bottomPx.toDp().value } - bottomInsetDp
+                ).coerceAtLeast(0f)
+                WindowCharacteristics(
+                    usableWidthDp = usableWidth.roundToInt(),
+                    usableHeightDp = max(top, bottom).roundToInt(),
+                    hasSeparatingHorizontalHinge = true,
+                    horizontalPaneHeightsDp = listOf(top.roundToInt(), bottom.roundToInt()),
+                )
+            }
+            null -> WindowCharacteristics(usableWidth.roundToInt(), usableHeight.roundToInt())
+        }
+        val tracksLayout = AdaptiveNavigationPolicy.playbackTracks(playbackWindow)
+        if (playbackState is PlaybackState.Active) Media3VideoSurface(Modifier.fillMaxSize())
+        PlaybackHost(
+            boundaries.playback,
+            Modifier.fillMaxSize(),
+            onTogglePlaybackOrientation,
+            onTogglePlaybackFullscreen,
+            onPlaybackEnded,
+            tracksLayout = tracksLayout,
+        )
+    }
     }
 }
 

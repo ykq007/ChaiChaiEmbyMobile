@@ -21,6 +21,9 @@ import dev.chaichai.mobile.core.contracts.TrackDelivery
 import dev.chaichai.mobile.core.contracts.TrackQualifier
 import dev.chaichai.mobile.design.system.ChaiChaiTheme
 import dev.chaichai.mobile.feature.playback.PlaybackHost
+import dev.chaichai.mobile.platform.adaptive.PlaybackSafePane
+import dev.chaichai.mobile.platform.adaptive.PlaybackTracksLayout
+import dev.chaichai.mobile.platform.adaptive.PlaybackTracksPresentation
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -100,6 +103,7 @@ class PlaybackFlowTest {
         }
 
         compose.onNodeWithContentDescription("Tracks").performClick()
+        compose.onNodeWithContentDescription("Pause").assertDoesNotExist()
         compose.onNodeWithText("Audio").assertIsDisplayed()
         compose.onNodeWithText("English · AAC · Stereo · Default · Current").assertIsDisplayed()
         compose.onNodeWithText("Japanese · AAC · Commentary").assertIsDisplayed()
@@ -114,7 +118,14 @@ class PlaybackFlowTest {
         val playback = FakePlayback().apply { mutableState.value = activeWithTracks() }
         compose.setContent {
             ChaiChaiTheme(reducedMotion = false) {
-                PlaybackHost(playback, Modifier.size(1000.dp, 700.dp))
+                PlaybackHost(
+                    playback,
+                    Modifier.size(1000.dp, 700.dp),
+                    tracksLayout = PlaybackTracksLayout(
+                        PlaybackTracksPresentation.AnchoredSide,
+                        PlaybackSafePane.WholeWindow,
+                    ),
+                )
             }
         }
 
@@ -130,7 +141,14 @@ class PlaybackFlowTest {
         val playback = FakePlayback()
         compose.setContent {
             ChaiChaiTheme(reducedMotion = true) {
-                PlaybackHost(playback, Modifier.size(1000.dp, 700.dp), hasSeparatingHinge = true)
+                PlaybackHost(
+                    playback,
+                    Modifier.size(1000.dp, 700.dp),
+                    tracksLayout = PlaybackTracksLayout(
+                        PlaybackTracksPresentation.ModalBottom,
+                        PlaybackSafePane.End(500),
+                    ),
+                )
             }
         }
 
@@ -154,7 +172,7 @@ class PlaybackFlowTest {
         compose.onNodeWithContentDescription("Tracks").performClick()
 
         compose.onNodeWithText("That track couldn't be applied. The previous track is still playing.").assertIsDisplayed()
-        compose.onNodeWithText("Arrival").assertIsDisplayed()
+        compose.onNodeWithTag("playback-screen", useUnmergedTree = true).assertExists()
     }
 
     private class FakePlayback : NoOpPlaybackCoordinator() {

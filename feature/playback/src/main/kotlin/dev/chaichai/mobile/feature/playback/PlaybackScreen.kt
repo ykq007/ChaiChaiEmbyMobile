@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,6 +52,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.selection.selectable
@@ -66,6 +68,11 @@ import dev.chaichai.mobile.core.contracts.TrackDelivery
 import dev.chaichai.mobile.core.contracts.TrackQualifier
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import dev.chaichai.mobile.platform.adaptive.PlaybackSafePane
+import dev.chaichai.mobile.platform.adaptive.PlaybackTracksLayout
+import dev.chaichai.mobile.platform.adaptive.PlaybackTracksPresentation
 import java.util.Locale
 
 @Composable
@@ -75,7 +82,10 @@ fun PlaybackHost(
     onToggleOrientation: () -> Unit = {},
     onToggleFullscreen: () -> Unit = {},
     onPlaybackEnded: () -> Unit = {},
-    hasSeparatingHinge: Boolean = false,
+    tracksLayout: PlaybackTracksLayout = PlaybackTracksLayout(
+        PlaybackTracksPresentation.ModalBottom,
+        PlaybackSafePane.WholeWindow,
+    ),
 ) {
     val state by coordinator.state.collectAsState()
     LaunchedEffect(state) {
@@ -87,7 +97,7 @@ fun PlaybackHost(
         PlaybackState.Idle, is PlaybackState.Exited -> Unit
         is PlaybackState.Negotiating -> PlaybackLoading(snapshot.title, coordinator::exit, modifier)
         is PlaybackState.Active -> PlaybackControls(
-            snapshot, coordinator, onToggleOrientation, onToggleFullscreen, hasSeparatingHinge, modifier,
+            snapshot, coordinator, onToggleOrientation, onToggleFullscreen, tracksLayout, modifier,
         )
         is PlaybackState.Failed -> PlaybackFailure(snapshot, coordinator, modifier)
     }
@@ -110,19 +120,23 @@ private fun PlaybackControls(
     coordinator: PlaybackCoordinator,
     onToggleOrientation: () -> Unit,
     onToggleFullscreen: () -> Unit,
-    hasSeparatingHinge: Boolean,
+    tracksLayout: PlaybackTracksLayout,
     modifier: Modifier,
 ) {
     var showTracks by rememberSaveable(state.identity.serverId, state.identity.itemId) { mutableStateOf(false) }
-    BoxWithConstraints(
-        modifier.fillMaxSize().clickable(
-            onClickLabel = if (state.controlsVisible) "Hide playback controls" else "Show playback controls",
-            onClick = coordinator::toggleControls,
+    Box(
+        modifier.fillMaxSize().then(
+            if (showTracks) Modifier else Modifier.clickable(
+                onClickLabel = if (state.controlsVisible) "Hide playback controls" else "Show playback controls",
+                onClick = coordinator::toggleControls,
+            ),
         ).testTag("playback-screen"),
     ) {
-        if (!state.controlsVisible) return@BoxWithConstraints
+        if (!state.controlsVisible) return@Box
         Column(
-            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(12.dp),
+            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(12.dp).then(
+                if (showTracks) Modifier.clearAndSetSemantics { } else Modifier,
+            ),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -171,8 +185,7 @@ private fun PlaybackControls(
             BackHandler { showTracks = false }
             TracksSurface(
                 state = state,
-                useSideSheet = maxWidth >= 840.dp && !hasSeparatingHinge,
-                maxSheetHeight = maxHeight,
+                layout = tracksLayout,
                 onDismiss = { showTracks = false },
                 onSelect = coordinator::selectTrack,
             )
@@ -183,12 +196,25 @@ private fun PlaybackControls(
 @Composable
 private fun TracksSurface(
     state: PlaybackState.Active,
-    useSideSheet: Boolean,
-    maxSheetHeight: androidx.compose.ui.unit.Dp,
+    layout: PlaybackTracksLayout,
     onDismiss: () -> Unit,
     onSelect: (PlaybackTrackSelection) -> Unit,
 ) {
-    Box(Modifier.fillMaxSize().testTag(if (useSideSheet) "tracks-side-sheet" else "tracks-bottom-sheet")) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    ) {
+    Box(Modifier.fillMaxSize()) {
+    BoxWithConstraints(
+        safePane(layout.safePane)
+            .testTag(
+                if (layout.presentation == PlaybackTracksPresentation.AnchoredSide) {
+                    "tracks-side-sheet"
+                } else {
+                    "tracks-bottom-sheet"
+                },
+            ),
+    ) {
         Box(
             Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.68f)).clickable(
                 interactionSource = remember { MutableInteractionSource() },
@@ -201,11 +227,11 @@ private fun TracksSurface(
         Surface(
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 6.dp,
-            modifier = if (useSideSheet) {
+            modifier = if (layout.presentation == PlaybackTracksPresentation.AnchoredSide) {
                 Modifier.align(Alignment.CenterEnd).width(400.dp).fillMaxHeight()
                     .windowInsetsPadding(WindowInsets.safeDrawing)
             } else {
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth().heightIn(max = maxSheetHeight * 0.78f)
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().heightIn(max = maxHeight * 0.78f)
                     .windowInsetsPadding(WindowInsets.safeDrawing)
             },
         ) {
@@ -231,6 +257,10 @@ private fun TracksSurface(
                     }
                 }
                 LazyColumn(Modifier.padding(top = 8.dp)) {
+                    val currentSelection = PlaybackTrackSelection(
+                        audioStreamIndex = state.audioTracks.firstOrNull { it.isCurrent }?.index,
+                        subtitleStreamIndex = state.subtitleTracks.firstOrNull { it.isCurrent }?.index,
+                    )
                     item { TrackSectionHeading("Audio") }
                     if (state.audioTracks.isEmpty()) {
                         item { MissingTracks("No audio tracks available") }
@@ -238,10 +268,7 @@ private fun TracksSurface(
                         items(state.audioTracks, key = { "audio-${it.index}" }) { track ->
                             TrackRow(trackLabel(track), track.isCurrent, state.isChangingTrack) {
                                 onSelect(
-                                    PlaybackTrackSelection(
-                                        audioStreamIndex = track.index,
-                                        subtitleStreamIndex = state.subtitleTracks.firstOrNull { it.isCurrent }?.index,
-                                    ),
+                                    currentSelection.copy(audioStreamIndex = track.index),
                                 )
                             }
                         }
@@ -251,20 +278,14 @@ private fun TracksSurface(
                         val isOff = state.subtitleTracks.none { it.isCurrent }
                         TrackRow(if (isOff) "Off · Current" else "Off", isOff, state.isChangingTrack) {
                             onSelect(
-                                PlaybackTrackSelection(
-                                    audioStreamIndex = state.audioTracks.firstOrNull { it.isCurrent }?.index,
-                                    subtitleStreamIndex = null,
-                                ),
+                                currentSelection.copy(subtitleStreamIndex = null),
                             )
                         }
                     }
                     items(state.subtitleTracks, key = { "subtitle-${it.index}" }) { track ->
                         TrackRow(trackLabel(track), track.isCurrent, state.isChangingTrack) {
                             onSelect(
-                                PlaybackTrackSelection(
-                                    audioStreamIndex = state.audioTracks.firstOrNull { it.isCurrent }?.index,
-                                    subtitleStreamIndex = track.index,
-                                ),
+                                currentSelection.copy(subtitleStreamIndex = track.index),
                             )
                         }
                     }
@@ -275,6 +296,16 @@ private fun TracksSurface(
             }
         }
     }
+    }
+    }
+}
+
+private fun BoxScope.safePane(pane: PlaybackSafePane): Modifier = when (pane) {
+    PlaybackSafePane.WholeWindow -> Modifier.fillMaxSize()
+    is PlaybackSafePane.Start -> Modifier.align(Alignment.CenterStart).width(pane.widthDp.dp).fillMaxHeight()
+    is PlaybackSafePane.End -> Modifier.align(Alignment.CenterEnd).width(pane.widthDp.dp).fillMaxHeight()
+    is PlaybackSafePane.Top -> Modifier.align(Alignment.TopCenter).fillMaxWidth().height(pane.heightDp.dp)
+    is PlaybackSafePane.Bottom -> Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(pane.heightDp.dp)
 }
 
 @Composable

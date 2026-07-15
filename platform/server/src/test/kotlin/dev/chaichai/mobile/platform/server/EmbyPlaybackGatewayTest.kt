@@ -123,9 +123,8 @@ class EmbyPlaybackGatewayTest {
             }"""))
             val request = beginning().copy(
                 start = PlaybackStart.Resume(1_234_000_000),
-                trackSelection = PlaybackTrackSelection.SubtitleOff,
-                mediaSourceId = "source",
-                playSessionId = "original-session",
+                trackSelection = PlaybackTrackSelection.subtitleOff(audioStreamIndex = null),
+                sessionReference = PlaybackSessionReference("source", "original-session"),
             )
 
             val plan = (gateway(server).negotiate(request, capabilities()) as PlaybackNegotiationResult.Ready).plan
@@ -137,6 +136,34 @@ class EmbyPlaybackGatewayTest {
             assertTrue(body.contains("\"MediaSourceId\":\"source\""))
             assertTrue(body.contains("\"PlaySessionId\":\"original-session\""))
             assertTrue(body.contains("\"SubtitleStreamIndex\":-1"))
+        }
+    }
+
+    @Test
+    fun `renegotiation exposes server fallback stream indices as authoritative`() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(json("""{
+              "PlaySessionId":"continued","MediaSources":[{
+                "Id":"source","SupportsDirectPlay":true,"DirectStreamUrl":"/emby/video",
+                "DefaultAudioStreamIndex":1,"DefaultSubtitleStreamIndex":5,
+                "MediaStreams":[
+                  {"Index":1,"Type":"Audio"},{"Index":2,"Type":"Audio"},
+                  {"Index":4,"Type":"Subtitle"},{"Index":5,"Type":"Subtitle"}
+                ]
+              }]
+            }"""))
+            val request = beginning().copy(
+                trackSelection = PlaybackTrackSelection(audioStreamIndex = 2, subtitleStreamIndex = 4),
+                sessionReference = PlaybackSessionReference("source", "original"),
+            )
+
+            val plan = (gateway(server).negotiate(request, capabilities()) as PlaybackNegotiationResult.Ready).plan
+
+            assertEquals(1, plan.audioStreamIndex)
+            assertEquals(5, plan.subtitleStreamIndex)
+            assertTrue(plan.audioTracks.single { it.index == 1 }.isCurrent)
+            assertTrue(plan.subtitleTracks.single { it.index == 5 }.isCurrent)
         }
     }
 
@@ -185,7 +212,7 @@ class EmbyPlaybackGatewayTest {
             repeat(3) { server.enqueue(MockResponse.Builder().code(204).build()) }
             val gateway = gateway(server)
             val plan = AuthoritativePlaybackPlan(
-                beginning(), "source", "session", PlaybackMethod.Remux,
+                beginning(), PlaybackSessionReference("source", "session"), PlaybackMethod.Remux,
                 server.url("/emby/video"), mapOf("private" to "header"), 7_200_000_000, 1, null,
             )
 

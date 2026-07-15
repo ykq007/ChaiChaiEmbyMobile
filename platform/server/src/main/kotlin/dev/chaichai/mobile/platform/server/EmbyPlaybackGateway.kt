@@ -31,8 +31,7 @@ data class ScopedPlaybackRequest(
     val identity: MediaIdentity,
     val start: PlaybackStart,
     val trackSelection: PlaybackTrackSelection? = null,
-    val mediaSourceId: String? = null,
-    val playSessionId: String? = null,
+    val sessionReference: PlaybackSessionReference? = null,
 ) {
     init { require(scope.serverId == identity.serverId) { "Playback scope and media identity must share a server" } }
     val serverId: String get() = scope.serverId
@@ -49,14 +48,23 @@ data class PlaybackCapabilities(
     val transcodeProfiles: List<TranscodeCapability>,
     val subtitleProfiles: List<SubtitleCapability> = emptyList(),
 )
+
+data class PlaybackSessionReference(
+    val mediaSourceId: String,
+    val playSessionId: String,
+) {
+    init {
+        require(mediaSourceId.isNotBlank()) { "Media source identity is required" }
+        require(playSessionId.isNotBlank()) { "Play session identity is required" }
+    }
+}
 data class SubtitleCapability(val format: String, val method: String)
 
 enum class PlaybackMethod { DirectPlay, Remux, Transcode }
 
 data class AuthoritativePlaybackPlan(
     val request: ScopedPlaybackRequest,
-    val mediaSourceId: String,
-    val playSessionId: String,
+    val sessionReference: PlaybackSessionReference,
     val method: PlaybackMethod,
     val url: HttpUrl,
     val headers: Map<String, String>,
@@ -65,7 +73,10 @@ data class AuthoritativePlaybackPlan(
     val subtitleStreamIndex: Int?,
     val audioTracks: List<PlaybackTrack> = emptyList(),
     val subtitleTracks: List<PlaybackTrack> = emptyList(),
-)
+) {
+    val mediaSourceId: String get() = sessionReference.mediaSourceId
+    val playSessionId: String get() = sessionReference.playSessionId
+}
 
 enum class PlaybackFailure {
     UnsupportedMedia,
@@ -126,8 +137,8 @@ class EmbyPlaybackGateway(
                 },
                 subtitleProfiles = capabilities.subtitleProfiles.map { SubtitleProfileDto(it.format, it.method) },
             ),
-            mediaSourceId = request.mediaSourceId,
-            playSessionId = request.playSessionId,
+            mediaSourceId = request.sessionReference?.mediaSourceId,
+            playSessionId = request.sessionReference?.playSessionId,
             audioStreamIndex = request.trackSelection?.audioStreamIndex,
             subtitleStreamIndex = request.trackSelection?.let { it.subtitleStreamIndex ?: SUBTITLES_OFF_INDEX },
         )
@@ -164,26 +175,20 @@ class EmbyPlaybackGateway(
                     PlaybackNegotiationResult.Ready(
                         AuthoritativePlaybackPlan(
                             request = request,
-                            mediaSourceId = selected.source.id,
-                            playSessionId = playSessionId,
+                            sessionReference = PlaybackSessionReference(selected.source.id, playSessionId),
                             method = selected.method,
                             url = selected.url,
                             headers = selected.source.requiredHttpHeaders,
                             runtimeTicks = selected.source.runtimeTicks ?: 0,
-                            audioStreamIndex = request.trackSelection?.audioStreamIndex
-                                ?: selected.source.defaultAudioStreamIndex,
-                            subtitleStreamIndex = if (request.trackSelection != null) {
-                                request.trackSelection.subtitleStreamIndex
-                            } else selected.source.defaultSubtitleStreamIndex,
+                            audioStreamIndex = selected.source.defaultAudioStreamIndex,
+                            subtitleStreamIndex = selected.source.defaultSubtitleStreamIndex,
                             audioTracks = selected.source.tracks(
                                 PlaybackTrackType.Audio,
-                                request.trackSelection?.audioStreamIndex
-                                    ?: selected.source.defaultAudioStreamIndex,
+                                selected.source.defaultAudioStreamIndex,
                             ),
                             subtitleTracks = selected.source.tracks(
                                 PlaybackTrackType.Subtitle,
-                                if (request.trackSelection != null) request.trackSelection.subtitleStreamIndex
-                                else selected.source.defaultSubtitleStreamIndex,
+                                selected.source.defaultSubtitleStreamIndex,
                             ),
                         ),
                     )

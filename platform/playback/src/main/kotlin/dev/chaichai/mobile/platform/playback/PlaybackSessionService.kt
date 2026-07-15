@@ -112,9 +112,9 @@ class PlaybackSessionService : MediaSessionService() {
         val source = DefaultMediaSourceFactory(dataSourceFactory).createMediaSource(
             MediaItem.Builder().setUri(plan.url.toString()).setMediaId(plan.request.itemId).build(),
         )
+        player.playWhenReady = !startPaused
         player.setMediaSource(source, startPositionTicks / TICKS_PER_MILLISECOND)
         player.prepare()
-        player.playWhenReady = !startPaused
     }
 
     internal fun acknowledgePlayingReported() { reportControlEvents = true }

@@ -197,8 +197,7 @@ class PlaybackCoordinatorImpl(
             val request = previousPlan.request.copy(
                 start = PlaybackStart.Resume(positionTicks),
                 trackSelection = selection,
-                mediaSourceId = previousPlan.mediaSourceId,
-                playSessionId = previousPlan.playSessionId,
+                sessionReference = previousPlan.sessionReference,
             )
             when (val result = gateway.negotiate(request, capabilities)) {
                 is PlaybackNegotiationResult.Failed -> publishTrackRollback(current, previousPlan)
