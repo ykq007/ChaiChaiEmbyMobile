@@ -32,6 +32,7 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -39,6 +40,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
@@ -57,7 +59,9 @@ import androidx.navigation.compose.rememberNavController
 import dev.chaichai.mobile.core.contracts.AppBoundaries
 import dev.chaichai.mobile.core.contracts.GatewayAuthenticationStatus
 import dev.chaichai.mobile.core.contracts.HomeMediaAction
+import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.MediaIdentity
+import dev.chaichai.mobile.core.contracts.MovieLibraryState
 import dev.chaichai.mobile.design.system.EmptyDestination
 import dev.chaichai.mobile.design.system.LocalReducedMotion
 import dev.chaichai.mobile.feature.home.HomeScreen
@@ -68,7 +72,6 @@ import dev.chaichai.mobile.feature.libraries.LibrariesScreen
 import dev.chaichai.mobile.feature.libraries.HingeListDetailPanes
 import dev.chaichai.mobile.feature.libraries.LibraryWindowClass
 import dev.chaichai.mobile.feature.libraries.MovieDetailsScreen
-import dev.chaichai.mobile.feature.libraries.MovieLibrarySelectionSaver
 import dev.chaichai.mobile.feature.search.SearchScreen
 import dev.chaichai.mobile.feature.settings.SettingsScreen
 import dev.chaichai.mobile.feature.server.setup.ServerSetupScreen
@@ -107,6 +110,29 @@ private data class VerticalHingePanes(
     val rightWidth: Dp,
 )
 
+private data class ScopedLibrarySelection(
+    val scope: HomeScope,
+    val identity: MediaIdentity,
+)
+
+private val ScopedLibrarySelectionSaver = Saver<ScopedLibrarySelection?, List<String>>(
+    save = { selection -> selection?.let { listOf(it.scope.serverId, it.scope.userId, it.identity.itemId) } },
+    restore = {
+        ScopedLibrarySelection(
+            HomeScope(it[0], it[1]),
+            MediaIdentity(it[0], it[2]),
+        )
+    },
+)
+
+private fun MovieLibraryState.scopeOrNull(): HomeScope? = when (this) {
+    is MovieLibraryState.Ready -> scope
+    is MovieLibraryState.EmptyLibrary -> scope
+    is MovieLibraryState.EmptyFiltered -> scope
+    is MovieLibraryState.Failure -> scope
+    MovieLibraryState.Loading -> null
+}
+
 @Composable
 fun MobileApp(
     boundaries: AppBoundaries,
@@ -115,11 +141,20 @@ fun MobileApp(
 ) {
     val serverSetup = boundaries.serverSetup
     val setupState = serverSetup?.state?.collectAsState()?.value
-    var librarySelection by rememberSaveable(
+    val movieLibraryState by boundaries.gateway.movieLibrary.collectAsState()
+    val activeLibraryScope = movieLibraryState.scopeOrNull()
+    var scopedLibrarySelection by rememberSaveable(
         "mobile-app-library-selection",
-        stateSaver = MovieLibrarySelectionSaver,
-    ) { mutableStateOf<MediaIdentity?>(null) }
+        stateSaver = ScopedLibrarySelectionSaver,
+    ) { mutableStateOf<ScopedLibrarySelection?>(null) }
     val libraryGridState = rememberLazyGridState()
+    LaunchedEffect(activeLibraryScope, scopedLibrarySelection) {
+        if (activeLibraryScope != null && scopedLibrarySelection?.scope != null &&
+            scopedLibrarySelection?.scope != activeLibraryScope
+        ) {
+            scopedLibrarySelection = null
+        }
+    }
     if (serverSetup != null && setupState !is ServerSetupState.Authenticated) {
         ServerSetupScreen(serverSetup, modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing))
         return
@@ -129,6 +164,14 @@ fun MobileApp(
         ?.takeIf(::isRestorableDestination)
         ?: TopLevelDestination.Home.route
     val homeUiState = rememberHomeUiState()
+    val librarySelection = scopedLibrarySelection
+        ?.takeIf { it.scope == activeLibraryScope }
+        ?.identity
+    val onLibrarySelectionChanged: (MediaIdentity?) -> Unit = { identity ->
+        scopedLibrarySelection = identity?.let { selected ->
+            activeLibraryScope?.let { scope -> ScopedLibrarySelection(scope, selected) }
+        }
+    }
     BoxWithConstraints(modifier.fillMaxSize()) {
         val navController = rememberNavController()
         val density = LocalDensity.current
@@ -157,7 +200,7 @@ fun MobileApp(
                         boundaries, navController, true, restoredDestination, homeUiState,
                         verticalHingePanes = panes,
                         librarySelection = librarySelection,
-                        onLibrarySelectionChanged = { librarySelection = it },
+                        onLibrarySelectionChanged = onLibrarySelectionChanged,
                         libraryGridState = libraryGridState,
                     )
                     return@BoxWithConstraints
@@ -172,7 +215,7 @@ fun MobileApp(
                     AdaptiveShell(
                         boundaries, navController, true, restoredDestination, homeUiState,
                         librarySelection = librarySelection,
-                        onLibrarySelectionChanged = { librarySelection = it },
+                        onLibrarySelectionChanged = onLibrarySelectionChanged,
                         libraryGridState = libraryGridState,
                     )
                 }
@@ -191,7 +234,7 @@ fun MobileApp(
                     AdaptiveShell(
                         boundaries, navController, true, restoredDestination, homeUiState,
                         librarySelection = librarySelection,
-                        onLibrarySelectionChanged = { librarySelection = it },
+                        onLibrarySelectionChanged = onLibrarySelectionChanged,
                         libraryGridState = libraryGridState,
                     )
                 }
@@ -200,7 +243,7 @@ fun MobileApp(
             null -> AdaptiveShell(
                 boundaries, navController, false, restoredDestination, homeUiState,
                 librarySelection = librarySelection,
-                onLibrarySelectionChanged = { librarySelection = it },
+                onLibrarySelectionChanged = onLibrarySelectionChanged,
                 libraryGridState = libraryGridState,
             )
         }

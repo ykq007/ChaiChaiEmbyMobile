@@ -167,7 +167,7 @@ class AuthenticatedEmbyGateway(
         val cached = movieCache.loadLibrary(scope, query)
         if (!isActiveMovieRequest(scope, generation, session, authentication)) return@withContext
         mutableMovieLibrary.value = cached?.takeIf { it.items.isNotEmpty() }?.let {
-            MovieLibraryState.Ready(scope, it.items, it.totalCount, query, it.availableGenres)
+            MovieLibraryState.Ready(scope, it.items, it.totalCount, query, it.availableGenres, isRefreshing = true)
         } ?: MovieLibraryState.Loading
         val refreshed = try {
             val genres = fetchGenres(session)
@@ -199,7 +199,7 @@ class AuthenticatedEmbyGateway(
 
     override suspend fun loadNextMoviePage() = withContext(ioDispatcher) {
         val ready = mutableMovieLibrary.value as? MovieLibraryState.Ready ?: return@withContext
-        if (ready.isLoadingMore || ready.items.size >= ready.totalCount) return@withContext
+        if (ready.isRefreshing || ready.isLoadingMore || ready.items.size >= ready.totalCount) return@withContext
         val session = vault.restore()?.takeIf { it.serverId == ready.scope.serverId && it.userId == ready.scope.userId }
             ?: return@withContext
         val generation = movieGeneration
@@ -568,7 +568,7 @@ class AuthenticatedEmbyGateway(
             refreshedItems += page.items
             totalCount = page.totalCount
             if (page.items.isEmpty()) break
-            offset += MoviePageSize
+            offset += page.items.size
         }
         return MoviePage(refreshedItems.take(totalCount), totalCount)
     }

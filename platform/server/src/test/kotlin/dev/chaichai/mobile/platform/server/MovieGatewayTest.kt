@@ -14,6 +14,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -324,6 +326,72 @@ class MovieGatewayTest {
             assertEquals("Updated 79", ready.items.last().title)
             val requests = List(3) { server.takeRequest() }
             assertEquals("40", requests[2].url.queryParameter("StartIndex"))
+        }
+    }
+
+    @Test
+    fun restored_page_revalidation_advances_by_a_short_successful_page_count() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(ok("""{"Items":[]}"""))
+            server.enqueue(ok(page("Fresh", 80, 0, 40)))
+            server.enqueue(ok(page("Fresh", 80, 40, 20)))
+            server.enqueue(ok(page("Fresh", 80, 60, 20)))
+            val scope = HomeScope("server", "user")
+            val query = MovieLibraryQuery(MovieSortField.DateAdded, SortDirection.Descending)
+            val cache = InMemoryMovieCache().apply {
+                saveLibrary(
+                    scope, query,
+                    (0 until 80).map { MoviePoster(MediaIdentity("server", "movie-$it"), "Cached $it") },
+                    80, emptyList(),
+                )
+            }
+            val gateway = AuthenticatedEmbyGateway(
+                FakeVault(stored(valid(server.url("/emby").toString()))), movieCache = cache,
+                deviceId = "test-device",
+            )
+
+            gateway.refreshMovies(query)
+
+            assertEquals(80, (gateway.movieLibrary.value as MovieLibraryState.Ready).items.size)
+            val requests = List(4) { server.takeRequest() }
+            assertEquals("40", requests[2].url.queryParameter("StartIndex"))
+            assertEquals("60", requests[3].url.queryParameter("StartIndex"))
+        }
+    }
+
+    @Test
+    fun pagination_is_ignored_while_a_cached_refresh_is_in_flight() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            val scope = HomeScope("server", "user")
+            val query = MovieLibraryQuery(MovieSortField.DateAdded, SortDirection.Descending)
+            val cache = InMemoryMovieCache().apply {
+                saveLibrary(
+                    scope, query,
+                    (0 until 80).map { MoviePoster(MediaIdentity("server", "movie-$it"), "Cached $it") },
+                    100, emptyList(),
+                )
+            }
+            val gateway = AuthenticatedEmbyGateway(
+                FakeVault(stored(valid(server.url("/emby").toString()))), movieCache = cache,
+                deviceId = "test-device",
+            )
+            val refresh = launch { gateway.refreshMovies(query) }
+            withTimeout(5_000) {
+                while ((gateway.movieLibrary.value as? MovieLibraryState.Ready)?.isRefreshing != true) yield()
+            }
+
+            gateway.loadNextMoviePage()
+            server.enqueue(ok("""{"Items":[]}"""))
+            server.enqueue(ok(page("Fresh", 100, 1, 40)))
+            refresh.join()
+
+            val ready = gateway.movieLibrary.value as MovieLibraryState.Ready
+            assertFalse(ready.isRefreshing)
+            assertEquals(40, ready.items.size)
+            assertEquals("movie-1", ready.items.first().identity.itemId)
+            assertEquals(2, server.requestCount)
         }
     }
 

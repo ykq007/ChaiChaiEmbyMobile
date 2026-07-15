@@ -108,7 +108,7 @@ fun LibrariesScreen(
         MovieLibraryState.Loading -> null
     }
     LaunchedEffect(initialSelection) {
-        if (initialSelection != null && selected != initialSelection) selected = initialSelection
+        if (selected != initialSelection) selected = initialSelection
     }
     LaunchedEffect(activeServerId, selected) {
         if (activeServerId != null && selected?.serverId != null && selected?.serverId != activeServerId) {

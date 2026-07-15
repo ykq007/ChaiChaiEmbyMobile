@@ -76,6 +76,7 @@ sealed interface MovieLibraryState {
         val totalCount: Int,
         val query: MovieLibraryQuery,
         val availableGenres: List<String> = emptyList(),
+        val isRefreshing: Boolean = false,
         val isLoadingMore: Boolean = false,
         val pageFailureMessage: String? = null,
         val refreshFailureMessage: String? = null,

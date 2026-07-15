@@ -295,11 +295,46 @@ class MovieLibraryTest {
         composeRule.onNodeWithText("Arrival").performClick()
         composeRule.onNodeWithText("Language changes everything.").assertIsDisplayed()
 
-        composeRule.runOnIdle { setup.signOut() }
+        composeRule.runOnIdle {
+            gateway.movieLibrary.value = MovieLibraryState.Loading
+            setup.signOut()
+        }
         composeRule.onNodeWithText("Sign in").assertIsDisplayed()
-        composeRule.runOnIdle { setup.restore("libraries") }
+        composeRule.runOnIdle {
+            gateway.movieLibrary.value = ready()
+            setup.restore("libraries")
+        }
 
         composeRule.onNodeWithText("Language changes everything.").assertIsDisplayed()
+    }
+
+    @Test
+    fun same_server_different_user_reauthentication_clears_the_prior_private_selection() {
+        val gateway = FakeMovieGateway(ready())
+        val setup = RestoredServerSetup()
+        composeRule.setContent {
+            themed {
+                MobileApp(
+                    appBoundaries(gateway, FakePlayback()).copy(serverSetup = setup),
+                    separatingHinge = null,
+                )
+            }
+        }
+        composeRule.onNodeWithText("Libraries").performClick()
+        composeRule.onNodeWithText("Arrival").performClick()
+        composeRule.onNodeWithText("Language changes everything.").assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            gateway.movieLibrary.value = MovieLibraryState.Loading
+            setup.signOut()
+        }
+        composeRule.runOnIdle {
+            gateway.movieLibrary.value = ready().copy(scope = HomeScope("server", "other-user"))
+            setup.restore("libraries")
+        }
+
+        composeRule.onNodeWithText("Libraries").assertIsDisplayed()
+        composeRule.onNodeWithText("Language changes everything.").assertDoesNotExist()
     }
 
     @Test
