@@ -204,18 +204,22 @@ private fun SearchResults(
             }
         }
         groups.filter { it.items.isNotEmpty() }.forEach { group ->
+            val traversalBase = group.mediaType.ordinal * 1_000
             item("heading-${group.mediaType.name}") {
                 Text(
                     group.mediaType.title,
                     style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(top = 12.dp).semantics { heading() },
+                    modifier = Modifier.padding(top = 12.dp).semantics {
+                        heading()
+                        traversalIndex = traversalBase.toFloat()
+                    },
                 )
             }
             itemsIndexed(
                 group.items,
                 key = { _, result -> "${result.identity.serverId}:${result.identity.itemId}" },
             ) { index, result ->
-                SearchResultRow(result, group.mediaType.ordinal * 1_000 + index + 1, onSelect)
+                SearchResultRow(result, traversalBase + index + 1, onSelect)
             }
         }
     }

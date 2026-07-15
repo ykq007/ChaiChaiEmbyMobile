@@ -84,6 +84,19 @@ class AggregatedSearchTest {
         listOf("Movies", "Series", "Seasons", "Episodes").forEach {
             composeRule.onNodeWithText(it).assertIsDisplayed()
         }
+        listOf(
+            "Movies" to 0f,
+            "Arrival" to 1f,
+            "Series" to 1_000f,
+            "The Expanse" to 1_001f,
+            "Seasons" to 2_000f,
+            "Season 1" to 2_001f,
+            "Episodes" to 3_000f,
+            "Dulcinea" to 3_001f,
+        ).forEach { (text, index) ->
+            composeRule.onNodeWithText(text)
+                .assert(SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, index))
+        }
         composeRule.onNodeWithText("Arrival")
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 1f))
             .assertHasClickAction()

@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import mockwebserver3.MockResponse
@@ -113,6 +114,45 @@ class SearchGatewayTest {
     }
 
     @Test
+    fun caller_cancellation_does_not_publish_a_failure_state() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(200)
+                    .headersDelay(30, TimeUnit.SECONDS)
+                    .body("""{"Items":[]}""")
+                    .build(),
+            )
+            val gateway = gateway(server)
+            val search = backgroundScope.launch(Dispatchers.Default) { gateway.search("cancel me") }
+            server.takeRequest()
+
+            search.cancelAndJoin()
+
+            assertTrue(gateway.searchState.value is SearchState.Searching)
+        }
+    }
+
+    @Test
+    fun cache_load_failure_is_treated_as_a_miss_and_search_remains_usable() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(json("""{"Items":[{"Id":"movie","Name":"Network result","Type":"Movie"}]}"""))
+            val gateway = AuthenticatedEmbyGateway(
+                FakeVault(stored(valid(server.url("/emby").toString()))),
+                searchCache = ThrowingLoadSearchCache(),
+                deviceId = "test-device",
+            )
+
+            gateway.search("usable")
+
+            val ready = gateway.searchState.value as SearchState.Results
+            assertEquals("Network result", ready.groups.first().items.single().title)
+        }
+    }
+
+    @Test
     fun saved_search_results_restore_for_only_the_matching_server_user_and_failure_stays_recoverable() = runTest {
         MockWebServer().use { server ->
             server.start()
@@ -192,5 +232,16 @@ class SearchGatewayTest {
                 releaseFirstSave.await()
             }
         }
+    }
+
+    private class ThrowingLoadSearchCache : SearchCache {
+        override suspend fun load(scope: HomeScope, query: String): List<dev.chaichai.mobile.core.contracts.SearchResultGroup>? =
+            error("Unreadable cache")
+
+        override suspend fun save(
+            scope: HomeScope,
+            query: String,
+            groups: List<dev.chaichai.mobile.core.contracts.SearchResultGroup>,
+        ) = Unit
     }
 }

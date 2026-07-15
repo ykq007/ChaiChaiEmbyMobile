@@ -17,6 +17,7 @@ import dev.chaichai.mobile.core.contracts.SearchResult
 import dev.chaichai.mobile.core.contracts.SearchResultGroup
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.CancellationException
 
 interface SearchCache {
     suspend fun load(scope: HomeScope, query: String): List<SearchResultGroup>?
@@ -54,6 +55,9 @@ internal interface SearchCacheDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun save(entity: SearchCacheEntity)
+
+    @Query("DELETE FROM search_results WHERE serverId=:serverId AND userId=:userId AND `query`=:query")
+    suspend fun delete(serverId: String, userId: String, query: String)
 }
 
 @Database(entities = [SearchCacheEntity::class], version = 1, exportSchema = false)
@@ -64,9 +68,23 @@ internal abstract class SearchCacheDatabase : RoomDatabase() {
 internal class RoomSearchCache(private val dao: SearchCacheDao) : SearchCache {
     private val json = Json { ignoreUnknownKeys = true }
 
-    override suspend fun load(scope: HomeScope, query: String): List<SearchResultGroup>? =
-        dao.load(scope.serverId, scope.userId, query)
-            ?.let { json.decodeFromString<CachedSearchGroups>(it.payload).toContract(scope) }
+    override suspend fun load(scope: HomeScope, query: String): List<SearchResultGroup>? {
+        val entity = dao.load(scope.serverId, scope.userId, query) ?: return null
+        return try {
+            json.decodeFromString<CachedSearchGroups>(entity.payload).toContract(scope)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            try {
+                dao.delete(scope.serverId, scope.userId, query)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // A cache miss is still safe when quarantine itself is unavailable.
+            }
+            null
+        }
+    }
 
     override suspend fun save(scope: HomeScope, query: String, groups: List<SearchResultGroup>) {
         dao.save(

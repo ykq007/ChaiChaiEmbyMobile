@@ -368,7 +368,13 @@ class AuthenticatedEmbyGateway(
         }
         val scope = HomeScope(session.serverId, session.userId)
         val authentication = authenticationGeneration
-        val restored = searchCache.load(scope, normalizedQuery).orEmpty()
+        val restored = try {
+            searchCache.load(scope, normalizedQuery).orEmpty()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            emptyList()
+        }
         if (!isActiveSearchRequest(scope, generation, session, authentication)) return@withContext
         mutableSearchState.value = SearchState.Searching(normalizedQuery, restored)
         val state = try {
@@ -378,6 +384,8 @@ class AuthenticatedEmbyGateway(
             if (!isActiveSearchRequest(scope, generation, session, authentication)) return@withContext
             if (groups.all { it.items.isEmpty() }) SearchState.Empty(scope, normalizedQuery)
             else SearchState.Results(scope, normalizedQuery, groups)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (_: AuthenticationExpiredException) {
             expireAuthentication(session, authentication, "search")
             return@withContext

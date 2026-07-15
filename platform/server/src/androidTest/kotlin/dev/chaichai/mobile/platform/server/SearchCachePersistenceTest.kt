@@ -2,6 +2,7 @@ package dev.chaichai.mobile.platform.server
 
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.room.Room
 import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.SearchMediaType
@@ -53,5 +54,28 @@ class SearchCachePersistenceTest {
         assertEquals(season, restored.seasonIdentity)
         assertEquals(HomeScope("server", "user"), restored.scope)
         assertNull(recreated.load(HomeScope("server", "other-user"), "dulcinea"))
+    }
+
+    @Test
+    fun malformed_and_obsolete_cache_payloads_are_deleted_and_treated_as_misses() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val databaseName = "corrupt_search_cache.db"
+        context.deleteDatabase(databaseName)
+        val database = Room.databaseBuilder(context, SearchCacheDatabase::class.java, databaseName).build()
+        val scope = HomeScope("server", "user")
+        try {
+            listOf(
+                "malformed" to "{not-json",
+                "obsolete" to """{"groups":[{"type":"FutureMedia","items":[]}]}""",
+            ).forEach { (query, payload) ->
+                database.dao().save(SearchCacheEntity(scope.serverId, scope.userId, query, payload))
+
+                assertNull(RoomSearchCache(database.dao()).load(scope, query))
+                assertNull(database.dao().load(scope.serverId, scope.userId, query))
+            }
+        } finally {
+            database.close()
+            context.deleteDatabase(databaseName)
+        }
     }
 }
