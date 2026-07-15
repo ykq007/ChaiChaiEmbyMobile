@@ -210,10 +210,11 @@ private fun AdaptiveShell(
                         uiState = homeUiState,
                     )
                 }
-                composable(MediaActionRoute) {
+                composable(MediaActionRoute) { entry ->
                     EmptyDestination(
                         title = "Opening media",
-                        description = "The selected item is ready for its destination feature.",
+                        description = "Selected ${entry.arguments?.getString("serverId")} / " +
+                            "${entry.arguments?.getString("itemId")} for ${entry.arguments?.getString("intent")}.",
                     )
                 }
                 composable(TopLevelDestination.Libraries.route) { LibrariesScreen() }

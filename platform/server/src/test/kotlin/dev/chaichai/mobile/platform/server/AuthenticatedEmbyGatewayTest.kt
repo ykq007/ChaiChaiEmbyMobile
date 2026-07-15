@@ -5,6 +5,8 @@ import dev.chaichai.mobile.core.contracts.ArtworkReference
 import dev.chaichai.mobile.core.contracts.HomeFeedState
 import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.HomeSectionContent
+import dev.chaichai.mobile.core.contracts.HomeMediaItem
+import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.HomeSection
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
@@ -74,10 +76,10 @@ class AuthenticatedEmbyGatewayTest {
             repeat(5) { server.enqueue(MockResponse.Builder().code(503).build()) }
             val gateway = AuthenticatedEmbyGateway(FakeVault(stored(valid(server.url("/emby").toString()))))
             gateway.refreshHome()
-            assert(gateway.homeFeed.value is HomeFeedState.Failure)
+            assertEquals(HomeScope("server", "user"), (gateway.homeFeed.value as HomeFeedState.Failure).scope)
             repeat(5) { server.enqueue(MockResponse.Builder().code(200).body("{\"Items\":[]}").build()) }
             gateway.refreshHome()
-            assert(gateway.homeFeed.value is HomeFeedState.Empty)
+            assertEquals(HomeScope("server", "user"), (gateway.homeFeed.value as HomeFeedState.Empty).scope)
         }
     }
 
@@ -110,7 +112,7 @@ class AuthenticatedEmbyGatewayTest {
             vault.save(stored(valid(server.url("/emby").toString())).copy(serverId = "other-server"))
             repeat(5) { server.enqueue(MockResponse.Builder().code(503).build()) }
             recreated.refreshHome()
-            assert(recreated.homeFeed.value is HomeFeedState.Failure)
+            assertEquals(HomeScope("other-server", "user"), (recreated.homeFeed.value as HomeFeedState.Failure).scope)
         }
     }
 
@@ -126,6 +128,8 @@ class AuthenticatedEmbyGatewayTest {
             cache.firstLoadStarted.await()
             vault.save(stored(valid(server.url("/emby").toString())).copy(serverId = "server-b", userId = "user-b"))
             val newRefresh = backgroundScope.launch { gateway.refreshHome() }
+            testScheduler.runCurrent()
+            assertEquals(HomeScope("server-b", "user-b"), (gateway.homeFeed.value as HomeFeedState.Ready).scope)
             cache.releaseFirstLoad.complete(Unit)
 
             oldRefresh.join()
@@ -208,7 +212,12 @@ class AuthenticatedEmbyGatewayTest {
                 firstLoadStarted.complete(Unit)
                 releaseFirstLoad.await()
             }
-            return null
+            val identity = MediaIdentity(scope.serverId, "cached-item")
+            return mapOf(
+                HomeSection.ContinueWatching to HomeSectionContent(
+                    listOf(HomeMediaItem(identity, "Cached ${scope.serverId}", "Movie")),
+                ),
+            )
         }
         override suspend fun saveFeed(scope: HomeScope, sections: Map<HomeSection, HomeSectionContent>) = Unit
         override suspend fun loadArtwork(scope: HomeScope, reference: ArtworkReference): ByteArray? = null

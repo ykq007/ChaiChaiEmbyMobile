@@ -96,7 +96,7 @@ class SpotlightHomeTest {
         show(state)
         composeRule.onNodeWithText("Home couldn't be loaded.").assertIsDisplayed()
         composeRule.onNodeWithText("Retry").assertIsDisplayed()
-        composeRule.runOnIdle { state.value = HomeFeedState.Empty }
+        composeRule.runOnIdle { state.value = HomeFeedState.Empty(HomeScope("server", "user")) }
         composeRule.onNodeWithText("Your Home is empty").assertIsDisplayed()
         composeRule.onNodeWithText("Refresh").assertIsDisplayed()
     }
@@ -350,15 +350,38 @@ class SpotlightHomeTest {
         composeRule.runOnIdle { hinge.value = null }
         composeRule.onNodeWithText("Transition Movie 8").performClick()
         composeRule.onNodeWithText("Opening media").assertIsDisplayed()
+        composeRule.onNodeWithText("Selected server / movie-8 for details.").assertIsDisplayed()
 
         composeRule.runOnIdle {
-            size.value = DpSize(400.dp, 700.dp)
+            size.value = DpSize(700.dp, 400.dp)
             lifecycleOwner.moveTo(Lifecycle.State.CREATED)
         }
         composeRule.runOnIdle {
             lifecycleOwner.moveTo(Lifecycle.State.RESUMED)
         }
         composeRule.onNodeWithText("Opening media").assertIsDisplayed()
+        composeRule.runOnIdle {
+            size.value = DpSize(900.dp, 900.dp)
+            hinge.value = SeparatingHinge(400, 0, 420, 900, HingeOrientation.Vertical)
+        }
+        composeRule.onNodeWithText("Selected server / movie-8 for details.").assertIsDisplayed()
+        composeRule.runOnIdle { hinge.value = null }
+        composeRule.onNodeWithText("Selected server / movie-8 for details.").assertIsDisplayed()
+    }
+
+    @Test
+    fun selected_server_scoped_destination_survives_process_recreation() {
+        val restoration = StateRestorationTester(composeRule)
+        val state = ready(
+            mapOf(HomeSection.LatestMovies to HomeSectionContent(listOf(media("movie", "Restored Arrival")))),
+        )
+        restoration.setContent { appContent(MutableStateFlow(state), Modifier, 1f) }
+        composeRule.onNodeWithText("Restored Arrival").performClick()
+        composeRule.onNodeWithText("Selected server / movie for details.").assertIsDisplayed()
+
+        restoration.emulateSavedInstanceStateRestore()
+
+        composeRule.onNodeWithText("Selected server / movie for details.").assertIsDisplayed()
     }
 
     private fun show(

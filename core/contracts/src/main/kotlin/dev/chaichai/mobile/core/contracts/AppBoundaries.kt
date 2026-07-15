@@ -73,8 +73,8 @@ sealed interface HomeFeedState {
         val sections: Map<HomeSection, HomeSectionContent>,
         val isRefreshing: Boolean = false,
     ) : HomeFeedState
-    data object Empty : HomeFeedState
-    data class Failure(val message: String) : HomeFeedState
+    data class Empty(val scope: HomeScope) : HomeFeedState
+    data class Failure(val message: String, val scope: HomeScope? = null) : HomeFeedState
 }
 
 sealed interface HomeMediaAction {

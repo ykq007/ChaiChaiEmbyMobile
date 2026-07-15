@@ -126,6 +126,7 @@ class AuthenticatedEmbyGateway(
         val generation = ++homeGeneration
         val current = (mutableHomeFeed.value as? HomeFeedState.Ready)?.takeIf { it.scope == scope }?.sections
         val previous = current ?: homeCache.loadFeed(scope).orEmpty()
+        if (!isCurrent(scope, generation)) return
         mutableHomeFeed.value = if (previous.isEmpty()) HomeFeedState.Loading else HomeFeedState.Ready(scope, previous, true)
         loadSections(session, scope, generation, requested, previous)
     }
@@ -148,9 +149,8 @@ class AuthenticatedEmbyGateway(
         }
         val failures = merged.values.count { it.failureMessage != null }
         val successful = merged.values.filter { it.failureMessage == null }
-        val activeSession = vault.restore()
         if (generation != homeGeneration) return@withContext
-        if (activeSession == null || HomeScope(activeSession.serverId, activeSession.userId) != scope) {
+        if (!isCurrent(scope, generation)) {
             mutableHomeFeed.value = HomeFeedState.Loading
             return@withContext
         }
@@ -158,10 +158,16 @@ class AuthenticatedEmbyGateway(
         if (cacheable.isNotEmpty()) homeCache.saveFeed(scope, cacheable)
         mutableHomeFeed.value = when {
             failures == merged.size && merged.values.none { it.items.isNotEmpty() } ->
-                HomeFeedState.Failure("Home couldn't be loaded. Check the connection and retry.")
-            successful.isNotEmpty() && successful.all { it.items.isEmpty() } && failures == 0 -> HomeFeedState.Empty
+                HomeFeedState.Failure("Home couldn't be loaded. Check the connection and retry.", scope)
+            successful.isNotEmpty() && successful.all { it.items.isEmpty() } && failures == 0 -> HomeFeedState.Empty(scope)
             else -> HomeFeedState.Ready(scope, merged.toMap())
         }
+    }
+
+    private fun isCurrent(scope: HomeScope, generation: Long): Boolean {
+        if (generation != homeGeneration) return false
+        val activeSession = vault.restore() ?: return false
+        return HomeScope(activeSession.serverId, activeSession.userId) == scope
     }
 
     private fun fetchSection(session: StoredSession, section: HomeSection): List<HomeMediaItem> {

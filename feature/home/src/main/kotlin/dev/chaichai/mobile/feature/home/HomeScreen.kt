@@ -287,7 +287,7 @@ private fun MediaShelf(
 @Composable
 private fun HomeArtwork(gateway: EmbyGateway, reference: ArtworkReference, title: String, modifier: Modifier) =
     AuthenticatedArtwork(
-        cacheIdentity = "${reference.identity.serverId}:${reference.identity.itemId}:${reference.kind}:${reference.imageTag}",
+        cacheIdentity = reference,
         contentDescription = "$title artwork",
         load = { gateway.loadArtwork(reference) },
         modifier = modifier,

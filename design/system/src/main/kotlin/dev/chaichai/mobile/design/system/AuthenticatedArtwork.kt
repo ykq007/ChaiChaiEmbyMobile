@@ -14,7 +14,7 @@ import androidx.compose.ui.layout.ContentScale
 
 @Composable
 fun AuthenticatedArtwork(
-    cacheIdentity: String,
+    cacheIdentity: Any,
     contentDescription: String,
     load: suspend () -> ByteArray?,
     modifier: Modifier = Modifier,
