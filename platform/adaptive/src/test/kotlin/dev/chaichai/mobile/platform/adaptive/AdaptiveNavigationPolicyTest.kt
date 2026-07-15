@@ -55,4 +55,10 @@ class AdaptiveNavigationPolicyTest {
         assertEquals(ContentWidthClass.Medium, AdaptiveNavigationPolicy.layout(WindowCharacteristics(600, 700)).contentWidthClass)
         assertEquals(ContentWidthClass.Expanded, AdaptiveNavigationPolicy.layout(WindowCharacteristics(840, 700)).contentWidthClass)
     }
+
+    @Test
+    fun `list detail waits for 840dp after rail space`() {
+        assertEquals(false, AdaptiveNavigationPolicy.layout(WindowCharacteristics(919, 700)).supportsListDetail)
+        assertEquals(true, AdaptiveNavigationPolicy.layout(WindowCharacteristics(920, 700)).supportsListDetail)
+    }
 }

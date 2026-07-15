@@ -11,6 +11,9 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import dev.chaichai.mobile.core.contracts.AppBoundaries
@@ -33,6 +36,7 @@ import dev.chaichai.mobile.core.contracts.SortDirection
 import dev.chaichai.mobile.design.system.ChaiChaiTheme
 import dev.chaichai.mobile.feature.libraries.LibrariesScreen
 import dev.chaichai.mobile.feature.libraries.LibraryWindowClass
+import dev.chaichai.mobile.feature.libraries.MovieDetailsScreen
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -80,7 +84,9 @@ class MovieLibraryTest {
     fun library_selection_survives_saved_state_and_expanded_list_detail_transition() {
         val restoration = StateRestorationTester(composeRule)
         val gateway = FakeMovieGateway(ready())
-        restoration.setContent { themed { LibrariesScreen(gateway, LibraryWindowClass.Expanded, false, {}) } }
+        restoration.setContent {
+            themed { LibrariesScreen(gateway, LibraryWindowClass.Expanded, false, true, FakePlayback(), {}) }
+        }
         composeRule.onNodeWithText("Arrival").performClick()
         composeRule.onNodeWithText("Language changes everything.").assertIsDisplayed()
 
@@ -92,18 +98,89 @@ class MovieLibraryTest {
 
     @Test
     fun missing_metadata_reflows_at_large_text_in_a_constrained_window() {
-        val gateway = FakeMovieGateway(ready(), details().copy(year = null, runtimeTicks = null, overview = null, genres = emptyList(), tracks = MovieTrackAvailability()))
+        val gateway = FakeMovieGateway(
+            ready(),
+            details().copy(
+                year = null,
+                runtimeTicks = null,
+                overview = null,
+                genres = emptyList(),
+                playbackPositionTicks = 0,
+                tracks = MovieTrackAvailability(),
+            ),
+        )
         composeRule.setContent {
             val density = LocalDensity.current
             androidx.compose.runtime.CompositionLocalProvider(LocalDensity provides Density(density.density, 2f)) {
                 themed {
-                    LibrariesScreen(
-                        gateway, LibraryWindowClass.Compact, true, {}, Modifier.requiredSize(360.dp, 440.dp),
+                    MovieDetailsScreen(
+                        gateway,
+                        MediaIdentity("server", "arrival"),
+                        FakePlayback(),
+                        LibraryWindowClass.Compact,
+                        true,
+                        Modifier.requiredSize(360.dp, 440.dp),
                     )
                 }
             }
         }
-        composeRule.onNodeWithText("Arrival").assertIsDisplayed()
+        composeRule.onNodeWithTag("movie-details-scroll").performScrollToNode(hasText("Play"))
+        composeRule.onNodeWithText("Play").assertIsDisplayed()
+    }
+
+    @Test
+    fun sort_direction_and_genre_controls_submit_the_selected_query() {
+        val gateway = FakeMovieGateway(ready())
+        showLibrary(gateway)
+
+        composeRule.onNodeWithText("Release date").performClick()
+        composeRule.onNodeWithTag("movie-sort-controls").performScrollToNode(hasText("Ascending"))
+        composeRule.onNodeWithText("Ascending").performClick()
+        composeRule.onNodeWithTag("movie-genre-controls").performScrollToNode(hasText("Drama"))
+        composeRule.onNodeWithText("Drama").performClick()
+
+        composeRule.runOnIdle {
+            assertEquals(
+                MovieLibraryQuery(MovieSortField.ReleaseDate, SortDirection.Descending, "Drama"),
+                (gateway.movieLibrary.value as MovieLibraryState.Ready).query,
+            )
+        }
+    }
+
+    @Test
+    fun library_empty_filtered_empty_and_initial_failure_have_distinct_recovery_copy() {
+        val gateway = FakeMovieGateway(MovieLibraryState.EmptyLibrary(HomeScope("server", "user")))
+        showLibrary(gateway)
+        composeRule.onNodeWithText("No movies in this library").assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            gateway.movieLibrary.value = MovieLibraryState.EmptyFiltered(
+                HomeScope("server", "user"), MovieLibraryQuery(genre = "Drama"), listOf("Drama"),
+            )
+        }
+        composeRule.onNodeWithText("No matching movies").assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            gateway.movieLibrary.value = MovieLibraryState.Failure("Server offline", query = MovieLibraryQuery(genre = "Drama"))
+        }
+        composeRule.onNodeWithText("Movies unavailable").assertIsDisplayed()
+        composeRule.onNodeWithText("Server offline").assertIsDisplayed()
+    }
+
+    @Test
+    fun movie_grid_scroll_survives_saved_state_restoration() {
+        val restoration = StateRestorationTester(composeRule)
+        val movies = (0..70).map { MoviePoster(MediaIdentity("server", "movie-$it"), "Movie $it") }
+        val gateway = FakeMovieGateway(ready().copy(items = movies, totalCount = movies.size))
+        restoration.setContent {
+            themed { LibrariesScreen(gateway, LibraryWindowClass.Compact, false, false, FakePlayback(), {}) }
+        }
+        composeRule.onNodeWithTag("movie-grid").performScrollToNode(hasText("Movie 60"))
+        composeRule.onNodeWithText("Movie 60").assertIsDisplayed()
+
+        restoration.emulateSavedInstanceStateRestore()
+
+        composeRule.onNodeWithText("Movie 60").assertIsDisplayed()
     }
 
     private fun showApp(gateway: EmbyGateway, playback: PlaybackCoordinator) {
@@ -123,19 +200,21 @@ class MovieLibraryTest {
     }
 
     private fun showLibrary(gateway: EmbyGateway) {
-        composeRule.setContent { themed { LibrariesScreen(gateway, LibraryWindowClass.Compact, false, {}) } }
+        composeRule.setContent {
+            themed { LibrariesScreen(gateway, LibraryWindowClass.Compact, false, false, FakePlayback(), {}) }
+        }
     }
 
     @Composable private fun themed(content: @Composable () -> Unit) = ChaiChaiTheme(reducedMotion = true, content = content)
 
     private class FakeMovieGateway(
-        initial: MovieLibraryState.Ready,
+        initial: MovieLibraryState,
         private val movieDetails: MovieDetails = details(),
     ) : EmbyGateway {
         override val connectionState = MutableStateFlow(GatewayConnectionState.Connected)
         override val movieLibrary = MutableStateFlow<MovieLibraryState>(initial)
         override suspend fun refreshMovies(query: MovieLibraryQuery) {
-            val ready = movieLibrary.value as MovieLibraryState.Ready
+            val ready = movieLibrary.value as? MovieLibraryState.Ready ?: return
             movieLibrary.value = ready.copy(query = query)
         }
         override suspend fun retryMoviePage() {

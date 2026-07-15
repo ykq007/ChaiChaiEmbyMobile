@@ -229,6 +229,8 @@ private fun AdaptiveShell(
                             ContentWidthClass.Expanded -> LibraryWindowClass.Expanded
                         },
                         isHeightConstrained = layout.isHeightConstrained,
+                        supportsListDetail = layout.supportsListDetail,
+                        playback = boundaries.playback,
                         onOpenDetails = { identity ->
                             navController.navigate("movies/${Uri.encode(identity.serverId)}/${Uri.encode(identity.itemId)}")
                         },
@@ -242,6 +244,12 @@ private fun AdaptiveShell(
                             gateway = boundaries.gateway,
                             identity = dev.chaichai.mobile.core.contracts.MediaIdentity(serverId, itemId),
                             playback = boundaries.playback,
+                            windowClass = when (layout.contentWidthClass) {
+                                ContentWidthClass.Compact -> LibraryWindowClass.Compact
+                                ContentWidthClass.Medium -> LibraryWindowClass.Medium
+                                ContentWidthClass.Expanded -> LibraryWindowClass.Expanded
+                            },
+                            isHeightConstrained = layout.isHeightConstrained,
                         )
                     }
                 }

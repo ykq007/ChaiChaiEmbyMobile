@@ -41,15 +41,15 @@ data class HomeScope(val serverId: String, val userId: String)
 
 data class MediaIdentity(val serverId: String, val itemId: String)
 
-enum class MovieSortField(val apiName: String, val label: String) {
-    Name("SortName", "Name"),
-    DateAdded("DateCreated", "Date added"),
-    ReleaseDate("PremiereDate", "Release date"),
+enum class MovieSortField(val label: String) {
+    Name("Name"),
+    DateAdded("Date added"),
+    ReleaseDate("Release date"),
 }
 
-enum class SortDirection(val apiName: String, val label: String) {
-    Ascending("Ascending", "Ascending"),
-    Descending("Descending", "Descending"),
+enum class SortDirection(val label: String) {
+    Ascending("Ascending"),
+    Descending("Descending"),
 }
 
 data class MovieLibraryQuery(
@@ -75,6 +75,7 @@ sealed interface MovieLibraryState {
         val availableGenres: List<String> = emptyList(),
         val isLoadingMore: Boolean = false,
         val pageFailureMessage: String? = null,
+        val refreshFailureMessage: String? = null,
     ) : MovieLibraryState
     data class EmptyLibrary(val scope: HomeScope, val availableGenres: List<String> = emptyList()) : MovieLibraryState
     data class EmptyFiltered(
@@ -82,7 +83,11 @@ sealed interface MovieLibraryState {
         val query: MovieLibraryQuery,
         val availableGenres: List<String> = emptyList(),
     ) : MovieLibraryState
-    data class Failure(val message: String, val scope: HomeScope? = null) : MovieLibraryState
+    data class Failure(
+        val message: String,
+        val scope: HomeScope? = null,
+        val query: MovieLibraryQuery = MovieLibraryQuery(),
+    ) : MovieLibraryState
 }
 
 data class MovieTrackAvailability(val audioTracks: Int = 0, val subtitleTracks: Int = 0)
@@ -103,9 +108,12 @@ data class MovieDetails(
     val backdrop: ArtworkReference? = null,
 ) {
     val hasMeaningfulResume: Boolean
-        get() = !played && playbackPositionTicks >= 10 * HomeMediaItem.TicksPerSecond &&
-            (runtimeTicks == null || runtimeTicks - playbackPositionTicks >= 60 * HomeMediaItem.TicksPerSecond)
+        get() = hasMeaningfulResume(playbackPositionTicks, runtimeTicks, played)
 }
+
+fun hasMeaningfulResume(positionTicks: Long, runtimeTicks: Long?, played: Boolean = false): Boolean =
+    !played && positionTicks >= 10 * HomeMediaItem.TicksPerSecond &&
+        (runtimeTicks == null || runtimeTicks - positionTicks >= 60 * HomeMediaItem.TicksPerSecond)
 
 sealed interface MovieDetailsState {
     data class Ready(val details: MovieDetails) : MovieDetailsState
@@ -137,13 +145,10 @@ data class HomeMediaItem(
     val backdrop: ArtworkReference? = null,
 ) {
     val hasMeaningfulResume: Boolean
-        get() = playbackPositionTicks >= MeaningfulResumeTicks &&
-            (runtimeTicks == null || runtimeTicks - playbackPositionTicks >= MeaningfulRemainingTicks)
+        get() = hasMeaningfulResume(playbackPositionTicks, runtimeTicks)
 
     companion object {
         const val TicksPerSecond = 10_000_000L
-        private const val MeaningfulResumeTicks = 10 * TicksPerSecond
-        private const val MeaningfulRemainingTicks = 60 * TicksPerSecond
     }
 }
 

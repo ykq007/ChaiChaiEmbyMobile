@@ -16,7 +16,9 @@ import dev.chaichai.mobile.core.contracts.MovieDetailsState
 import dev.chaichai.mobile.core.contracts.MovieLibraryQuery
 import dev.chaichai.mobile.core.contracts.MovieLibraryState
 import dev.chaichai.mobile.core.contracts.MoviePoster
+import dev.chaichai.mobile.core.contracts.MovieSortField
 import dev.chaichai.mobile.core.contracts.MovieTrackAvailability
+import dev.chaichai.mobile.core.contracts.SortDirection
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -131,7 +133,7 @@ class AuthenticatedEmbyGateway(
     override suspend fun refreshMovies(query: MovieLibraryQuery) {
         val session = vault.restore()
         if (session == null) {
-            mutableMovieLibrary.value = MovieLibraryState.Failure("Sign in again to browse movies.")
+            mutableMovieLibrary.value = MovieLibraryState.Failure("Sign in again to browse movies.", query = query)
             return
         }
         val scope = HomeScope(session.serverId, session.userId)
@@ -156,9 +158,9 @@ class AuthenticatedEmbyGateway(
             cached?.takeIf { it.items.isNotEmpty() }?.let {
                 MovieLibraryState.Ready(
                     scope, it.items, it.totalCount, query, it.availableGenres,
-                    pageFailureMessage = "Couldn't refresh movies. Loaded saved content.",
+                    refreshFailureMessage = "Couldn't refresh movies. Loaded saved content.",
                 )
-            } ?: MovieLibraryState.Failure("Movies couldn't be loaded. Check the connection and retry.", scope)
+            } ?: MovieLibraryState.Failure("Movies couldn't be loaded. Check the connection and retry.", scope, query)
         }
     }
 
@@ -176,6 +178,7 @@ class AuthenticatedEmbyGateway(
                 items = (ready.items + page.items).distinctBy { it.identity },
                 totalCount = page.totalCount,
                 pageFailureMessage = null,
+                refreshFailureMessage = null,
             )
             movieCache.saveLibrary(ready.scope, ready.query, updated.items, updated.totalCount, updated.availableGenres)
             if (!isActiveMovieScope(ready.scope, generation)) return
@@ -206,7 +209,7 @@ class AuthenticatedEmbyGateway(
                     MovieDetailsState.Ready(details)
                 }
         } catch (_: Exception) {
-            movieCache.loadDetails(scope, identity)?.let(MovieDetailsState::Ready)
+            movieCache.loadDetails(scope, identity)?.copy(tracks = MovieTrackAvailability())?.let(MovieDetailsState::Ready)
                 ?: MovieDetailsState.Failure("Movie details couldn't be loaded. Retry when the server is available.")
         }
     }
@@ -239,8 +242,8 @@ class AuthenticatedEmbyGateway(
             addQueryParameter("ImageTypeLimit", "1")
             addQueryParameter("StartIndex", startIndex.toString())
             addQueryParameter("Limit", MoviePageSize.toString())
-            addQueryParameter("SortBy", query.sortField.apiName)
-            addQueryParameter("SortOrder", query.sortDirection.apiName)
+            addQueryParameter("SortBy", query.sortField.toApiName())
+            addQueryParameter("SortOrder", query.sortDirection.toApiName())
             query.genre?.let { addQueryParameter("Genres", it) }
         }.build()
         val request = Request.Builder().url(url).header("X-Emby-Token", session.accessToken.encoded()).get().build()
@@ -473,4 +476,15 @@ class AuthenticatedEmbyGateway(
     private data class MoviePage(val items: List<MoviePoster>, val totalCount: Int)
 
     private companion object { const val MoviePageSize = 40 }
+}
+
+private fun MovieSortField.toApiName(): String = when (this) {
+    MovieSortField.Name -> "SortName"
+    MovieSortField.DateAdded -> "DateCreated"
+    MovieSortField.ReleaseDate -> "PremiereDate"
+}
+
+private fun SortDirection.toApiName(): String = when (this) {
+    SortDirection.Ascending -> "Ascending"
+    SortDirection.Descending -> "Descending"
 }

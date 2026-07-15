@@ -2,18 +2,17 @@ package dev.chaichai.mobile.feature.libraries
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -33,10 +32,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
@@ -64,6 +65,8 @@ fun LibrariesScreen(
     gateway: EmbyGateway,
     windowClass: LibraryWindowClass,
     isHeightConstrained: Boolean,
+    supportsListDetail: Boolean,
+    playback: PlaybackCoordinator,
     onOpenDetails: (MediaIdentity) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -78,14 +81,14 @@ fun LibrariesScreen(
         SortDirection.entries[savedDirection],
         savedGenre,
     )
-    var selectedServerId by rememberSaveable { androidx.compose.runtime.mutableStateOf("") }
-    var selectedItemId by rememberSaveable { androidx.compose.runtime.mutableStateOf("") }
-    val selected = selectedItemId.takeIf { it.isNotEmpty() }?.let { MediaIdentity(selectedServerId, it) }
+    var selected by rememberSaveable(stateSaver = MediaIdentitySaver) {
+        androidx.compose.runtime.mutableStateOf<MediaIdentity?>(null)
+    }
     LaunchedEffect(gateway) {
         if (gateway.movieLibrary.value is MovieLibraryState.Loading) gateway.refreshMovies(savedQuery)
     }
-    LaunchedEffect(windowClass, selected) {
-        if (windowClass != LibraryWindowClass.Expanded && selected != null) onOpenDetails(selected)
+    LaunchedEffect(supportsListDetail, selected) {
+        if (!supportsListDetail && selected != null) onOpenDetails(selected!!)
     }
     val requestQuery: (MovieLibraryQuery) -> Unit = { query ->
         savedSort = query.sortField.ordinal
@@ -94,14 +97,16 @@ fun LibrariesScreen(
         scope.launch { gateway.refreshMovies(query) }
     }
     val open: (MediaIdentity) -> Unit = { identity ->
-        selectedServerId = identity.serverId
-        selectedItemId = identity.itemId
-        if (windowClass != LibraryWindowClass.Expanded) onOpenDetails(identity)
+        selected = identity
+        if (!supportsListDetail) onOpenDetails(identity)
     }
-    if (windowClass == LibraryWindowClass.Expanded && selected != null) {
+    if (supportsListDetail && selected != null) {
         Row(modifier.fillMaxSize()) {
             MovieCollection(gateway, state, windowClass, isHeightConstrained, open, requestQuery, Modifier.weight(0.56f))
-            MovieDetailsScreen(gateway, selected, null, Modifier.weight(0.44f).fillMaxHeight())
+            MovieDetailsScreen(
+                gateway, selected!!, playback, LibraryWindowClass.Medium, isHeightConstrained,
+                Modifier.weight(0.44f).fillMaxHeight(),
+            )
         }
     } else {
         MovieCollection(gateway, state, windowClass, isHeightConstrained, open, requestQuery, modifier)
@@ -125,7 +130,7 @@ private fun MovieCollection(
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         }
         is MovieLibraryState.Failure -> MessageState("Movies unavailable", state.message, "Retry") {
-            scope.launch { gateway.refreshMovies() }
+            scope.launch { gateway.refreshMovies(state.query) }
         }
         is MovieLibraryState.EmptyLibrary -> MessageState(
             "No movies in this library",
@@ -173,7 +178,7 @@ private fun ReadyMovieGrid(
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minimumPosterWidth),
         state = gridState,
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize().testTag("movie-grid"),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(if (isHeightConstrained) 8.dp else 16.dp),
     ) {
@@ -188,6 +193,14 @@ private fun ReadyMovieGrid(
         }
         if (state.isLoadingMore) item(span = { GridItemSpan(maxLineSpan) }) {
             Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        }
+        state.refreshFailureMessage?.let { message ->
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Row(Modifier.fillMaxWidth().padding(12.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                    Text(message, modifier = Modifier.weight(1f))
+                    OutlinedButton(onClick = { scope.launch { gateway.refreshMovies(state.query) } }) { Text("Retry refresh") }
+                }
+            }
         }
         state.pageFailureMessage?.let { message ->
             item(span = { GridItemSpan(maxLineSpan) }) {
@@ -207,7 +220,7 @@ private fun LibraryControls(
     onQuery: (MovieLibraryQuery) -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyRow(Modifier.testTag("movie-sort-controls"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             items(MovieSortField.entries) { sort ->
                 FilterChip(selected = query.sortField == sort, onClick = { onQuery(query.copy(sortField = sort)) }, label = { Text(sort.label) })
             }
@@ -221,7 +234,7 @@ private fun LibraryControls(
                 )
             }
         }
-        if (genres.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (genres.isNotEmpty()) LazyRow(Modifier.testTag("movie-genre-controls"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             item { FilterChip(selected = query.genre == null, onClick = { onQuery(query.copy(genre = null)) }, label = { Text("All genres") }) }
             items(genres) { genre ->
                 FilterChip(selected = query.genre == genre, onClick = { onQuery(query.copy(genre = genre)) }, label = { Text(genre) })
@@ -247,7 +260,9 @@ private fun MoviePosterCard(gateway: EmbyGateway, movie: MoviePoster, onClick: (
 fun MovieDetailsScreen(
     gateway: EmbyGateway,
     identity: MediaIdentity,
-    playback: PlaybackCoordinator?,
+    playback: PlaybackCoordinator,
+    windowClass: LibraryWindowClass,
+    isHeightConstrained: Boolean,
     modifier: Modifier = Modifier,
 ) {
     var retryAttempt by rememberSaveable(identity.serverId, identity.itemId) { androidx.compose.runtime.mutableIntStateOf(0) }
@@ -258,7 +273,9 @@ fun MovieDetailsScreen(
     when (val state = detailsState) {
         null -> Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         is MovieDetailsState.Failure -> MessageState("Details unavailable", state.message, "Retry") { retryAttempt += 1 }
-        is MovieDetailsState.Ready -> MovieDetailsContent(gateway, state.details, playback, modifier)
+        is MovieDetailsState.Ready -> MovieDetailsContent(
+            gateway, state.details, playback, windowClass, isHeightConstrained, modifier,
+        )
     }
 }
 
@@ -266,12 +283,13 @@ fun MovieDetailsScreen(
 private fun MovieDetailsContent(
     gateway: EmbyGateway,
     details: MovieDetails,
-    playback: PlaybackCoordinator?,
+    playback: PlaybackCoordinator,
+    windowClass: LibraryWindowClass,
+    isHeightConstrained: Boolean,
     modifier: Modifier,
-) = BoxWithConstraints(modifier.fillMaxSize()) {
-    val wide = maxWidth >= 600.dp
-    val metadata: @Composable () -> Unit = {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+) {
+    val metadata: @Composable (Modifier) -> Unit = { metadataModifier ->
+        Column(metadataModifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(details.title, style = MaterialTheme.typography.headlineLarge, modifier = Modifier.semantics { heading() })
             listOfNotNull(
                 details.year?.toString(),
@@ -280,7 +298,7 @@ private fun MovieDetailsContent(
                 details.criticRating?.let { "Critics $it" },
             ).takeIf { it.isNotEmpty() }?.let { Text(it.joinToString("  •  ")) }
             if (details.genres.isNotEmpty()) Text(details.genres.joinToString("  •  "))
-            details.overview?.takeIf { it.isNotBlank() }?.let { Text(it, Modifier.heightIn(max = 240.dp)) }
+            details.overview?.takeIf { it.isNotBlank() }?.let { Text(it) }
             val runtimeTicks = details.runtimeTicks
             if (details.playbackPositionTicks > 0 && runtimeTicks != null) {
                 val progress = (details.playbackPositionTicks.toFloat() / runtimeTicks).coerceIn(0f, 1f)
@@ -294,12 +312,12 @@ private fun MovieDetailsContent(
             if (details.tracks.audioTracks > 0) Text("${details.tracks.audioTracks} audio track${if (details.tracks.audioTracks == 1) "" else "s"}")
             if (details.tracks.subtitleTracks > 0) Text("${details.tracks.subtitleTracks} subtitle track${if (details.tracks.subtitleTracks == 1) "" else "s"}")
             if (details.hasMeaningfulResume) {
-                Button(onClick = { playback?.submit(MoviePlaybackRequest.Resume(details.identity, details.playbackPositionTicks)) }) {
+                Button(onClick = { playback.submit(MoviePlaybackRequest.Resume(details.identity, details.playbackPositionTicks)) }) {
                     Text("Resume from ${formatPosition(details.playbackPositionTicks)}")
                 }
-                OutlinedButton(onClick = { playback?.submit(MoviePlaybackRequest.PlayFromBeginning(details.identity)) }) { Text("Play from beginning") }
+                OutlinedButton(onClick = { playback.submit(MoviePlaybackRequest.PlayFromBeginning(details.identity)) }) { Text("Play from beginning") }
             } else {
-                Button(onClick = { playback?.submit(MoviePlaybackRequest.PlayFromBeginning(details.identity)) }) { Text("Play") }
+                Button(onClick = { playback.submit(MoviePlaybackRequest.PlayFromBeginning(details.identity)) }) { Text("Play") }
             }
         }
     }
@@ -308,11 +326,21 @@ private fun MovieDetailsContent(
             AuthenticatedArtwork(artwork, "Artwork for ${details.title}", { gateway.loadArtwork(artwork) }, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
         }
     }
-    if (wide) Row(Modifier.fillMaxSize()) {
+    if (windowClass == LibraryWindowClass.Expanded && !isHeightConstrained) Row(modifier.fillMaxSize()) {
         Box(Modifier.weight(1.1f)) { art() }
-        Box(Modifier.weight(0.9f)) { metadata() }
-    } else Column(Modifier.fillMaxSize()) { art(); metadata() }
+        Box(Modifier.weight(0.9f)) {
+            metadata(Modifier.fillMaxHeight().verticalScroll(rememberScrollState()))
+        }
+    } else Column(modifier.fillMaxSize().testTag("movie-details-scroll").verticalScroll(rememberScrollState())) {
+        art()
+        metadata(Modifier.fillMaxWidth())
+    }
 }
+
+private val MediaIdentitySaver = Saver<MediaIdentity?, List<String>>(
+    save = { identity -> identity?.let { listOf(it.serverId, it.itemId) } ?: emptyList() },
+    restore = { values -> values.takeIf { it.size == 2 }?.let { MediaIdentity(it[0], it[1]) } },
+)
 
 @Composable
 private fun MessageState(title: String, description: String, action: String, onClick: () -> Unit) {
