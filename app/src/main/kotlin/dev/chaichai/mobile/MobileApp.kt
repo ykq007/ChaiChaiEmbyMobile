@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
@@ -64,6 +65,8 @@ import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.MovieLibraryState
 import dev.chaichai.mobile.core.contracts.SeriesLibraryState
+import dev.chaichai.mobile.core.contracts.SearchMediaType
+import dev.chaichai.mobile.core.contracts.SearchResult
 import dev.chaichai.mobile.design.system.EmptyDestination
 import dev.chaichai.mobile.design.system.LocalReducedMotion
 import dev.chaichai.mobile.feature.home.HomeScreen
@@ -75,7 +78,10 @@ import dev.chaichai.mobile.feature.libraries.HingeListDetailPanes
 import dev.chaichai.mobile.feature.libraries.LibraryWindowClass
 import dev.chaichai.mobile.feature.libraries.LibraryCollection
 import dev.chaichai.mobile.feature.libraries.MovieDetailsScreen
+import dev.chaichai.mobile.feature.libraries.SeriesDetailsScreen
+import dev.chaichai.mobile.feature.libraries.EpisodeDetailsScreen
 import dev.chaichai.mobile.feature.search.SearchScreen
+import dev.chaichai.mobile.feature.search.SearchHingePanes
 import dev.chaichai.mobile.feature.settings.SettingsScreen
 import dev.chaichai.mobile.feature.server.setup.ServerSetupScreen
 import dev.chaichai.mobile.core.contracts.ServerSetupState
@@ -106,6 +112,9 @@ private enum class TopLevelDestination(val route: String, val label: String, val
 
 private const val MediaActionRoute = "media/{serverId}/{itemId}/{intent}"
 private const val MovieDetailsRoute = "movies/{serverId}/{itemId}"
+private const val SeriesDetailsRoute = "series/{serverId}/{itemId}"
+private const val SeasonDetailsRoute = "series/{serverId}/{seriesId}/season/{seasonId}"
+private const val EpisodeDetailsRoute = "episodes/{serverId}/{itemId}"
 
 private data class VerticalHingePanes(
     val leftWidth: Dp,
@@ -161,6 +170,7 @@ fun MobileApp(
         stateSaver = ScopedLibrarySelectionSaver,
     ) { mutableStateOf<ScopedLibrarySelection?>(null) }
     val libraryGridState = rememberLazyGridState()
+    val searchListState = rememberLazyListState()
     val adaptiveContentState = rememberSaveableStateHolder()
     LaunchedEffect(activeLibraryScope, scopedLibrarySelection) {
         if (activeLibraryScope != null && scopedLibrarySelection?.scope != null &&
@@ -216,6 +226,7 @@ fun MobileApp(
                         librarySelection = librarySelection,
                         onLibrarySelectionChanged = onLibrarySelectionChanged,
                         libraryGridState = libraryGridState,
+                        searchListState = searchListState,
                         libraryCollection = libraryCollection,
                         onLibraryCollectionChanged = { libraryCollection = it },
                         adaptiveContentState = adaptiveContentState,
@@ -234,6 +245,7 @@ fun MobileApp(
                         librarySelection = librarySelection,
                         onLibrarySelectionChanged = onLibrarySelectionChanged,
                         libraryGridState = libraryGridState,
+                        searchListState = searchListState,
                         libraryCollection = libraryCollection,
                         onLibraryCollectionChanged = { libraryCollection = it },
                         adaptiveContentState = adaptiveContentState,
@@ -256,6 +268,7 @@ fun MobileApp(
                         librarySelection = librarySelection,
                         onLibrarySelectionChanged = onLibrarySelectionChanged,
                         libraryGridState = libraryGridState,
+                        searchListState = searchListState,
                         libraryCollection = libraryCollection,
                         onLibraryCollectionChanged = { libraryCollection = it },
                         adaptiveContentState = adaptiveContentState,
@@ -268,6 +281,7 @@ fun MobileApp(
                 librarySelection = librarySelection,
                 onLibrarySelectionChanged = onLibrarySelectionChanged,
                 libraryGridState = libraryGridState,
+                searchListState = searchListState,
                 libraryCollection = libraryCollection,
                 onLibraryCollectionChanged = { libraryCollection = it },
                 adaptiveContentState = adaptiveContentState,
@@ -287,6 +301,7 @@ private fun AdaptiveShell(
     librarySelection: MediaIdentity?,
     onLibrarySelectionChanged: (MediaIdentity?) -> Unit,
     libraryGridState: LazyGridState,
+    searchListState: androidx.compose.foundation.lazy.LazyListState,
     libraryCollection: LibraryCollection,
     onLibraryCollectionChanged: (LibraryCollection) -> Unit,
     adaptiveContentState: SaveableStateHolder,
@@ -406,7 +421,65 @@ private fun AdaptiveShell(
                         )
                     }
                 }
-                composable(TopLevelDestination.Search.route) { SearchScreen() }
+                composable(TopLevelDestination.Search.route) {
+                    SearchScreen(
+                        gateway = boundaries.gateway,
+                        supportsListDetail = layout.supportsListDetail,
+                        onOpenDetails = { navController.navigate(it.detailsRoute()) },
+                        detailContent = { result, detailModifier ->
+                            SearchResultDetails(
+                                boundaries,
+                                result,
+                                layout.isHeightConstrained,
+                                detailModifier,
+                            )
+                        },
+                        hingePanes = verticalHingePanes?.let {
+                            SearchHingePanes(it.leftWidth, it.hingeWidth, it.rightWidth)
+                        },
+                        listState = searchListState,
+                    )
+                }
+                composable(SeriesDetailsRoute) { entry ->
+                    val serverId = entry.arguments?.getString("serverId")
+                    val itemId = entry.arguments?.getString("itemId")
+                    if (serverId != null && itemId != null) {
+                        SeriesDetailsScreen(
+                            boundaries.gateway,
+                            MediaIdentity(serverId, itemId),
+                            boundaries.playback,
+                            layout.isHeightConstrained,
+                            authenticationReturnDestination = MediaIdentity(serverId, itemId).seriesDetailsRoute(),
+                        )
+                    }
+                }
+                composable(SeasonDetailsRoute) { entry ->
+                    val serverId = entry.arguments?.getString("serverId")
+                    val seriesId = entry.arguments?.getString("seriesId")
+                    val seasonId = entry.arguments?.getString("seasonId")
+                    if (serverId != null && seriesId != null && seasonId != null) {
+                        SeriesDetailsScreen(
+                            boundaries.gateway,
+                            MediaIdentity(serverId, seriesId),
+                            boundaries.playback,
+                            layout.isHeightConstrained,
+                            authenticationReturnDestination = "series/${Uri.encode(serverId)}/${Uri.encode(seriesId)}/season/${Uri.encode(seasonId)}",
+                            initialSeasonIdentity = MediaIdentity(serverId, seasonId),
+                        )
+                    }
+                }
+                composable(EpisodeDetailsRoute) { entry ->
+                    val serverId = entry.arguments?.getString("serverId")
+                    val itemId = entry.arguments?.getString("itemId")
+                    if (serverId != null && itemId != null) {
+                        EpisodeDetailsScreen(
+                            boundaries.gateway,
+                            MediaIdentity(serverId, itemId),
+                            boundaries.playback,
+                            authenticationReturnDestination = MediaIdentity(serverId, itemId).episodeDetailsRoute(),
+                        )
+                    }
+                }
                 composable(TopLevelDestination.Settings.route) { SettingsScreen() }
                 }
             }
@@ -454,7 +527,8 @@ private fun AdaptiveShell(
             ) { padding ->
                 Box(Modifier.fillMaxSize().padding(padding)) {
                     val hinge = verticalHingePanes
-                    val showAcrossPanes = currentDestination.isSelected(TopLevelDestination.Libraries)
+                    val showAcrossPanes = currentDestination.isSelected(TopLevelDestination.Libraries) ||
+                        currentDestination.isSelected(TopLevelDestination.Search)
                     if (hinge != null && !showAcrossPanes) {
                         val useLeft = hinge.leftWidth >= hinge.rightWidth
                         content(
@@ -479,12 +553,76 @@ private fun HomeMediaAction.navigationRoute(): String {
     return "media/${Uri.encode(identity.serverId)}/${Uri.encode(identity.itemId)}/$intent"
 }
 
+@Composable
+private fun SearchResultDetails(
+    boundaries: AppBoundaries,
+    result: SearchResult,
+    isHeightConstrained: Boolean,
+    modifier: Modifier,
+) {
+    val returnDestination = TopLevelDestination.Search.route
+    when (result.mediaType) {
+        SearchMediaType.Movie -> MovieDetailsScreen(
+            boundaries.gateway,
+            result.identity,
+            boundaries.playback,
+            LibraryWindowClass.Medium,
+            isHeightConstrained,
+            modifier,
+            returnDestination,
+        )
+        SearchMediaType.Series -> SeriesDetailsScreen(
+            boundaries.gateway,
+            result.identity,
+            boundaries.playback,
+            isHeightConstrained,
+            modifier,
+            returnDestination,
+        )
+        SearchMediaType.Season -> SeriesDetailsScreen(
+            boundaries.gateway,
+            result.seriesIdentity ?: result.identity,
+            boundaries.playback,
+            isHeightConstrained,
+            modifier,
+            returnDestination,
+            result.identity,
+        )
+        SearchMediaType.Episode -> EpisodeDetailsScreen(
+            boundaries.gateway,
+            result.identity,
+            boundaries.playback,
+            modifier,
+            returnDestination,
+        )
+    }
+}
+
 private fun MediaIdentity.movieDetailsRoute(): String =
     "movies/${Uri.encode(serverId)}/${Uri.encode(itemId)}"
 
+private fun MediaIdentity.seriesDetailsRoute(): String =
+    "series/${Uri.encode(serverId)}/${Uri.encode(itemId)}"
+
+private fun MediaIdentity.episodeDetailsRoute(): String =
+    "episodes/${Uri.encode(serverId)}/${Uri.encode(itemId)}"
+
+private fun SearchResult.detailsRoute(): String = when (mediaType) {
+    SearchMediaType.Movie -> identity.movieDetailsRoute()
+    SearchMediaType.Series -> identity.seriesDetailsRoute()
+    SearchMediaType.Season -> {
+        val series = seriesIdentity ?: identity
+        "series/${Uri.encode(series.serverId)}/${Uri.encode(series.itemId)}/season/${Uri.encode(identity.itemId)}"
+    }
+    SearchMediaType.Episode -> identity.episodeDetailsRoute()
+}
+
 private fun isRestorableDestination(route: String): Boolean =
     TopLevelDestination.entries.any { it.route == route } ||
-        route.matches(Regex("movies/[^/]+/[^/]+"))
+        route.matches(Regex("movies/[^/]+/[^/]+")) ||
+        route.matches(Regex("series/[^/]+/[^/]+")) ||
+        route.matches(Regex("series/[^/]+/[^/]+/season/[^/]+")) ||
+        route.matches(Regex("episodes/[^/]+/[^/]+"))
 
 private fun NavDestination?.isSelected(destination: TopLevelDestination): Boolean =
     this?.hierarchy?.any { it.route == destination.route } == true

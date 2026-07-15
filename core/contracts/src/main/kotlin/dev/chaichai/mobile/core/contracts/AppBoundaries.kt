@@ -40,6 +40,9 @@ interface EmbyGateway {
         identity: MediaIdentity,
         authenticationReturnDestination: String? = null,
     ): EpisodeDetailsState = EpisodeDetailsState.Failure("Episode details couldn't be loaded.")
+    val searchState: StateFlow<SearchState>
+        get() = EmptySearch.flow
+    suspend fun search(query: String) = Unit
 }
 enum class GatewayConnectionState { Disconnected, Connected }
 enum class GatewayAuthenticationStatus { Valid, Expired, Unavailable }
@@ -61,6 +64,52 @@ enum class HomeSection(val title: String) {
 data class HomeScope(val serverId: String, val userId: String)
 
 data class MediaIdentity(val serverId: String, val itemId: String)
+
+enum class SearchMediaType(val title: String) {
+    Movie("Movies"),
+    Series("Series"),
+    Season("Seasons"),
+    Episode("Episodes"),
+}
+
+data class SearchResult(
+    val scope: HomeScope,
+    val identity: MediaIdentity,
+    val mediaType: SearchMediaType,
+    val title: String,
+    val year: Int? = null,
+    val seriesName: String? = null,
+    val seasonNumber: Int? = null,
+    val episodeNumber: Int? = null,
+    val seriesIdentity: MediaIdentity? = null,
+    val seasonIdentity: MediaIdentity? = null,
+    val artwork: ArtworkReference? = null,
+)
+
+data class SearchResultGroup(
+    val mediaType: SearchMediaType,
+    val items: List<SearchResult>,
+)
+
+sealed interface SearchState {
+    data object Initial : SearchState
+    data class Searching(
+        val query: String,
+        val restoredGroups: List<SearchResultGroup> = emptyList(),
+    ) : SearchState
+    data class Results(
+        val scope: HomeScope,
+        val query: String,
+        val groups: List<SearchResultGroup>,
+    ) : SearchState
+    data class Empty(val scope: HomeScope, val query: String) : SearchState
+    data class Failure(
+        val query: String,
+        val message: String,
+        val scope: HomeScope? = null,
+        val restoredGroups: List<SearchResultGroup> = emptyList(),
+    ) : SearchState
+}
 
 enum class LibrarySortField(val label: String) {
     Name("Name"),
@@ -301,6 +350,10 @@ private object EmptyMovieLibrary {
 
 private object EmptySeriesLibrary {
     val flow: StateFlow<SeriesLibraryState> = kotlinx.coroutines.flow.MutableStateFlow(SeriesLibraryState.Loading)
+}
+
+private object EmptySearch {
+    val flow: StateFlow<SearchState> = kotlinx.coroutines.flow.MutableStateFlow(SearchState.Initial)
 }
 
 data class AppBoundaries(
