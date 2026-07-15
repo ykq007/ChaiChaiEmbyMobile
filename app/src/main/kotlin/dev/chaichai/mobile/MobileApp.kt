@@ -122,6 +122,10 @@ fun MobileApp(
         ?.takeIf(::isRestorableDestination)
         ?: TopLevelDestination.Home.route
     val homeUiState = rememberHomeUiState()
+    var librarySelection by rememberSaveable(
+        "mobile-app-library-selection",
+        stateSaver = MovieLibrarySelectionSaver,
+    ) { mutableStateOf<MediaIdentity?>(null) }
     BoxWithConstraints(modifier.fillMaxSize()) {
         val navController = rememberNavController()
         val density = LocalDensity.current
@@ -149,6 +153,8 @@ fun MobileApp(
                     AdaptiveShell(
                         boundaries, navController, true, restoredDestination, homeUiState,
                         verticalHingePanes = panes,
+                        librarySelection = librarySelection,
+                        onLibrarySelectionChanged = { librarySelection = it },
                     )
                     return@BoxWithConstraints
                 }
@@ -159,7 +165,11 @@ fun MobileApp(
                         .fillMaxHeight()
                         .align(if (useLeft) AbsoluteAlignment.CenterLeft else AbsoluteAlignment.CenterRight),
                 ) {
-                    AdaptiveShell(boundaries, navController, true, restoredDestination, homeUiState)
+                    AdaptiveShell(
+                        boundaries, navController, true, restoredDestination, homeUiState,
+                        librarySelection = librarySelection,
+                        onLibrarySelectionChanged = { librarySelection = it },
+                    )
                 }
             }
 
@@ -173,11 +183,19 @@ fun MobileApp(
                         .height(if (useTop) topHeight else bottomHeight)
                         .align(if (useTop) Alignment.TopCenter else Alignment.BottomCenter),
                 ) {
-                    AdaptiveShell(boundaries, navController, true, restoredDestination, homeUiState)
+                    AdaptiveShell(
+                        boundaries, navController, true, restoredDestination, homeUiState,
+                        librarySelection = librarySelection,
+                        onLibrarySelectionChanged = { librarySelection = it },
+                    )
                 }
             }
 
-            null -> AdaptiveShell(boundaries, navController, false, restoredDestination, homeUiState)
+            null -> AdaptiveShell(
+                boundaries, navController, false, restoredDestination, homeUiState,
+                librarySelection = librarySelection,
+                onLibrarySelectionChanged = { librarySelection = it },
+            )
         }
     }
 }
@@ -190,12 +208,10 @@ private fun AdaptiveShell(
     restoredDestination: String,
     homeUiState: HomeUiState,
     verticalHingePanes: VerticalHingePanes? = null,
+    librarySelection: MediaIdentity?,
+    onLibrarySelectionChanged: (MediaIdentity?) -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        var librarySelection by rememberSaveable(
-            "mobile-app-library-selection",
-            stateSaver = MovieLibrarySelectionSaver,
-        ) { mutableStateOf<MediaIdentity?>(null) }
         val density = LocalDensity.current
         val layoutDirection = LocalLayoutDirection.current
         val safeDrawing = WindowInsets.safeDrawing
@@ -282,7 +298,7 @@ private fun AdaptiveShell(
                             HingeListDetailPanes(it.leftWidth, it.hingeWidth, it.rightWidth)
                         },
                         initialSelection = librarySelection,
-                        onSelectionChanged = { librarySelection = it },
+                        onSelectionChanged = onLibrarySelectionChanged,
                         detailsAuthenticationReturnDestination = TopLevelDestination.Libraries.route,
                         onOpenDetails = { identity ->
                             navController.navigate(identity.movieDetailsRoute())

@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -86,6 +87,7 @@ fun LibrariesScreen(
 ) {
     val state by gateway.movieLibrary.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    val gridState = rememberLazyGridState()
     val initialQuery = (gateway.movieLibrary.value as? MovieLibraryState.Ready)?.query ?: MovieLibraryQuery()
     var savedSort by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(initialQuery.sortField.ordinal) }
     var savedDirection by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(initialQuery.sortDirection.ordinal) }
@@ -128,7 +130,7 @@ fun LibrariesScreen(
         Row(modifier.fillMaxSize()) {
             MovieCollection(
                 gateway, state, LibraryWindowClass.Compact, isHeightConstrained, open, requestQuery,
-                Modifier.width(hingePanes.collectionWidth),
+                Modifier.width(hingePanes.collectionWidth), gridState,
             )
             Spacer(Modifier.width(hingePanes.hingeWidth))
             selected?.let { identity ->
@@ -146,7 +148,10 @@ fun LibrariesScreen(
         }
     } else if (supportsListDetail && selected != null) {
         Row(modifier.fillMaxSize()) {
-            MovieCollection(gateway, state, windowClass, isHeightConstrained, open, requestQuery, Modifier.weight(0.56f))
+            MovieCollection(
+                gateway, state, windowClass, isHeightConstrained, open, requestQuery,
+                Modifier.weight(0.56f), gridState,
+            )
             MovieDetailsScreen(
                 gateway, selected!!, playback, LibraryWindowClass.Medium, isHeightConstrained,
                 Modifier.weight(0.44f).fillMaxHeight(),
@@ -154,7 +159,7 @@ fun LibrariesScreen(
             )
         }
     } else {
-        MovieCollection(gateway, state, windowClass, isHeightConstrained, open, requestQuery, modifier)
+        MovieCollection(gateway, state, windowClass, isHeightConstrained, open, requestQuery, modifier, gridState)
     }
 }
 
@@ -167,6 +172,7 @@ private fun MovieCollection(
     onOpenDetails: (MediaIdentity) -> Unit,
     onQuery: (MovieLibraryQuery) -> Unit,
     modifier: Modifier,
+    gridState: LazyGridState,
 ) {
     val scope = rememberCoroutineScope()
     when (state) {
@@ -189,7 +195,7 @@ private fun MovieCollection(
             }
         }
         is MovieLibraryState.Ready -> ReadyMovieGrid(
-            gateway, state, windowClass, isHeightConstrained, onOpenDetails, onQuery, modifier,
+            gateway, state, windowClass, isHeightConstrained, onOpenDetails, onQuery, modifier, gridState,
         )
     }
 }
@@ -203,9 +209,9 @@ private fun ReadyMovieGrid(
     onOpenDetails: (MediaIdentity) -> Unit,
     onQuery: (MovieLibraryQuery) -> Unit,
     modifier: Modifier,
+    gridState: LazyGridState,
 ) {
     val scope = rememberCoroutineScope()
-    val gridState = rememberLazyGridState()
     val density = LocalDensity.current
     val fontScale = density.fontScale
     LaunchedEffect(gridState, state.items.size, state.totalCount) {

@@ -553,10 +553,11 @@ class AuthenticatedEmbyGateway(
         cached: MovieLibrarySnapshot?,
     ): List<MoviePoster> {
         if (firstPage.items.isEmpty()) return emptyList()
-        val restoredTail = cached?.items.orEmpty().drop(MoviePageSize)
-        return (firstPage.items + restoredTail)
-            .distinctBy { it.identity }
-            .take(firstPage.totalCount)
+        val cachedItems = cached?.items.orEmpty()
+        val cachedFirstPageIdentities = cachedItems.take(MoviePageSize).map { it.identity }
+        val refreshedFirstPageIdentities = firstPage.items.map { it.identity }
+        if (cachedFirstPageIdentities != refreshedFirstPageIdentities) return firstPage.items
+        return (firstPage.items + cachedItems.drop(MoviePageSize)).take(firstPage.totalCount)
     }
 
     private data class ActiveCredential(val serverId: String, val userId: String, val token: String) {

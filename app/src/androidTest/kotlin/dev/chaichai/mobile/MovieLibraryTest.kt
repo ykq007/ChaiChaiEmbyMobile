@@ -15,6 +15,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithTag
@@ -138,6 +139,60 @@ class MovieLibraryTest {
 
         composeRule.onAllNodesWithText("Arrival").assertCountEquals(2)
         composeRule.onNodeWithTag("movie-details-scroll").assertLeftPositionInRootIsEqualTo(420.dp)
+    }
+
+    @Test
+    fun live_hinge_transition_keeps_the_selected_movie_journey() {
+        val gateway = FakeMovieGateway(ready())
+        val hinge = androidx.compose.runtime.mutableStateOf<SeparatingHinge?>(null)
+        composeRule.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                themed {
+                    MobileApp(
+                        appBoundaries(gateway, FakePlayback()),
+                        hinge.value,
+                        Modifier.requiredSize(840.dp, 700.dp),
+                    )
+                }
+            }
+        }
+        composeRule.onNodeWithText("Libraries").performClick()
+        composeRule.onNodeWithText("Arrival").performClick()
+        composeRule.onNodeWithText("Language changes everything.").assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            hinge.value = SeparatingHinge(400, 0, 420, 700, HingeOrientation.Vertical)
+        }
+
+        composeRule.onNodeWithText("Language changes everything.").assertIsDisplayed()
+        composeRule.onNodeWithTag("movie-details-scroll").assertLeftPositionInRootIsEqualTo(420.dp)
+    }
+
+    @Test
+    fun expanded_list_detail_selection_preserves_the_collection_scroll_position() {
+        val movies = (0 until 100).map {
+            MoviePoster(MediaIdentity("server", "movie-$it"), "Movie $it", 2000 + it)
+        }
+        val gateway = FakeMovieGateway(
+            MovieLibraryState.Ready(
+                HomeScope("server", "user"), movies, movies.size,
+                MovieLibraryQuery(MovieSortField.Name, SortDirection.Ascending),
+            ),
+            details().copy(identity = movies[80].identity, title = movies[80].title),
+        )
+        composeRule.setContent {
+            themed {
+                LibrariesScreen(
+                    gateway, LibraryWindowClass.Expanded, false, true, FakePlayback(), {},
+                    modifier = Modifier.requiredSize(840.dp, 700.dp),
+                )
+            }
+        }
+        composeRule.onNodeWithTag("movie-grid").performScrollToIndex(80)
+        composeRule.onNodeWithText("Movie 80").performClick()
+
+        composeRule.onNodeWithText("Movie 80").assertIsDisplayed()
+        composeRule.onNodeWithText("Movie 0").assertDoesNotExist()
     }
 
     @Test

@@ -284,6 +284,87 @@ class MovieGatewayTest {
     }
 
     @Test
+    fun changed_first_page_invalidates_cached_tail_and_advances_with_authoritative_offsets() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(ok("""{"Items":[]}"""))
+            val insertedFirstPage = buildList {
+                add("{\"Id\":\"inserted\",\"Name\":\"Inserted\"}")
+                addAll((0 until 39).map { "{\"Id\":\"movie-$it\",\"Name\":\"Fresh $it\"}" })
+            }.joinToString(",", "{\"Items\":[", "],\"TotalRecordCount\":81}")
+            server.enqueue(ok(insertedFirstPage))
+            server.enqueue(ok(page("Fresh", 81, 39, 40)))
+            server.enqueue(ok(page("Fresh", 81, 79, 1)))
+            val scope = HomeScope("server", "user")
+            val query = MovieLibraryQuery(MovieSortField.DateAdded, SortDirection.Descending)
+            val cache = InMemoryMovieCache().apply {
+                saveLibrary(
+                    scope,
+                    query,
+                    (0 until 80).map { MoviePoster(MediaIdentity("server", "movie-$it"), "Cached $it") },
+                    80,
+                    emptyList(),
+                )
+            }
+            val gateway = AuthenticatedEmbyGateway(
+                FakeVault(stored(valid(server.url("/emby").toString()))),
+                movieCache = cache,
+                deviceId = "test-device",
+            )
+
+            gateway.refreshMovies(query)
+            assertEquals(40, (gateway.movieLibrary.value as MovieLibraryState.Ready).items.size)
+            gateway.loadNextMoviePage()
+            gateway.loadNextMoviePage()
+
+            val ready = gateway.movieLibrary.value as MovieLibraryState.Ready
+            assertEquals(81, ready.items.size)
+            assertEquals(81, ready.items.distinctBy { it.identity }.size)
+            val requests = List(4) { server.takeRequest() }
+            assertEquals("40", requests[2].url.queryParameter("StartIndex"))
+            assertEquals("80", requests[3].url.queryParameter("StartIndex"))
+        }
+    }
+
+    @Test
+    fun insert_delete_and_reorder_each_invalidate_the_cached_page_tail() = runTest {
+        val firstPageIdentities = listOf(
+            listOf("inserted") + (0 until 39).map { "movie-$it" },
+            (1..40).map { "movie-$it" },
+            listOf("movie-1", "movie-0") + (2 until 40).map { "movie-$it" },
+        )
+        firstPageIdentities.forEach { identities ->
+            MockWebServer().use { server ->
+                server.start()
+                server.enqueue(ok("""{"Items":[]}"""))
+                server.enqueue(ok(identities.joinToString(",", "{\"Items\":[", "],\"TotalRecordCount\":80}") {
+                    "{\"Id\":\"$it\",\"Name\":\"Fresh $it\"}"
+                }))
+                val scope = HomeScope("server", "user")
+                val query = MovieLibraryQuery(MovieSortField.DateAdded, SortDirection.Descending)
+                val cache = InMemoryMovieCache().apply {
+                    saveLibrary(
+                        scope,
+                        query,
+                        (0 until 80).map { MoviePoster(MediaIdentity("server", "movie-$it"), "Cached $it") },
+                        80,
+                        emptyList(),
+                    )
+                }
+                val gateway = AuthenticatedEmbyGateway(
+                    FakeVault(stored(valid(server.url("/emby").toString()))),
+                    movieCache = cache,
+                    deviceId = "test-device",
+                )
+
+                gateway.refreshMovies(query)
+
+                assertEquals(40, (gateway.movieLibrary.value as MovieLibraryState.Ready).items.size)
+            }
+        }
+    }
+
+    @Test
     fun detail_revocation_preserves_the_encoded_return_destination() = runTest {
         MockWebServer().use { server ->
             server.start()

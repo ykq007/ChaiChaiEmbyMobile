@@ -263,5 +263,11 @@ class ServerSetupCoordinator(
     }
 
     private fun isSafeDestination(destination: String): Boolean =
-        destination in setOf("home", "libraries", "search", "settings")
+        destination in setOf("home", "libraries", "search", "settings") ||
+            MovieDetailsDestination.matches(destination)
+
+    private companion object {
+        private const val EncodedRouteSegment = "(?:[A-Za-z0-9._~!()*'-]|%[0-9A-Fa-f]{2})+"
+        val MovieDetailsDestination = Regex("movies/$EncodedRouteSegment/$EncodedRouteSegment")
+    }
 }
