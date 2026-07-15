@@ -1,0 +1,3 @@
+# Allow explicitly acknowledged insecure server transport
+
+The Mobile Client accepts user-configured public HTTP Server Addresses and a disabled-by-default Certificate Bypass because self-hosted Emby deployments commonly cannot provide publicly trusted HTTPS, and rejecting them would exclude legitimate users. The risk must remain explicit and narrowly scoped: never silently downgrade HTTPS, apply bypass only to the confirmed Server Address authority, never transfer it across redirects or to other integrations, bound redirect chains, and never forward credentials or access tokens across an authority change.

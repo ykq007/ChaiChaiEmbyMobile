@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>ChaiChai Adaptive Shell Prototype</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- PROTOTYPE — Three adaptive shell directions, switchable with ?variant=A|B|C. -->
+    <header class="lab-header">
+      <div>
+        <strong>ChaiChai adaptive shell</strong>
+        <span>Throwaway prototype · read only</span>
+      </div>
+      <div class="lab-controls" aria-label="Prototype controls">
+        <div class="segmented" role="group" aria-label="Preview width">
+          <button data-width="compact">Phone</button>
+          <button data-width="medium">Split</button>
+          <button data-width="expanded" aria-pressed="true">Tablet</button>
+        </div>
+        <div class="segmented" role="group" aria-label="Preview surface">
+          <button data-view="home" aria-pressed="true">Home</button>
+          <button data-view="library">Library</button>
+          <button data-view="search">Search</button>
+          <button data-view="details">Details</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="stage">
+      <section id="device" class="device expanded" aria-label="Adaptive application preview">
+        <div id="app" class="app" data-variant="A" data-view="home">
+          <aside class="rail" aria-label="Primary navigation">
+            <div class="brand-mark" aria-label="ChaiChai">茶</div>
+            <nav>
+              <button class="active" data-view="home"><span>⌂</span><b>Home</b></button>
+              <button data-view="library"><span>▦</span><b>Libraries</b></button>
+              <button data-view="search"><span>⌕</span><b>Search</b></button>
+              <button><span>⚙</span><b>Settings</b></button>
+            </nav>
+            <button class="profile" aria-label="Open profile">K</button>
+          </aside>
+
+          <div class="app-body">
+            <header class="topbar">
+              <div class="compact-brand"><span class="brand-mark">茶</span><b>ChaiChai</b></div>
+              <div class="crumb"><span>Good evening</span><strong>Kequan’s library</strong></div>
+              <button class="server-pill"><i></i> Home Server</button>
+              <button class="avatar" aria-label="Open profile">K</button>
+            </header>
+
+            <section class="surface home-surface" aria-label="Home">
+              <article class="hero">
+                <div class="hero-art art-dune"><span>DUNE<br />PART TWO</span></div>
+                <div class="hero-copy">
+                  <p class="resume-label">Continue watching · 42 min left</p>
+                  <h1>Dune: Part Two</h1>
+                  <p class="meta">2024 · 2h 46m · PG-13 · 4K</p>
+                  <p class="synopsis">Paul Atreides unites with Chani and the Fremen while seeking revenge against those who destroyed his family.</p>
+                  <div class="actions"><button class="primary">▶ Resume 2:04:18</button><button class="secondary" data-view="details">View details</button></div>
+                </div>
+              </article>
+
+              <div class="section-heading"><div><h2>Continue watching</h2><p>Your progress is synced with Home Server</p></div><button>See all</button></div>
+              <div class="media-row continue-row">
+                <article class="landscape-item"><div class="art art-shogun"><span>SHŌGUN</span></div><h3>Shōgun</h3><p>S1 E7 · 18 min left</p><i style="--progress: 68%"></i></article>
+                <article class="landscape-item"><div class="art art-bear"><span>THE BEAR</span></div><h3>The Bear</h3><p>S2 E4 · 12 min left</p><i style="--progress: 44%"></i></article>
+                <article class="landscape-item"><div class="art art-arrival"><span>ARRIVAL</span></div><h3>Arrival</h3><p>51 min left</p><i style="--progress: 55%"></i></article>
+              </div>
+
+              <div class="section-heading"><div><h2>Latest movies</h2><p>Recently added to your library</p></div><button>See all</button></div>
+              <div class="poster-row">
+                <article><div class="poster art-poor"><span>POOR<br />THINGS</span></div><h3>Poor Things</h3><p>2023 · 2h 21m</p></article>
+                <article><div class="poster art-zone"><span>ZONE OF<br />INTEREST</span></div><h3>The Zone of Interest</h3><p>2023 · 1h 45m</p></article>
+                <article><div class="poster art-past"><span>PAST<br />LIVES</span></div><h3>Past Lives</h3><p>2023 · 1h 46m</p></article>
+                <article><div class="poster art-perfect"><span>PERFECT<br />DAYS</span></div><h3>Perfect Days</h3><p>2023 · 2h 4m</p></article>
+                <article><div class="poster art-hold"><span>THE<br />HOLDOVERS</span></div><h3>The Holdovers</h3><p>2023 · 2h 13m</p></article>
+              </div>
+              <div class="inline-state"><span>!</span><div><strong>Latest episodes couldn’t refresh</strong><p>Everything else is up to date.</p></div><button>Retry</button></div>
+            </section>
+
+            <section class="surface library-surface" aria-label="Movie library">
+              <div class="library-head"><div><p class="overline">Movies</p><h1>184 films</h1></div><div class="filters"><button>Genre: All⌄</button><button>Added: Newest⌄</button></div></div>
+              <div class="library-layout">
+                <div class="poster-grid">
+                  <article data-title="Dune: Part Two" class="selected"><div class="poster art-dune"></div><h3>Dune: Part Two</h3><p>2024 · 2h 46m</p></article>
+                  <article data-title="Poor Things"><div class="poster art-poor"></div><h3>Poor Things</h3><p>2023 · 2h 21m</p></article>
+                  <article data-title="The Zone of Interest"><div class="poster art-zone"></div><h3>The Zone of Interest</h3><p>2023 · 1h 45m</p></article>
+                  <article data-title="Past Lives"><div class="poster art-past"></div><h3>Past Lives</h3><p>2023 · 1h 46m</p></article>
+                  <article data-title="Perfect Days"><div class="poster art-perfect"></div><h3>Perfect Days</h3><p>2023 · 2h 4m</p></article>
+                  <article data-title="The Holdovers"><div class="poster art-hold"></div><h3>The Holdovers</h3><p>2023 · 2h 13m</p></article>
+                </div>
+                <aside class="peek-detail"><div class="peek-backdrop art-dune"></div><p class="overline">Selected</p><h2>Dune: Part Two</h2><p>Paul Atreides unites with Chani and the Fremen while seeking revenge.</p><button class="primary" data-view="details">View details</button></aside>
+              </div>
+              <button class="inline-retry">Couldn’t load more films · Retry</button>
+            </section>
+
+            <section class="surface search-surface" aria-label="Search">
+              <div class="search-head"><p class="overline">Search Home Server</p><label><span>⌕</span><input value="dune" aria-label="Search media" /><kbd>×</kbd></label><p>Movies, series, seasons, and episodes</p></div>
+              <div class="search-summary"><strong>8 results for “dune”</strong><span>One server searched</span></div>
+              <div class="search-layout">
+                <div class="search-results"><h2>Movies</h2><article><div class="thumb art-dune"></div><div><h3>Dune: Part Two</h3><p>2024 · Movie · 4K</p><span>Resume · 42 min left</span></div></article><article><div class="thumb art-dune-old"></div><div><h3>Dune</h3><p>2021 · Movie · 4K</p><span>Watched</span></div></article><h2>Series & episodes</h2><article><div class="thumb art-prophecy"></div><div><h3>Dune: Prophecy</h3><p>Series · 1 season</p><span>2 unwatched episodes</span></div></article></div>
+                <aside class="search-context"><span>⌕</span><h2>Search stays with you</h2><p>Your query, filters, and position survive resize, rotation, and fold changes.</p></aside>
+              </div>
+            </section>
+
+            <section class="surface details-surface" aria-label="Media details">
+              <div class="details-backdrop art-dune"></div>
+              <div class="details-layout"><div class="details-main"><button class="back" data-view="home">← Back</button><p class="overline">Movie</p><h1>Dune: Part Two</h1><p class="meta">2024 · 2h 46m · PG-13 · 4K · ★ 8.7</p><div class="actions"><button class="primary">▶ Resume 2:04:18</button><button class="secondary">Play from beginning</button></div><p class="synopsis">Paul Atreides unites with Chani and the Fremen while seeking revenge against those who destroyed his family. Facing a choice between love and the fate of the universe, he endeavors to prevent a terrible future.</p><div class="chips"><span>Science Fiction</span><span>Adventure</span><span>Drama</span></div></div><aside class="media-facts"><h2>Available tracks</h2><p><b>Audio</b><span>English Dolby Atmos + 2</span></p><p><b>Subtitles</b><span>English · 中文 + 4</span></p><p><b>Server</b><span>Home Server</span></p></aside></div>
+            </section>
+
+            <nav class="bottom-nav" aria-label="Primary navigation">
+              <button class="active" data-view="home"><span>⌂</span><b>Home</b></button><button data-view="library"><span>▦</span><b>Libraries</b></button><button data-view="search"><span>⌕</span><b>Search</b></button><button><span>⚙</span><b>Settings</b></button>
+            </nav>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="variant-switcher" aria-label="Prototype variant switcher">
+      <button id="previous" aria-label="Previous variant">←</button>
+      <div><small>Design direction</small><strong id="variant-label">A — Spotlight shelves</strong></div>
+      <button id="next" aria-label="Next variant">→</button>
+    </footer>
+    <script src="app.js"></script>
+  </body>
+</html>

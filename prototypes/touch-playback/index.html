@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark">
+  <title>ChaiChai Touch Playback Prototype</title><link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- PROTOTYPE — Three playback directions, switchable with ?variant=A|B|C. -->
+  <header class="lab"><div><strong>Touch playback</strong><span>Throwaway prototype · read only</span></div><div class="lab-groups">
+    <div class="seg" aria-label="Window"><button data-width="phone">Phone</button><button data-width="split">Split</button><button data-width="tablet">Tablet</button><button data-width="fold">Fold</button></div>
+    <div class="seg" aria-label="State"><button data-state="playing">Playing</button><button data-state="paused">Paused</button><button data-state="tracks">Tracks</button><button data-state="danmaku">Danmaku</button></div>
+  </div></header>
+  <main class="stage"><section id="device" class="device phone"><div id="player" class="player" data-variant="A" data-state="playing">
+    <div class="picture"><div class="sun"></div><div class="ridge far"></div><div class="ridge near"></div><div class="grain"></div></div>
+    <div class="shade"></div><div class="safe-line" aria-hidden="true"></div>
+    <header class="top"><button class="icon" aria-label="Back">←</button><div class="title"><strong>Dune: Part Two</strong><span>Home Server · Direct Play · 4K</span></div><button class="icon more" aria-label="More options">⋮</button></header>
+    <div class="center-controls"><button class="skip" aria-label="Rewind 10 seconds">↶<small>10</small></button><button id="play" class="play" aria-label="Pause">Ⅱ</button><button class="skip" aria-label="Forward 30 seconds">↷<small>30</small></button></div>
+    <section class="context"><strong>Paul rides south</strong><span>Chapter 12 of 18</span></section>
+    <footer class="transport"><div class="timeline"><span class="buffer"></span><i></i></div><div class="times"><span>2:04:18</span><span>−42:03</span></div><div class="actions"><button class="labeled tracks" aria-label="Audio and subtitles"><b>CC</b><span>English · 中文</span></button><button class="labeled danmaku" aria-label="Danmaku, later capability"><b>弹</b><span>Danmaku</span></button><button class="icon" aria-label="Orientation and fullscreen">⛶</button></div></footer>
+    <aside class="track-sheet" aria-label="Audio and subtitles"><div class="sheet-head"><div><strong>Tracks</strong><span>Changes keep position and playback state</span></div><button class="icon close" aria-label="Close">×</button></div><div class="track-cols"><section><h2>Audio</h2><button class="selected"><span>English</span><small>Dolby Atmos · Default</small><b>✓</b></button><button><span>日本語</span><small>AAC 5.1</small></button></section><section><h2>Subtitles</h2><button><span>Off</span></button><button class="selected"><span>中文（简体）</span><small>External · Default</small><b>✓</b></button><button><span>English</span><small>SDH</small></button></section></div></aside>
+    <aside class="danmaku-panel"><div><strong>Danmaku arrives later</strong><span>One deliberate entry point; no first-milestone control clutter.</span></div><button>Preview off</button></aside>
+    <div class="fold-hinge" aria-hidden="true"></div><div class="sync">Progress queued · playback continues</div>
+  </div></section></main>
+  <footer class="switcher"><button id="prev" aria-label="Previous variant">←</button><div><small>Playback direction</small><strong id="variant-label">A — Familiar cinema</strong></div><button id="next" aria-label="Next variant">→</button></footer>
+  <script src="app.js"></script>
+</body></html>
