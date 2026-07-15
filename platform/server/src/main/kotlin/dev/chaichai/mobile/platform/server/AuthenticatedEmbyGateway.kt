@@ -156,6 +156,7 @@ class AuthenticatedEmbyGateway(
         }
         val cacheable = merged.filterValues { it.failureMessage == null || it.items.isNotEmpty() }
         if (cacheable.isNotEmpty()) homeCache.saveFeed(scope, cacheable)
+        if (!isCurrent(scope, generation)) return@withContext
         mutableHomeFeed.value = when {
             failures == merged.size && merged.values.none { it.items.isNotEmpty() } ->
                 HomeFeedState.Failure("Home couldn't be loaded. Check the connection and retry.", scope)

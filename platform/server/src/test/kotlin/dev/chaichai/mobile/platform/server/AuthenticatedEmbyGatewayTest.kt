@@ -161,6 +161,27 @@ class AuthenticatedEmbyGatewayTest {
     }
 
     @Test
+    fun disconnect_during_cache_save_cannot_publish_old_scope_content() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            repeat(5) { server.enqueue(items("Old scope $it")) }
+            val cache = SaveBlockingCache()
+            val gateway = AuthenticatedEmbyGateway(
+                FakeVault(stored(valid(server.url("/emby").toString()))),
+                homeCache = cache,
+            )
+            val refresh = backgroundScope.launch { gateway.refreshHome() }
+            cache.saveStarted.await()
+
+            gateway.setConnected(false)
+            cache.releaseSave.complete(Unit)
+            refresh.join()
+
+            assertEquals(HomeFeedState.Loading, gateway.homeFeed.value)
+        }
+    }
+
+    @Test
     fun authenticated_request_uses_scoped_token_and_reports_expiration() = runTest {
         MockWebServer().use { server ->
             server.start()
@@ -220,6 +241,18 @@ class AuthenticatedEmbyGatewayTest {
             )
         }
         override suspend fun saveFeed(scope: HomeScope, sections: Map<HomeSection, HomeSectionContent>) = Unit
+        override suspend fun loadArtwork(scope: HomeScope, reference: ArtworkReference): ByteArray? = null
+        override suspend fun saveArtwork(scope: HomeScope, reference: ArtworkReference, bytes: ByteArray) = Unit
+    }
+
+    private class SaveBlockingCache : HomeCache {
+        val saveStarted = CompletableDeferred<Unit>()
+        val releaseSave = CompletableDeferred<Unit>()
+        override suspend fun loadFeed(scope: HomeScope): Map<HomeSection, HomeSectionContent>? = null
+        override suspend fun saveFeed(scope: HomeScope, sections: Map<HomeSection, HomeSectionContent>) {
+            saveStarted.complete(Unit)
+            releaseSave.await()
+        }
         override suspend fun loadArtwork(scope: HomeScope, reference: ArtworkReference): ByteArray? = null
         override suspend fun saveArtwork(scope: HomeScope, reference: ArtworkReference, bytes: ByteArray) = Unit
     }
