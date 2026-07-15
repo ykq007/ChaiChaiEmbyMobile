@@ -16,7 +16,7 @@ tasks.register("verifyModuleGraph") {
         file("gradle/feature-module.gradle"),
     )
     doLast {
-        val forbidden = Regex("project\\(\\\":feature:")
+        val forbidden = Regex("""project\s*\(\s*["']:feature:""")
         val violations = inputs.files.filter { forbidden.containsMatchIn(it.readText()) }
         check(violations.isEmpty()) {
             "Feature modules must not depend directly on one another: ${violations.joinToString()}"
