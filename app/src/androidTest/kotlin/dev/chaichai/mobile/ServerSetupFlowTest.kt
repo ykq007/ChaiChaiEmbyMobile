@@ -81,10 +81,7 @@ class ServerSetupFlowTest {
             composeRule.onNode(hasText("Home") and isHeading()).assertIsDisplayed()
             assertEquals("user", vault.restore()!!.userId)
 
-            assertEquals(
-                dev.chaichai.mobile.core.contracts.GatewayAuthenticationStatus.Expired,
-                runBlocking { gateway.verifyAuthentication("search") },
-            )
+            composeRule.onNodeWithText("Search").performClick()
             composeRule.onNodeWithText("Sign in to Cinema").assertIsDisplayed()
             composeRule.onNodeWithText("Password").performTextInput("replacement-password")
             composeRule.onNodeWithText("Sign in", useUnmergedTree = true).performClick()
