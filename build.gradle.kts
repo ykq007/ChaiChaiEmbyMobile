@@ -1,0 +1,18 @@
+plugins {
+    id("com.android.application") version "9.3.0" apply false
+    id("com.android.library") version "9.3.0" apply false
+    id("org.jetbrains.kotlin.plugin.compose") version "2.2.20" apply false
+}
+
+tasks.register("verifyModuleGraph") {
+    group = "verification"
+    description = "Fails when one feature module depends directly on another."
+    inputs.files(fileTree("feature") { include("*/build.gradle.kts") })
+    doLast {
+        val forbidden = Regex("project\\(\\\":feature:")
+        val violations = inputs.files.filter { forbidden.containsMatchIn(it.readText()) }
+        check(violations.isEmpty()) {
+            "Feature modules must not depend directly on one another: ${violations.joinToString()}"
+        }
+    }
+}
