@@ -32,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
@@ -47,6 +48,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.chaichai.mobile.core.contracts.AppBoundaries
 import dev.chaichai.mobile.core.contracts.GatewayConnectionState
+import dev.chaichai.mobile.core.contracts.GatewayAuthenticationStatus
 import dev.chaichai.mobile.design.system.LocalReducedMotion
 import dev.chaichai.mobile.feature.home.HomeScreen
 import dev.chaichai.mobile.feature.libraries.LibrariesScreen
@@ -58,6 +60,7 @@ import dev.chaichai.mobile.platform.adaptive.AdaptiveNavigationPolicy
 import dev.chaichai.mobile.platform.adaptive.NavigationPlacement
 import dev.chaichai.mobile.platform.adaptive.WindowCharacteristics
 import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 
 enum class HingeOrientation { Vertical, Horizontal }
 
@@ -168,11 +171,16 @@ private fun AdaptiveShell(
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentDestination = backStackEntry?.destination
         val reducedMotion = LocalReducedMotion.current
+        val scope = rememberCoroutineScope()
         val navigate: (TopLevelDestination) -> Unit = { destination ->
-            navController.navigate(destination.route) {
-                popUpTo(navController.graph.startDestinationId) { saveState = true }
-                launchSingleTop = true
-                restoreState = true
+            scope.launch {
+                if (boundaries.gateway.verifyAuthentication(destination.route) != GatewayAuthenticationStatus.Expired) {
+                    navController.navigate(destination.route) {
+                        popUpTo(navController.graph.startDestinationId) { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                }
             }
         }
         val content: @Composable (Modifier) -> Unit = { contentModifier ->

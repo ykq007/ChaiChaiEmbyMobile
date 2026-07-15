@@ -190,7 +190,7 @@ class ServerSetupCoordinator(
         val address = enteredAddress ?: return
         mutableState.value = ServerSetupState.Probing(address.value)
         scope.launch {
-            when (val result = probe.probe(address, certificateBypassAuthority)) {
+            when (val result = probe.probe(address, certificateBypassAuthority, acknowledgedCleartextAuthority)) {
                 is ProbeResult.Success -> {
                     discovered = result
                     if (result.finalAddress.authority != certificateBypassAuthority) {
@@ -213,6 +213,9 @@ class ServerSetupCoordinator(
                             guidance = result.reason.guidance(),
                         )
                     }
+                }
+                is ProbeResult.CleartextRedirect -> {
+                    mutableState.value = ServerSetupState.CleartextRisk(result.redirectAddress.value)
                 }
             }
         }

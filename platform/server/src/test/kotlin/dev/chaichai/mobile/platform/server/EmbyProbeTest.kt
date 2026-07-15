@@ -27,7 +27,11 @@ class EmbyProbeTest {
                 )
                 val initial = valid(first.url("/start/").toString())
 
-                val result = EmbyProbe().probe(initial)
+                val finalAddress = valid(final.url("/emby").toString())
+                val result = EmbyProbe().probe(
+                    initial,
+                    acknowledgedCleartextAuthority = finalAddress.authority,
+                )
 
                 val success = result as ProbeResult.Success
                 assertEquals(final.url("/emby").toString().removeSuffix("/"), success.finalAddress.value)
@@ -52,7 +56,11 @@ class EmbyProbeTest {
                 )
             }
 
-            val result = EmbyProbe(maxRedirects = 5).probe(valid(server.url("/hop-0").toString()))
+            val initial = valid(server.url("/hop-0").toString())
+            val result = EmbyProbe(maxRedirects = 5).probe(
+                initial,
+                acknowledgedCleartextAuthority = initial.authority,
+            )
 
             assertEquals(ProbeFailure.TooManyRedirects, (result as ProbeResult.Failure).reason)
         }

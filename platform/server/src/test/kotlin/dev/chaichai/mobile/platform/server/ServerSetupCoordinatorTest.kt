@@ -183,12 +183,20 @@ class ServerSetupCoordinatorTest {
     }
 
     private class FakeProbe(private val result: ProbeResult) : ServerProbe {
-        override suspend fun probe(initialAddress: ServerAddress, certificateBypassAuthority: ServerAuthority?) = result
+        override suspend fun probe(
+            initialAddress: ServerAddress,
+            certificateBypassAuthority: ServerAuthority?,
+            acknowledgedCleartextAuthority: ServerAuthority?,
+        ) = result
     }
 
     private class SequencedProbe(private val results: MutableList<ProbeResult>) : ServerProbe {
         val bypasses = mutableListOf<ServerAuthority?>()
-        override suspend fun probe(initialAddress: ServerAddress, certificateBypassAuthority: ServerAuthority?): ProbeResult {
+        override suspend fun probe(
+            initialAddress: ServerAddress,
+            certificateBypassAuthority: ServerAuthority?,
+            acknowledgedCleartextAuthority: ServerAuthority?,
+        ): ProbeResult {
             bypasses += certificateBypassAuthority
             return results.removeAt(0)
         }

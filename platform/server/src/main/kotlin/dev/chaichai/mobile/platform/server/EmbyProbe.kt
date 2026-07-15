@@ -39,12 +39,19 @@ sealed interface ProbeResult {
     ) : ProbeResult
 
     data class Failure(val reason: ProbeFailure, val address: ServerAddress? = null) : ProbeResult
+
+    data class CleartextRedirect(
+        val initialAddress: ServerAddress,
+        val redirectAddress: ServerAddress,
+        val redirectCount: Int,
+    ) : ProbeResult
 }
 
 interface ServerProbe {
     suspend fun probe(
         initialAddress: ServerAddress,
         certificateBypassAuthority: ServerAuthority? = null,
+        acknowledgedCleartextAuthority: ServerAuthority? = null,
     ): ProbeResult
 }
 
@@ -57,6 +64,7 @@ class EmbyProbe(
     override suspend fun probe(
         initialAddress: ServerAddress,
         certificateBypassAuthority: ServerAuthority?,
+        acknowledgedCleartextAuthority: ServerAuthority?,
     ): ProbeResult = withContext(Dispatchers.IO) {
         var current = initialAddress
         var redirectCount = 0
@@ -93,6 +101,9 @@ class EmbyProbe(
                         }
                     }
                     redirectCount += 1
+                    if (current.isCleartext && current.authority != acknowledgedCleartextAuthority) {
+                        return@withContext ProbeResult.CleartextRedirect(initialAddress, current, redirectCount)
+                    }
                     continue
                 }
                 if (!it.isSuccessful) return@withContext ProbeResult.Failure(ProbeFailure.InvalidResponse, current)

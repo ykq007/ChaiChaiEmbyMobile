@@ -47,6 +47,28 @@ class CertificateBypassTest {
         }
     }
 
+    @Test
+    fun https_to_http_redirect_stops_before_the_first_cleartext_request() = runTest {
+        tlsServer().use { first ->
+            MockWebServer().use { cleartext ->
+                first.start()
+                cleartext.start()
+                first.enqueue(
+                    MockResponse.Builder().code(302).addHeader("Location", cleartext.url("/emby/")).build(),
+                )
+                val initial = valid(first.url("/secure").toString())
+
+                val result = EmbyProbe().probe(initial, initial.authority)
+
+                assertEquals(
+                    cleartext.url("/emby").toString().removeSuffix("/"),
+                    (result as ProbeResult.CleartextRedirect).redirectAddress.value,
+                )
+                assertEquals(0, cleartext.requestCount)
+            }
+        }
+    }
+
     private fun tlsServer(): MockWebServer {
         val certificate = HeldCertificate.Builder()
             .commonName("localhost")
