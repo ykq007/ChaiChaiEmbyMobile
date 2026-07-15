@@ -39,6 +39,7 @@ interface MovieCache {
     )
     suspend fun loadDetails(scope: HomeScope, identity: MediaIdentity): MovieDetails?
     suspend fun saveDetails(scope: HomeScope, details: MovieDetails)
+    suspend fun clear(scope: HomeScope) = Unit
 }
 
 class InMemoryMovieCache : MovieCache {
@@ -50,6 +51,10 @@ class InMemoryMovieCache : MovieCache {
     }
     override suspend fun loadDetails(scope: HomeScope, identity: MediaIdentity) = details[scope to identity]
     override suspend fun saveDetails(scope: HomeScope, details: MovieDetails) { this.details[scope to details.identity] = details }
+    override suspend fun clear(scope: HomeScope) {
+        libraries.keys.removeAll { it.first == scope }
+        details.keys.removeAll { it.first == scope }
+    }
 }
 
 fun createRoomMovieCache(context: Context): MovieCache = RoomMovieCache(
@@ -77,6 +82,8 @@ internal interface MovieCacheDao {
     @Query("SELECT * FROM movie_details WHERE serverId=:serverId AND userId=:userId AND itemId=:itemId")
     suspend fun details(serverId: String, userId: String, itemId: String): MovieDetailsEntity?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveDetails(entity: MovieDetailsEntity)
+    @Query("DELETE FROM movie_libraries WHERE serverId=:serverId AND userId=:userId") suspend fun clearLibraries(serverId: String, userId: String)
+    @Query("DELETE FROM movie_details WHERE serverId=:serverId AND userId=:userId") suspend fun clearDetails(serverId: String, userId: String)
 }
 
 @Database(entities = [MovieLibraryEntity::class, MovieDetailsEntity::class], version = 1, exportSchema = false)
@@ -105,6 +112,10 @@ internal class RoomMovieCache(private val dao: MovieCacheDao) : MovieCache {
         dao.saveDetails(
             MovieDetailsEntity(scope.serverId, scope.userId, details.identity.itemId, json.encodeToString(CachedMovieDetails.from(details))),
         )
+    }
+    override suspend fun clear(scope: HomeScope) {
+        dao.clearLibraries(scope.serverId, scope.userId)
+        dao.clearDetails(scope.serverId, scope.userId)
     }
 }
 

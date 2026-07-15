@@ -82,7 +82,15 @@ class SeriesLibraryTest {
         val restoration = StateRestorationTester(composeRule)
         val gateway = FakeSeriesGateway()
         restoration.setContent {
-            ChaiChaiTheme(reducedMotion = false) { MobileApp(boundaries(gateway, FakeSeriesPlayback()), null) }
+            androidx.compose.runtime.CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                ChaiChaiTheme(reducedMotion = false) {
+                    MobileApp(
+                        boundaries(gateway, FakeSeriesPlayback()),
+                        null,
+                        Modifier.requiredSize(1000.dp, 700.dp),
+                    )
+                }
+            }
         }
         composeRule.onNodeWithText("Libraries").performClick()
         composeRule.onNodeWithText("Shows").performClick()
@@ -198,7 +206,17 @@ class SeriesLibraryTest {
     @Test
     fun an_empty_season_keeps_series_context_and_explains_the_empty_result() {
         val gateway = FakeSeriesGateway(emptyEpisodes = true)
-        composeRule.setContent { ChaiChaiTheme(reducedMotion = false) { MobileApp(boundaries(gateway, FakeSeriesPlayback()), null) } }
+        composeRule.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                ChaiChaiTheme(reducedMotion = false) {
+                    MobileApp(
+                        boundaries(gateway, FakeSeriesPlayback()),
+                        null,
+                        Modifier.requiredSize(1000.dp, 700.dp),
+                    )
+                }
+            }
+        }
         composeRule.onNodeWithText("Libraries").performClick()
         composeRule.onNodeWithText("Shows").performClick()
         composeRule.onNodeWithText("The Expanse").performClick()

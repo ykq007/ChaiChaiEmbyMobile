@@ -284,11 +284,14 @@ class MovieLibraryTest {
         val gateway = FakeMovieGateway(ready())
         val setup = RestoredServerSetup()
         composeRule.setContent {
-            themed {
-                MobileApp(
-                    appBoundaries(gateway, FakePlayback()).copy(serverSetup = setup),
-                    separatingHinge = null,
-                )
+            androidx.compose.runtime.CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                themed {
+                    MobileApp(
+                        appBoundaries(gateway, FakePlayback()).copy(serverSetup = setup),
+                        separatingHinge = null,
+                        modifier = Modifier.requiredSize(1000.dp, 700.dp),
+                    )
+                }
             }
         }
         composeRule.onNodeWithText("Libraries").performClick()

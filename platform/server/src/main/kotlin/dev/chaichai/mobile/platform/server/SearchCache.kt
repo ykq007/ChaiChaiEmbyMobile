@@ -22,6 +22,7 @@ import kotlinx.coroutines.CancellationException
 interface SearchCache {
     suspend fun load(scope: HomeScope, query: String): List<SearchResultGroup>?
     suspend fun save(scope: HomeScope, query: String, groups: List<SearchResultGroup>)
+    suspend fun clear(scope: HomeScope) = Unit
 }
 
 class InMemorySearchCache : SearchCache {
@@ -32,6 +33,7 @@ class InMemorySearchCache : SearchCache {
     override suspend fun save(scope: HomeScope, query: String, groups: List<SearchResultGroup>) {
         entries[SearchCacheKey(scope, query)] = groups
     }
+    override suspend fun clear(scope: HomeScope) { entries.keys.removeAll { it.scope == scope } }
 }
 
 private data class SearchCacheKey(val scope: HomeScope, val query: String)
@@ -58,6 +60,8 @@ internal interface SearchCacheDao {
 
     @Query("DELETE FROM search_results WHERE serverId=:serverId AND userId=:userId AND `query`=:query")
     suspend fun delete(serverId: String, userId: String, query: String)
+    @Query("DELETE FROM search_results WHERE serverId=:serverId AND userId=:userId")
+    suspend fun clear(serverId: String, userId: String)
 }
 
 @Database(entities = [SearchCacheEntity::class], version = 1, exportSchema = false)
@@ -96,6 +100,7 @@ internal class RoomSearchCache(private val dao: SearchCacheDao) : SearchCache {
             ),
         )
     }
+    override suspend fun clear(scope: HomeScope) = dao.clear(scope.serverId, scope.userId)
 }
 
 @Serializable

@@ -4,6 +4,7 @@ import dev.chaichai.mobile.core.contracts.MediaPlaybackRequest
 import dev.chaichai.mobile.core.contracts.PlaybackCoordinator
 import dev.chaichai.mobile.core.contracts.PlaybackFailureKind
 import dev.chaichai.mobile.core.contracts.PlaybackState
+import dev.chaichai.mobile.core.contracts.PlaybackProgressSync
 import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
 import dev.chaichai.mobile.platform.server.AuthoritativePlaybackPlan
 import dev.chaichai.mobile.platform.server.PlaybackCapabilities
@@ -14,6 +15,8 @@ import dev.chaichai.mobile.platform.server.PlaybackReport
 import dev.chaichai.mobile.platform.server.PlaybackReportKind
 import dev.chaichai.mobile.platform.server.PlaybackStart
 import dev.chaichai.mobile.platform.server.ScopedPlaybackRequest
+import dev.chaichai.mobile.platform.server.ProgressAwarePlaybackGateway
+import dev.chaichai.mobile.platform.server.ProgressSyncStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -71,6 +74,7 @@ class PlaybackCoordinatorImpl(
     private var pendingRequest: MediaPlaybackRequest? = null
     private var trackChangeJob: Job? = null
     private var pendingTrackTransition: PendingTrackTransition? = null
+    private var progressStatusJob: Job? = null
 
     private val engineEventJob = scope.launch {
             engine.events.collect { event ->
@@ -86,6 +90,7 @@ class PlaybackCoordinatorImpl(
 
     override fun close() {
         engineEventJob.cancel()
+        progressStatusJob?.cancel()
         timelineJob?.cancel()
         negotiationJob?.cancel()
         trackChangeJob?.cancel()
@@ -135,6 +140,7 @@ class PlaybackCoordinatorImpl(
                 }
                 is PlaybackNegotiationResult.Ready -> {
                     activePlan = result.plan
+                    observeProgressStatus(result.plan.request.scope)
                     val startTicks = (start as? PlaybackStart.Resume)?.positionTicks ?: 0L
                     try {
                         engine.prepare(result.plan, startTicks, startPaused = false)
@@ -227,6 +233,10 @@ class PlaybackCoordinatorImpl(
 
     override fun retry() {
         lastRequest?.let(::submit)
+    }
+
+    override fun retryProgressSync() {
+        activePlan?.request?.scope?.let { (gateway as? ProgressAwarePlaybackGateway)?.retryProgress(it) }
     }
 
     override fun exit() {
@@ -365,6 +375,7 @@ class PlaybackCoordinatorImpl(
             gateway.report(
                 PlaybackReport(plan, PlaybackReportKind.Stopped, event.positionTicks, event.isPaused),
             )
+            progressStatusJob?.cancel()
             activePlan = null
             mutableIsPlaying.value = false
             mutableState.value = terminal
@@ -389,6 +400,8 @@ class PlaybackCoordinatorImpl(
             controlsVisible = controlsVisible,
             audioTracks = plan.audioTracks,
             subtitleTracks = plan.subtitleTracks,
+            progressSync = (gateway as? ProgressAwarePlaybackGateway)?.progressStatus(plan.request.scope)?.value?.toContract()
+                ?: PlaybackProgressSync.Synced,
         )
     }
 
@@ -404,6 +417,25 @@ class PlaybackCoordinatorImpl(
     }
 
     private fun PlaybackFailure.toContractFailure() = PlaybackFailureKind.valueOf(name)
+
+    private fun ProgressSyncStatus.toContract(): PlaybackProgressSync = when (this) {
+        ProgressSyncStatus.Synced -> PlaybackProgressSync.Synced
+        ProgressSyncStatus.Pending -> PlaybackProgressSync.Pending
+        is ProgressSyncStatus.Failed -> PlaybackProgressSync.Failed(message)
+    }
+
+    private fun observeProgressStatus(accountScope: dev.chaichai.mobile.core.contracts.HomeScope) {
+        progressStatusJob?.cancel()
+        val progressGateway = gateway as? ProgressAwarePlaybackGateway ?: return
+        progressStatusJob = scope.launch {
+            progressGateway.progressStatus(accountScope).collect { status ->
+                val plan = activePlan ?: return@collect
+                if (plan.request.scope != accountScope) return@collect
+                val active = mutableState.value as? PlaybackState.Active ?: return@collect
+                mutableState.value = active.copy(progressSync = status.toContract())
+            }
+        }
+    }
 
     private companion object {
         const val TIMELINE_INTERVAL_MILLIS = 1_000L

@@ -34,6 +34,7 @@ interface SeriesCache {
     suspend fun saveEpisodes(scope: HomeScope, series: MediaIdentity, season: MediaIdentity, episodes: List<EpisodeSummary>)
     suspend fun loadEpisode(scope: HomeScope, identity: MediaIdentity): EpisodeDetails?
     suspend fun saveEpisode(scope: HomeScope, details: EpisodeDetails)
+    suspend fun clear(scope: HomeScope) = Unit
 }
 
 class InMemorySeriesCache : SeriesCache {
@@ -51,6 +52,12 @@ class InMemorySeriesCache : SeriesCache {
     }
     override suspend fun loadEpisode(scope: HomeScope, identity: MediaIdentity) = episodeDetails[scope to identity]
     override suspend fun saveEpisode(scope: HomeScope, details: EpisodeDetails) { episodeDetails[scope to details.episode.identity] = details }
+    override suspend fun clear(scope: HomeScope) {
+        libraries.keys.removeAll { it.first == scope }
+        series.keys.removeAll { it.first == scope }
+        episodes.keys.removeAll { it.scope == scope }
+        episodeDetails.keys.removeAll { it.first == scope }
+    }
 }
 
 private data class EpisodeCacheKey(val scope: HomeScope, val series: MediaIdentity, val season: MediaIdentity)
@@ -67,6 +74,7 @@ internal interface SeriesCacheDao {
     @Query("SELECT * FROM series_cache WHERE kind=:kind AND serverId=:serverId AND userId=:userId AND `key`=:key")
     suspend fun load(kind: String, serverId: String, userId: String, key: String): SeriesCacheEntity?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun save(entity: SeriesCacheEntity)
+    @Query("DELETE FROM series_cache WHERE serverId=:serverId AND userId=:userId") suspend fun clear(serverId: String, userId: String)
 }
 
 @Database(entities = [SeriesCacheEntity::class], version = 1, exportSchema = false)
@@ -85,6 +93,7 @@ internal class RoomSeriesCache(private val dao: SeriesCacheDao) : SeriesCache {
         save("episodes", scope, "${series.itemId}:${season.itemId}", CachedEpisodes(episodes.map(CachedEpisode::from)))
     override suspend fun loadEpisode(scope: HomeScope, identity: MediaIdentity) = load<CachedEpisodeDetails>("episode", scope, identity.itemId)?.toContract(scope)
     override suspend fun saveEpisode(scope: HomeScope, details: EpisodeDetails) = save("episode", scope, details.episode.identity.itemId, CachedEpisodeDetails.from(details))
+    override suspend fun clear(scope: HomeScope) = dao.clear(scope.serverId, scope.userId)
     private suspend inline fun <reified T> load(kind: String, scope: HomeScope, key: String): T? =
         dao.load(kind, scope.serverId, scope.userId, key)?.let { json.decodeFromString<T>(it.payload) }
     private suspend inline fun <reified T> save(kind: String, scope: HomeScope, key: String, value: T) {
