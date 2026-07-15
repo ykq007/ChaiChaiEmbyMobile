@@ -35,7 +35,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
@@ -67,6 +66,7 @@ import dev.chaichai.mobile.feature.libraries.LibrariesScreen
 import dev.chaichai.mobile.feature.libraries.HingeListDetailPanes
 import dev.chaichai.mobile.feature.libraries.LibraryWindowClass
 import dev.chaichai.mobile.feature.libraries.MovieDetailsScreen
+import dev.chaichai.mobile.feature.libraries.MovieLibrarySelectionSaver
 import dev.chaichai.mobile.feature.search.SearchScreen
 import dev.chaichai.mobile.feature.settings.SettingsScreen
 import dev.chaichai.mobile.feature.server.setup.ServerSetupScreen
@@ -119,24 +119,30 @@ fun MobileApp(
     }
     val restoredDestination = (setupState as? ServerSetupState.Authenticated)
         ?.returnDestination
-        ?.takeIf { route -> TopLevelDestination.entries.any { it.route == route } }
+        ?.takeIf(::isRestorableDestination)
         ?: TopLevelDestination.Home.route
     val homeUiState = rememberHomeUiState()
     BoxWithConstraints(modifier.fillMaxSize()) {
         val navController = rememberNavController()
         val density = LocalDensity.current
+        val layoutDirection = LocalLayoutDirection.current
+        val safeDrawing = WindowInsets.safeDrawing
+        val leftInsetDp = with(density) { safeDrawing.getLeft(density, layoutDirection).toDp().value }
+        val rightInsetDp = with(density) { safeDrawing.getRight(density, layoutDirection).toDp().value }
         when (separatingHinge?.orientation) {
             HingeOrientation.Vertical -> {
                 val leftWidth = with(density) { separatingHinge.leftPx.toDp() }
                 val rightWidth = maxWidth - with(density) { separatingHinge.rightPx.toDp() }
                 val hingeWidth = with(density) { (separatingHinge.rightPx - separatingHinge.leftPx).toDp() }
-                val panes = VerticalHingePanes(leftWidth, hingeWidth, rightWidth)
+                val usableLeftWidth = (leftWidth.value - leftInsetDp).coerceAtLeast(0f)
+                val usableRightWidth = (rightWidth.value - rightInsetDp).coerceAtLeast(0f)
+                val panes = VerticalHingePanes(Dp(usableLeftWidth), hingeWidth, Dp(usableRightWidth))
                 val supportsTwoPane = AdaptiveNavigationPolicy.layout(
                     WindowCharacteristics(
-                        usableWidthDp = max(leftWidth.value, rightWidth.value).roundToInt(),
+                        usableWidthDp = max(usableLeftWidth, usableRightWidth).roundToInt(),
                         usableHeightDp = maxHeight.value.roundToInt(),
                         hasSeparatingVerticalHinge = true,
-                        verticalPaneWidthsDp = listOf(leftWidth.value.roundToInt(), rightWidth.value.roundToInt()),
+                        verticalPaneWidthsDp = listOf(usableLeftWidth.roundToInt(), usableRightWidth.roundToInt()),
                     ),
                 ).supportsListDetail
                 if (supportsTwoPane) {
@@ -188,7 +194,7 @@ private fun AdaptiveShell(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         var librarySelection by rememberSaveable(
             "mobile-app-library-selection",
-            stateSaver = MediaIdentitySaver,
+            stateSaver = MovieLibrarySelectionSaver,
         ) { mutableStateOf<MediaIdentity?>(null) }
         val density = LocalDensity.current
         val layoutDirection = LocalLayoutDirection.current
@@ -204,15 +210,13 @@ private fun AdaptiveShell(
             listOf(it.leftWidth.value.roundToInt(), it.rightWidth.value.roundToInt())
         }.orEmpty()
         val window = WindowCharacteristics(
-            usableWidthDp = verticalHingePanes?.let { max(it.leftWidth.value, it.rightWidth.value).roundToInt() }
+            usableWidthDp = paneWidths.maxOrNull()
                 ?: (maxWidth.value - horizontalInsetsDp).roundToInt(),
             usableHeightDp = (maxHeight.value - verticalInsetsDp).roundToInt(),
             hasSeparatingVerticalHinge = isHingeSeparated,
             verticalPaneWidthsDp = paneWidths,
         )
-        val layout = AdaptiveNavigationPolicy.layout(window).let {
-            if (verticalHingePanes != null) it.copy(navigationPlacement = NavigationPlacement.Bottom) else it
-        }
+        val layout = AdaptiveNavigationPolicy.layout(window)
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentDestination = backStackEntry?.destination
         val reducedMotion = LocalReducedMotion.current
@@ -279,8 +283,9 @@ private fun AdaptiveShell(
                         },
                         initialSelection = librarySelection,
                         onSelectionChanged = { librarySelection = it },
+                        detailsAuthenticationReturnDestination = TopLevelDestination.Libraries.route,
                         onOpenDetails = { identity ->
-                            navController.navigate("movies/${Uri.encode(identity.serverId)}/${Uri.encode(identity.itemId)}")
+                            navController.navigate(identity.movieDetailsRoute())
                         },
                     )
                 }
@@ -298,6 +303,7 @@ private fun AdaptiveShell(
                                 ContentWidthClass.Expanded -> LibraryWindowClass.Expanded
                             },
                             isHeightConstrained = layout.isHeightConstrained,
+                            authenticationReturnDestination = MediaIdentity(serverId, itemId).movieDetailsRoute(),
                         )
                     }
                 }
@@ -366,11 +372,6 @@ private fun AdaptiveShell(
     }
 }
 
-private val MediaIdentitySaver = Saver<MediaIdentity?, List<String>>(
-    save = { identity -> identity?.let { listOf(it.serverId, it.itemId) } ?: emptyList() },
-    restore = { values -> values.takeIf { it.size == 2 }?.let { MediaIdentity(it[0], it[1]) } },
-)
-
 private fun HomeMediaAction.navigationRoute(): String {
     val intent = when (this) {
         is HomeMediaAction.OpenDetails -> "details"
@@ -378,6 +379,13 @@ private fun HomeMediaAction.navigationRoute(): String {
     }
     return "media/${Uri.encode(identity.serverId)}/${Uri.encode(identity.itemId)}/$intent"
 }
+
+private fun MediaIdentity.movieDetailsRoute(): String =
+    "movies/${Uri.encode(serverId)}/${Uri.encode(itemId)}"
+
+private fun isRestorableDestination(route: String): Boolean =
+    TopLevelDestination.entries.any { it.route == route } ||
+        route.matches(Regex("movies/[^/]+/[^/]+"))
 
 private fun NavDestination?.isSelected(destination: TopLevelDestination): Boolean =
     this?.hierarchy?.any { it.route == destination.route } == true

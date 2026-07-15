@@ -82,6 +82,7 @@ fun LibrariesScreen(
     hingePanes: HingeListDetailPanes? = null,
     initialSelection: MediaIdentity? = null,
     onSelectionChanged: (MediaIdentity?) -> Unit = {},
+    detailsAuthenticationReturnDestination: String? = null,
 ) {
     val state by gateway.movieLibrary.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
@@ -94,7 +95,7 @@ fun LibrariesScreen(
         SortDirection.entries[savedDirection],
         savedGenre,
     )
-    var selected by rememberSaveable("movie-library-selection", stateSaver = MediaIdentitySaver) {
+    var selected by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf(initialSelection)
     }
     LaunchedEffect(initialSelection) {
@@ -134,6 +135,7 @@ fun LibrariesScreen(
                 MovieDetailsScreen(
                     gateway, identity, playback, LibraryWindowClass.Compact, isHeightConstrained,
                     Modifier.width(hingePanes.detailWidth).fillMaxHeight(),
+                    detailsAuthenticationReturnDestination,
                 )
             } ?: Box(
                 Modifier.width(hingePanes.detailWidth).fillMaxHeight().padding(24.dp),
@@ -148,6 +150,7 @@ fun LibrariesScreen(
             MovieDetailsScreen(
                 gateway, selected!!, playback, LibraryWindowClass.Medium, isHeightConstrained,
                 Modifier.weight(0.44f).fillMaxHeight(),
+                detailsAuthenticationReturnDestination,
             )
         }
     } else {
@@ -178,7 +181,7 @@ private fun MovieCollection(
             "No movies in this library",
             "Movies added on your Emby server will appear here.",
             "Retry",
-        ) { scope.launch { gateway.refreshMovies() } }
+        ) { scope.launch { gateway.refreshMovies(state.query) } }
         is MovieLibraryState.EmptyFiltered -> Column(modifier.fillMaxSize()) {
             LibraryControls(state.query, state.availableGenres, onQuery)
             MessageState("No matching movies", "Try another genre or clear the filter.", "Clear filter") {
@@ -318,12 +321,15 @@ fun MovieDetailsScreen(
     windowClass: LibraryWindowClass,
     isHeightConstrained: Boolean,
     modifier: Modifier = Modifier,
+    authenticationReturnDestination: String? = null,
 ) {
     var retryAttempt by rememberSaveable(identity.serverId, identity.itemId) { androidx.compose.runtime.mutableIntStateOf(0) }
     var detailsState by androidx.compose.runtime.remember(identity.serverId, identity.itemId) {
         androidx.compose.runtime.mutableStateOf<MovieDetailsState?>(null)
     }
-    LaunchedEffect(gateway, identity, retryAttempt) { detailsState = gateway.loadMovieDetails(identity) }
+    LaunchedEffect(gateway, identity, retryAttempt, authenticationReturnDestination) {
+        detailsState = gateway.loadMovieDetails(identity, authenticationReturnDestination)
+    }
     when (val state = detailsState) {
         null -> Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         is MovieDetailsState.Failure -> MessageState("Details unavailable", state.message, "Retry") { retryAttempt += 1 }
@@ -391,7 +397,7 @@ private fun MovieDetailsContent(
     }
 }
 
-private val MediaIdentitySaver = Saver<MediaIdentity?, List<String>>(
+val MovieLibrarySelectionSaver = Saver<MediaIdentity?, List<String>>(
     save = { identity -> identity?.let { listOf(it.serverId, it.itemId) } ?: emptyList() },
     restore = { values -> values.takeIf { it.size == 2 }?.let { MediaIdentity(it[0], it[1]) } },
 )

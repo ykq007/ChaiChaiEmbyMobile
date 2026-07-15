@@ -74,5 +74,6 @@ class AdaptiveNavigationPolicyTest {
 
         assertEquals(true, AdaptiveNavigationPolicy.layout(eligible).supportsListDetail)
         assertEquals(false, AdaptiveNavigationPolicy.layout(narrowDetail).supportsListDetail)
+        assertEquals(NavigationPlacement.Bottom, AdaptiveNavigationPolicy.layout(eligible).navigationPlacement)
     }
 }

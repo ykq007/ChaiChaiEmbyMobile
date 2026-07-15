@@ -254,6 +254,56 @@ class MovieGatewayTest {
     }
 
     @Test
+    fun successful_first_page_refresh_preserves_the_restored_pagination_journey() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(ok("""{"Items":[]}"""))
+            server.enqueue(ok(page("Fresh", 80, 0, 40)))
+            val scope = HomeScope("server", "user")
+            val query = MovieLibraryQuery(MovieSortField.DateAdded, SortDirection.Descending)
+            val cachedItems = (0 until 80).map {
+                MoviePoster(MediaIdentity("server", "movie-$it"), "Cached $it")
+            }
+            val cache = InMemoryMovieCache().apply {
+                saveLibrary(scope, query, cachedItems, 80, emptyList())
+            }
+            val gateway = AuthenticatedEmbyGateway(
+                FakeVault(stored(valid(server.url("/emby").toString()))),
+                movieCache = cache,
+                deviceId = "test-device",
+            )
+
+            gateway.refreshMovies(query)
+
+            val ready = gateway.movieLibrary.value as MovieLibraryState.Ready
+            assertEquals(80, ready.items.size)
+            assertEquals("Fresh 0", ready.items.first().title)
+            assertEquals("Cached 79", ready.items.last().title)
+            assertEquals(80, cache.loadLibrary(scope, query)!!.items.size)
+        }
+    }
+
+    @Test
+    fun detail_revocation_preserves_the_encoded_return_destination() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(MockResponse.Builder().code(401).build())
+            val gateway = gateway(server)
+            gateway.setConnected(true)
+            var destination: String? = null
+            gateway.onAuthenticationExpired = { destination = it }
+
+            gateway.loadMovieDetails(
+                MediaIdentity("server", "arrival"),
+                "movies/server/arrival",
+            )
+
+            assertEquals("movies/server/arrival", destination)
+            assertEquals(GatewayConnectionState.Disconnected, gateway.connectionState.value)
+        }
+    }
+
+    @Test
     fun library_distinguishes_empty_unfiltered_filtered_and_initial_failure() = runTest {
         MockWebServer().use { server ->
             server.start()

@@ -2,6 +2,8 @@ package dev.chaichai.mobile
 
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
@@ -35,10 +37,13 @@ import dev.chaichai.mobile.core.contracts.MovieSortField
 import dev.chaichai.mobile.core.contracts.MovieTrackAvailability
 import dev.chaichai.mobile.core.contracts.PlaybackCoordinator
 import dev.chaichai.mobile.core.contracts.SortDirection
+import dev.chaichai.mobile.core.contracts.ServerSetupBoundary
+import dev.chaichai.mobile.core.contracts.ServerSetupState
 import dev.chaichai.mobile.design.system.ChaiChaiTheme
 import dev.chaichai.mobile.feature.libraries.LibrariesScreen
 import dev.chaichai.mobile.feature.libraries.LibraryWindowClass
 import dev.chaichai.mobile.feature.libraries.MovieDetailsScreen
+import dev.chaichai.mobile.feature.libraries.MovieLibrarySelectionSaver
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -87,7 +92,16 @@ class MovieLibraryTest {
         val restoration = StateRestorationTester(composeRule)
         val gateway = FakeMovieGateway(ready())
         restoration.setContent {
-            themed { LibrariesScreen(gateway, LibraryWindowClass.Expanded, false, true, FakePlayback(), {}) }
+            var selection by androidx.compose.runtime.saveable.rememberSaveable(
+                stateSaver = MovieLibrarySelectionSaver,
+            ) { androidx.compose.runtime.mutableStateOf<MediaIdentity?>(null) }
+            themed {
+                LibrariesScreen(
+                    gateway, LibraryWindowClass.Expanded, false, true, FakePlayback(), {},
+                    initialSelection = selection,
+                    onSelectionChanged = { selection = it },
+                )
+            }
         }
         composeRule.onNodeWithText("Arrival").performClick()
         composeRule.onNodeWithText("Language changes everything.").assertIsDisplayed()
@@ -166,6 +180,23 @@ class MovieLibraryTest {
     }
 
     @Test
+    fun reauthentication_return_destination_restores_the_server_scoped_movie_details() {
+        val gateway = FakeMovieGateway(ready())
+        composeRule.setContent {
+            themed {
+                MobileApp(
+                    appBoundaries(gateway, FakePlayback()).copy(
+                        serverSetup = RestoredServerSetup("movies/server/arrival"),
+                    ),
+                    separatingHinge = null,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Language changes everything.").assertIsDisplayed()
+    }
+
+    @Test
     fun missing_metadata_reflows_at_large_text_in_a_constrained_window() {
         val gateway = FakeMovieGateway(
             ready(),
@@ -218,9 +249,12 @@ class MovieLibraryTest {
 
     @Test
     fun library_empty_filtered_empty_and_initial_failure_have_distinct_recovery_copy() {
-        val gateway = FakeMovieGateway(MovieLibraryState.EmptyLibrary(HomeScope("server", "user")))
+        val emptyQuery = MovieLibraryQuery(MovieSortField.DateAdded, SortDirection.Descending)
+        val gateway = FakeMovieGateway(MovieLibraryState.EmptyLibrary(HomeScope("server", "user"), emptyQuery))
         showLibrary(gateway)
         composeRule.onNodeWithText("No movies in this library").assertIsDisplayed()
+        composeRule.onNodeWithText("Retry").performClick()
+        composeRule.runOnIdle { assertEquals(emptyQuery, gateway.lastRefreshQuery) }
 
         composeRule.runOnIdle {
             gateway.movieLibrary.value = MovieLibraryState.EmptyFiltered(
@@ -284,7 +318,9 @@ class MovieLibraryTest {
     ) : EmbyGateway {
         override val connectionState = MutableStateFlow(GatewayConnectionState.Connected)
         override val movieLibrary = MutableStateFlow<MovieLibraryState>(initial)
+        var lastRefreshQuery: MovieLibraryQuery? = null
         override suspend fun refreshMovies(query: MovieLibraryQuery) {
+            lastRefreshQuery = query
             val ready = movieLibrary.value as? MovieLibraryState.Ready ?: return
             movieLibrary.value = ready.copy(query = query)
         }
@@ -296,13 +332,27 @@ class MovieLibraryTest {
                 pageFailureMessage = null,
             )
         }
-        override suspend fun loadMovieDetails(identity: MediaIdentity) = MovieDetailsState.Ready(movieDetails.copy(identity = identity))
+        override suspend fun loadMovieDetails(identity: MediaIdentity, authenticationReturnDestination: String?) =
+            MovieDetailsState.Ready(movieDetails.copy(identity = identity))
     }
 
     private class FakePlayback : PlaybackCoordinator {
         override val isPlaying = MutableStateFlow(false)
         var submitted: MoviePlaybackRequest? = null
         override fun submit(request: MoviePlaybackRequest) { submitted = request }
+    }
+
+    private class RestoredServerSetup(returnDestination: String) : ServerSetupBoundary {
+        override val state = MutableStateFlow<ServerSetupState>(
+            ServerSetupState.Authenticated("Cinema", "Ada", returnDestination),
+        )
+        override fun submitAddress(address: String) = Unit
+        override fun acceptCleartextRisk() = Unit
+        override fun acceptCertificateBypass() = Unit
+        override fun confirmServer() = Unit
+        override fun authenticate(username: String, password: String) = Unit
+        override fun retry() = Unit
+        override fun authenticationExpired(requestedDestination: String?) = Unit
     }
 
     private companion object {

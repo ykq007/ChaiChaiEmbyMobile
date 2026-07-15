@@ -173,12 +173,13 @@ class AuthenticatedEmbyGateway(
             val genres = fetchGenres(session)
             val page = fetchMoviePage(session, query, 0)
             if (!isActiveMovieRequest(scope, generation, session, authentication)) return@withContext
-            movieCache.saveLibrary(scope, query, page.items, page.totalCount, genres)
+            val reconciledItems = reconcileRefreshedMovieItems(page, cached)
+            movieCache.saveLibrary(scope, query, reconciledItems, page.totalCount, genres)
             if (!isActiveMovieRequest(scope, generation, session, authentication)) return@withContext
             when {
-                page.items.isNotEmpty() -> MovieLibraryState.Ready(scope, page.items, page.totalCount, query, genres)
+                reconciledItems.isNotEmpty() -> MovieLibraryState.Ready(scope, reconciledItems, page.totalCount, query, genres)
                 query.genre != null -> MovieLibraryState.EmptyFiltered(scope, query, genres)
-                else -> MovieLibraryState.EmptyLibrary(scope, genres)
+                else -> MovieLibraryState.EmptyLibrary(scope, query, genres)
             }
         } catch (_: AuthenticationExpiredException) {
             expireAuthentication(session, authentication, "libraries")
@@ -227,7 +228,10 @@ class AuthenticatedEmbyGateway(
 
     override suspend fun retryMoviePage() = loadNextMoviePage()
 
-    override suspend fun loadMovieDetails(identity: MediaIdentity): MovieDetailsState = withContext(ioDispatcher) {
+    override suspend fun loadMovieDetails(
+        identity: MediaIdentity,
+        authenticationReturnDestination: String?,
+    ): MovieDetailsState = withContext(ioDispatcher) {
         val session = vault.restore()?.takeIf { it.serverId == identity.serverId }
             ?: return@withContext MovieDetailsState.Failure("Movie details aren't available for this server.")
         val scope = HomeScope(session.serverId, session.userId)
@@ -248,7 +252,7 @@ class AuthenticatedEmbyGateway(
                     MovieDetailsState.Ready(details)
                 }
         } catch (_: AuthenticationExpiredException) {
-            expireAuthentication(session, authentication, "libraries")
+            expireAuthentication(session, authentication, authenticationReturnDestination)
             MovieDetailsState.Failure("Sign in again to view movie details.")
         } catch (_: Exception) {
             val cached = movieCache.loadDetails(scope, identity)
@@ -343,10 +347,7 @@ class AuthenticatedEmbyGateway(
         }
         val failures = merged.values.count { it.failureMessage != null }
         val successful = merged.values.filter { it.failureMessage == null }
-        if (!isActiveHomeRequest(scope, generation, session, authentication)) {
-            mutableHomeFeed.value = HomeFeedState.Loading
-            return@withContext
-        }
+        if (!isActiveHomeRequest(scope, generation, session, authentication)) return@withContext
         val cacheable = merged.filterValues { it.failureMessage == null || it.items.isNotEmpty() }
         if (cacheable.isNotEmpty()) homeCache.saveFeed(scope, cacheable)
         if (!isActiveHomeRequest(scope, generation, session, authentication)) return@withContext
@@ -546,6 +547,17 @@ class AuthenticatedEmbyGateway(
     private data class MovieStreamDto(@kotlinx.serialization.SerialName("Type") val type: String? = null)
 
     private data class MoviePage(val items: List<MoviePoster>, val totalCount: Int)
+
+    private fun reconcileRefreshedMovieItems(
+        firstPage: MoviePage,
+        cached: MovieLibrarySnapshot?,
+    ): List<MoviePoster> {
+        if (firstPage.items.isEmpty()) return emptyList()
+        val restoredTail = cached?.items.orEmpty().drop(MoviePageSize)
+        return (firstPage.items + restoredTail)
+            .distinctBy { it.identity }
+            .take(firstPage.totalCount)
+    }
 
     private data class ActiveCredential(val serverId: String, val userId: String, val token: String) {
         companion object {

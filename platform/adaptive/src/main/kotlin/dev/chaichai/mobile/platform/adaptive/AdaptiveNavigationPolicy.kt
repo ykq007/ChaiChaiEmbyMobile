@@ -25,7 +25,9 @@ object AdaptiveNavigationPolicy {
     private const val HingePaneMinimumWidthDp = 360
 
     fun placement(window: WindowCharacteristics): NavigationPlacement =
-        if (window.usableWidthDp >= RailMinimumWidthDp) {
+        if (window.hasSeparatingVerticalHinge && window.verticalPaneWidthsDp.size == 2) {
+            NavigationPlacement.Bottom
+        } else if (window.usableWidthDp >= RailMinimumWidthDp) {
             NavigationPlacement.Rail
         } else {
             NavigationPlacement.Bottom

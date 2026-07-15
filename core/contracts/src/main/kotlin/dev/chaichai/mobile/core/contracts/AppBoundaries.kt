@@ -17,7 +17,10 @@ interface EmbyGateway {
     suspend fun refreshMovies(query: MovieLibraryQuery = MovieLibraryQuery()) = Unit
     suspend fun loadNextMoviePage() = Unit
     suspend fun retryMoviePage() = loadNextMoviePage()
-    suspend fun loadMovieDetails(identity: MediaIdentity): MovieDetailsState =
+    suspend fun loadMovieDetails(
+        identity: MediaIdentity,
+        authenticationReturnDestination: String? = null,
+    ): MovieDetailsState =
         MovieDetailsState.Failure("Movie details couldn't be loaded.")
 }
 enum class GatewayConnectionState { Disconnected, Connected }
@@ -77,7 +80,11 @@ sealed interface MovieLibraryState {
         val pageFailureMessage: String? = null,
         val refreshFailureMessage: String? = null,
     ) : MovieLibraryState
-    data class EmptyLibrary(val scope: HomeScope, val availableGenres: List<String> = emptyList()) : MovieLibraryState
+    data class EmptyLibrary(
+        val scope: HomeScope,
+        val query: MovieLibraryQuery = MovieLibraryQuery(),
+        val availableGenres: List<String> = emptyList(),
+    ) : MovieLibraryState
     data class EmptyFiltered(
         val scope: HomeScope,
         val query: MovieLibraryQuery,
