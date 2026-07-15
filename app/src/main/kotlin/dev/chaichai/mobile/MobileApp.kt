@@ -58,6 +58,8 @@ import dev.chaichai.mobile.feature.home.HomeWindowClass
 import dev.chaichai.mobile.feature.home.HomeUiState
 import dev.chaichai.mobile.feature.home.rememberHomeUiState
 import dev.chaichai.mobile.feature.libraries.LibrariesScreen
+import dev.chaichai.mobile.feature.libraries.LibraryWindowClass
+import dev.chaichai.mobile.feature.libraries.MovieDetailsScreen
 import dev.chaichai.mobile.feature.search.SearchScreen
 import dev.chaichai.mobile.feature.settings.SettingsScreen
 import dev.chaichai.mobile.feature.server.setup.ServerSetupScreen
@@ -87,6 +89,7 @@ private enum class TopLevelDestination(val route: String, val label: String, val
 }
 
 private const val MediaActionRoute = "media/{serverId}/{itemId}/{intent}"
+private const val MovieDetailsRoute = "movies/{serverId}/{itemId}"
 
 @Composable
 fun MobileApp(
@@ -217,7 +220,31 @@ private fun AdaptiveShell(
                             "${entry.arguments?.getString("itemId")} for ${entry.arguments?.getString("intent")}.",
                     )
                 }
-                composable(TopLevelDestination.Libraries.route) { LibrariesScreen() }
+                composable(TopLevelDestination.Libraries.route) {
+                    LibrariesScreen(
+                        gateway = boundaries.gateway,
+                        windowClass = when (layout.contentWidthClass) {
+                            ContentWidthClass.Compact -> LibraryWindowClass.Compact
+                            ContentWidthClass.Medium -> LibraryWindowClass.Medium
+                            ContentWidthClass.Expanded -> LibraryWindowClass.Expanded
+                        },
+                        isHeightConstrained = layout.isHeightConstrained,
+                        onOpenDetails = { identity ->
+                            navController.navigate("movies/${Uri.encode(identity.serverId)}/${Uri.encode(identity.itemId)}")
+                        },
+                    )
+                }
+                composable(MovieDetailsRoute) { entry ->
+                    val serverId = entry.arguments?.getString("serverId")
+                    val itemId = entry.arguments?.getString("itemId")
+                    if (serverId != null && itemId != null) {
+                        MovieDetailsScreen(
+                            gateway = boundaries.gateway,
+                            identity = dev.chaichai.mobile.core.contracts.MediaIdentity(serverId, itemId),
+                            playback = boundaries.playback,
+                        )
+                    }
+                }
                 composable(TopLevelDestination.Search.route) { SearchScreen() }
                 composable(TopLevelDestination.Settings.route) { SettingsScreen() }
                 }
