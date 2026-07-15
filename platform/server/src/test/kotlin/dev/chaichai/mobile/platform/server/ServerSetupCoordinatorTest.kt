@@ -162,6 +162,41 @@ class ServerSetupCoordinatorTest {
     }
 
     @Test
+    fun expiration_preserves_only_an_exact_encoded_movie_detail_return_destination() = runTest {
+        val address = valid("https://media.example/emby")
+        val vault = FakeVault(stored(address))
+        val coordinator = ServerSetupCoordinator(
+            this, FakeProbe(ProbeResult.Failure(ProbeFailure.Unreachable)), FakeAuthenticator(success(address)), vault, "device",
+        )
+        advanceUntilIdle()
+
+        coordinator.authenticationExpired("movies/server%20one/item%2Fpart")
+        coordinator.authenticate("Ada", "new-secret")
+        advanceUntilIdle()
+
+        assertEquals(
+            "movies/server%20one/item%2Fpart",
+            (coordinator.state.value as ServerSetupState.Authenticated).returnDestination,
+        )
+    }
+
+    @Test
+    fun expiration_rejects_an_arbitrary_or_malformed_detail_return_destination() = runTest {
+        val address = valid("https://media.example/emby")
+        val vault = FakeVault(stored(address))
+        val coordinator = ServerSetupCoordinator(
+            this, FakeProbe(ProbeResult.Failure(ProbeFailure.Unreachable)), FakeAuthenticator(success(address)), vault, "device",
+        )
+        advanceUntilIdle()
+
+        coordinator.authenticationExpired("movies/server/item/extra")
+        coordinator.authenticate("Ada", "new-secret")
+        advanceUntilIdle()
+
+        assertNull((coordinator.state.value as ServerSetupState.Authenticated).returnDestination)
+    }
+
+    @Test
     fun expired_restored_session_is_cleared_and_returns_to_sign_in() = runTest {
         val address = valid("https://media.example/emby")
         val vault = FakeVault(stored(address))

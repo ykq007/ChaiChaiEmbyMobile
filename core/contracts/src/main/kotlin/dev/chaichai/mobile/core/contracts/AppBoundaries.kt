@@ -12,10 +12,23 @@ interface EmbyGateway {
     suspend fun refreshHome() = Unit
     suspend fun retryHomeSection(section: HomeSection) = refreshHome()
     suspend fun loadArtwork(artwork: ArtworkReference): ByteArray? = null
+    val movieLibrary: StateFlow<MovieLibraryState>
+        get() = EmptyMovieLibrary.flow
+    suspend fun refreshMovies(query: MovieLibraryQuery = MovieLibraryQuery()) = Unit
+    suspend fun loadNextMoviePage() = Unit
+    suspend fun retryMoviePage() = loadNextMoviePage()
+    suspend fun loadMovieDetails(
+        identity: MediaIdentity,
+        authenticationReturnDestination: String? = null,
+    ): MovieDetailsState =
+        MovieDetailsState.Failure("Movie details couldn't be loaded.")
 }
 enum class GatewayConnectionState { Disconnected, Connected }
 enum class GatewayAuthenticationStatus { Valid, Expired, Unavailable }
-interface PlaybackCoordinator { val isPlaying: StateFlow<Boolean> }
+interface PlaybackCoordinator {
+    val isPlaying: StateFlow<Boolean>
+    fun submit(request: MoviePlaybackRequest) = Unit
+}
 fun interface AppClock { fun now(): Instant }
 interface ConnectivityMonitor { val isOnline: StateFlow<Boolean> }
 
@@ -30,6 +43,96 @@ enum class HomeSection(val title: String) {
 data class HomeScope(val serverId: String, val userId: String)
 
 data class MediaIdentity(val serverId: String, val itemId: String)
+
+enum class MovieSortField(val label: String) {
+    Name("Name"),
+    DateAdded("Date added"),
+    ReleaseDate("Release date"),
+}
+
+enum class SortDirection(val label: String) {
+    Ascending("Ascending"),
+    Descending("Descending"),
+}
+
+data class MovieLibraryQuery(
+    val sortField: MovieSortField = MovieSortField.Name,
+    val sortDirection: SortDirection = SortDirection.Ascending,
+    val genre: String? = null,
+)
+
+data class MoviePoster(
+    val identity: MediaIdentity,
+    val title: String,
+    val year: Int? = null,
+    val artwork: ArtworkReference? = null,
+)
+
+sealed interface MovieLibraryState {
+    data object Loading : MovieLibraryState
+    data class Ready(
+        val scope: HomeScope,
+        val items: List<MoviePoster>,
+        val totalCount: Int,
+        val query: MovieLibraryQuery,
+        val availableGenres: List<String> = emptyList(),
+        val isRefreshing: Boolean = false,
+        val isLoadingMore: Boolean = false,
+        val pageFailureMessage: String? = null,
+        val refreshFailureMessage: String? = null,
+    ) : MovieLibraryState
+    data class EmptyLibrary(
+        val scope: HomeScope,
+        val query: MovieLibraryQuery = MovieLibraryQuery(),
+        val availableGenres: List<String> = emptyList(),
+    ) : MovieLibraryState
+    data class EmptyFiltered(
+        val scope: HomeScope,
+        val query: MovieLibraryQuery,
+        val availableGenres: List<String> = emptyList(),
+    ) : MovieLibraryState
+    data class Failure(
+        val message: String,
+        val scope: HomeScope? = null,
+        val query: MovieLibraryQuery = MovieLibraryQuery(),
+    ) : MovieLibraryState
+}
+
+data class MovieTrackAvailability(val audioTracks: Int = 0, val subtitleTracks: Int = 0)
+
+data class MovieDetails(
+    val identity: MediaIdentity,
+    val title: String,
+    val year: Int? = null,
+    val runtimeTicks: Long? = null,
+    val communityRating: Double? = null,
+    val criticRating: Double? = null,
+    val genres: List<String> = emptyList(),
+    val overview: String? = null,
+    val playbackPositionTicks: Long = 0,
+    val played: Boolean = false,
+    val tracks: MovieTrackAvailability = MovieTrackAvailability(),
+    val artwork: ArtworkReference? = null,
+    val backdrop: ArtworkReference? = null,
+) {
+    val hasMeaningfulResume: Boolean
+        get() = hasMeaningfulResume(playbackPositionTicks, runtimeTicks, played)
+}
+
+fun hasMeaningfulResume(positionTicks: Long, runtimeTicks: Long?, played: Boolean = false): Boolean =
+    !played && positionTicks >= 10 * HomeMediaItem.TicksPerSecond &&
+        (runtimeTicks == null || runtimeTicks - positionTicks >= 60 * HomeMediaItem.TicksPerSecond)
+
+sealed interface MovieDetailsState {
+    data class Ready(val details: MovieDetails) : MovieDetailsState
+    data class Failure(val message: String) : MovieDetailsState
+}
+
+sealed interface MoviePlaybackRequest {
+    val identity: MediaIdentity
+    data class Resume(override val identity: MediaIdentity, val positionTicks: Long) : MoviePlaybackRequest
+    data class PlayFromBeginning(override val identity: MediaIdentity) : MoviePlaybackRequest
+}
 
 enum class ArtworkKind(val routeName: String) { Primary("Primary"), Backdrop("Backdrop") }
 
@@ -50,13 +153,10 @@ data class HomeMediaItem(
     val backdrop: ArtworkReference? = null,
 ) {
     val hasMeaningfulResume: Boolean
-        get() = playbackPositionTicks >= MeaningfulResumeTicks &&
-            (runtimeTicks == null || runtimeTicks - playbackPositionTicks >= MeaningfulRemainingTicks)
+        get() = hasMeaningfulResume(playbackPositionTicks, runtimeTicks)
 
     companion object {
         const val TicksPerSecond = 10_000_000L
-        private const val MeaningfulResumeTicks = 10 * TicksPerSecond
-        private const val MeaningfulRemainingTicks = 60 * TicksPerSecond
     }
 }
 
@@ -87,6 +187,10 @@ fun interface HomeMediaActionBoundary { fun submit(action: HomeMediaAction) }
 
 private object EmptyHomeFeed {
     val flow: StateFlow<HomeFeedState> = kotlinx.coroutines.flow.MutableStateFlow(HomeFeedState.Loading)
+}
+
+private object EmptyMovieLibrary {
+    val flow: StateFlow<MovieLibraryState> = kotlinx.coroutines.flow.MutableStateFlow(MovieLibraryState.Loading)
 }
 
 data class AppBoundaries(

@@ -78,8 +78,7 @@ class EmbyAuthenticator(
             .url(address.apiUrl("Users/AuthenticateByName").toString())
             .header(
                 "X-Emby-Authorization",
-                "MediaBrowser Client=\"ChaiChai Mobile\", Device=\"Android Mobile\", " +
-                    "DeviceId=\"$deviceId\", Version=\"0.1.0\"",
+                embyAuthorization(deviceId),
             )
             .post(body)
             .build()

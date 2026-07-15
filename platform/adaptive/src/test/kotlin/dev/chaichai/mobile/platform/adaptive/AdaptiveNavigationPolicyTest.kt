@@ -55,4 +55,25 @@ class AdaptiveNavigationPolicyTest {
         assertEquals(ContentWidthClass.Medium, AdaptiveNavigationPolicy.layout(WindowCharacteristics(600, 700)).contentWidthClass)
         assertEquals(ContentWidthClass.Expanded, AdaptiveNavigationPolicy.layout(WindowCharacteristics(840, 700)).contentWidthClass)
     }
+
+    @Test
+    fun `list detail waits for 840dp after rail space`() {
+        assertEquals(false, AdaptiveNavigationPolicy.layout(WindowCharacteristics(919, 700)).supportsListDetail)
+        assertEquals(true, AdaptiveNavigationPolicy.layout(WindowCharacteristics(920, 700)).supportsListDetail)
+    }
+
+    @Test
+    fun `two hinge separated panes independently enable list detail`() {
+        val eligible = WindowCharacteristics(
+            usableWidthDp = 420,
+            usableHeightDp = 700,
+            hasSeparatingVerticalHinge = true,
+            verticalPaneWidthsDp = listOf(400, 420),
+        )
+        val narrowDetail = eligible.copy(verticalPaneWidthsDp = listOf(400, 359))
+
+        assertEquals(true, AdaptiveNavigationPolicy.layout(eligible).supportsListDetail)
+        assertEquals(false, AdaptiveNavigationPolicy.layout(narrowDetail).supportsListDetail)
+        assertEquals(NavigationPlacement.Bottom, AdaptiveNavigationPolicy.layout(eligible).navigationPlacement)
+    }
 }
