@@ -1,12 +1,16 @@
 package dev.chaichai.mobile
 
+import android.Manifest
 import android.animation.ValueAnimator
-import android.os.Bundle
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.os.Build
+import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -20,14 +24,19 @@ import android.view.accessibility.AccessibilityManager
 import androidx.window.layout.FoldingFeature
 import androidx.window.layout.WindowInfoTracker
 import dev.chaichai.mobile.design.system.ChaiChaiTheme
+import dev.chaichai.mobile.platform.adaptive.PlaybackSystemBars
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @Inject lateinit var boundaries: dev.chaichai.mobile.core.contracts.AppBoundaries
-    private var playbackFullscreen = false
-    private var playbackAutoImmersive = false
+    private var userRequestedFullscreen = false
+    private var adaptiveSystemBars = PlaybackSystemBars.Visible
+    private var notificationPermissionRequested = false
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { /* Playback remains available when notification visibility is denied. */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,6 +48,12 @@ class MainActivity : ComponentActivity() {
             val separatingHinge = layoutInfo?.displayFeatures
                 ?.filterIsInstance<FoldingFeature>()
                 ?.firstOrNull { it.isSeparating }
+            val playbackState by boundaries.playback.state.collectAsState()
+            androidx.compose.runtime.LaunchedEffect(playbackState is dev.chaichai.mobile.core.contracts.PlaybackState.Active) {
+                if (playbackState is dev.chaichai.mobile.core.contracts.PlaybackState.Active) {
+                    requestPlaybackNotificationPermission()
+                }
+            }
             val accessibilityManager = remember {
                 getSystemService(AccessibilityManager::class.java)
             }
@@ -72,7 +87,7 @@ class MainActivity : ComponentActivity() {
                     onTogglePlaybackOrientation = ::togglePlaybackOrientation,
                     onTogglePlaybackFullscreen = ::togglePlaybackFullscreen,
                     onPlaybackEnded = ::restorePlaybackWindow,
-                    onPlaybackImmersiveChanged = ::setPlaybackAutoImmersive,
+                    onPlaybackSystemBarsChanged = ::setPlaybackSystemBars,
                     keepPlaybackControlsVisible = touchExplorationEnabled,
                 )
             }
@@ -88,28 +103,38 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun togglePlaybackFullscreen() {
-        playbackFullscreen = !playbackFullscreen
+        userRequestedFullscreen = !userRequestedFullscreen
         updatePlaybackSystemBars()
     }
 
-    private fun setPlaybackAutoImmersive(immersive: Boolean) {
-        if (playbackAutoImmersive == immersive) return
-        playbackAutoImmersive = immersive
+    private fun setPlaybackSystemBars(systemBars: PlaybackSystemBars) {
+        if (adaptiveSystemBars == systemBars) return
+        adaptiveSystemBars = systemBars
         updatePlaybackSystemBars()
     }
 
     private fun restorePlaybackWindow() {
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        playbackFullscreen = false
-        playbackAutoImmersive = false
+        userRequestedFullscreen = false
+        adaptiveSystemBars = PlaybackSystemBars.Visible
         updatePlaybackSystemBars()
     }
 
     private fun updatePlaybackSystemBars() {
         WindowCompat.getInsetsController(window, window.decorView).run {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            if (playbackFullscreen || playbackAutoImmersive) hide(WindowInsetsCompat.Type.systemBars())
-            else show(WindowInsetsCompat.Type.systemBars())
+            if (userRequestedFullscreen || adaptiveSystemBars == PlaybackSystemBars.Immersive) {
+                hide(WindowInsetsCompat.Type.systemBars())
+            } else {
+                show(WindowInsetsCompat.Type.systemBars())
+            }
         }
+    }
+
+    private fun requestPlaybackNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || notificationPermissionRequested) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        notificationPermissionRequested = true
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 }

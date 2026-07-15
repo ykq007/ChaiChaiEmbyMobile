@@ -1,7 +1,8 @@
 package dev.chaichai.mobile
 
+import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -19,7 +20,6 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.platform.LocalDensity
-import androidx.test.espresso.Espresso.pressBack
 import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.MediaPlaybackRequest
 import dev.chaichai.mobile.core.contracts.PlaybackCoordinator
@@ -36,6 +36,7 @@ import dev.chaichai.mobile.platform.adaptive.PlaybackSafePane
 import dev.chaichai.mobile.platform.adaptive.PlaybackTracksLayout
 import dev.chaichai.mobile.platform.adaptive.PlaybackTracksPresentation
 import dev.chaichai.mobile.platform.adaptive.PlaybackWindowLayout
+import dev.chaichai.mobile.platform.adaptive.PlaybackSystemBars
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -43,7 +44,7 @@ import org.junit.Rule
 import org.junit.Test
 
 class PlaybackFlowTest {
-    @get:Rule val compose = createComposeRule()
+    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     @Test
     fun familiar_cinema_controls_seek_exit_and_toggle_adaptive_affordances() {
@@ -235,7 +236,7 @@ class PlaybackFlowTest {
                 PlaybackHost(
                     playback,
                     Modifier.size(400.dp, 700.dp),
-                    windowLayout = PlaybackWindowLayout(PlaybackSafePane.Right(180), isImmersive = false),
+                    windowLayout = PlaybackWindowLayout(PlaybackSafePane.Right(180), PlaybackSystemBars.Visible),
                 )
             }
         }
@@ -243,7 +244,13 @@ class PlaybackFlowTest {
         val pane = compose.onNodeWithTag("playback-controls", useUnmergedTree = true)
             .getUnclippedBoundsInRoot()
         assertTrue(pane.left >= 220.dp)
+        compose.onNodeWithContentDescription("Back to details").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Change orientation").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Fullscreen").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Tracks").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Rewind 10 seconds").assertIsDisplayed()
         compose.onNodeWithContentDescription("Pause").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Forward 30 seconds").assertIsDisplayed()
         compose.onNodeWithContentDescription("Playback position 1:00 of 12:00").assertExists()
     }
 
@@ -277,19 +284,39 @@ class PlaybackFlowTest {
     }
 
     @Test
+    fun talkback_traversal_is_header_then_transport_then_timeline() {
+        compose.setContent {
+            ChaiChaiTheme(reducedMotion = true) { PlaybackHost(FakePlayback()) }
+        }
+
+        compose.onNodeWithTag("playback-controls", useUnmergedTree = true)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.IsTraversalGroup, true))
+        compose.onNodeWithTag("playback-header", useUnmergedTree = true)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 0f))
+        compose.onNodeWithTag("playback-transport", useUnmergedTree = true)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 1f))
+        compose.onNodeWithTag("playback-timeline", useUnmergedTree = true)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 2f))
+    }
+
+    @Test
     fun back_dismisses_tracks_before_exiting_playback() {
         val playback = FakePlayback()
         compose.setContent { ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback) } }
         compose.onNodeWithContentDescription("Tracks").performClick()
 
-        pressBack()
+        dispatcherBack()
         compose.waitForIdle()
 
         compose.onNodeWithTag("tracks-bottom-sheet", useUnmergedTree = true).assertDoesNotExist()
         assertEquals(0, playback.exitCount)
-        pressBack()
+        dispatcherBack()
         compose.waitForIdle()
         assertEquals(1, playback.exitCount)
+    }
+
+    private fun dispatcherBack() {
+        compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
     }
 
     private class FakePlayback : NoOpPlaybackCoordinator() {

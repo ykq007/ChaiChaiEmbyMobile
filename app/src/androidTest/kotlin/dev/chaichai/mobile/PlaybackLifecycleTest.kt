@@ -31,6 +31,7 @@ import dev.chaichai.mobile.core.contracts.PlaybackState
 import dev.chaichai.mobile.core.contracts.ServerSetupBoundary
 import dev.chaichai.mobile.core.contracts.ServerSetupState
 import dev.chaichai.mobile.design.system.ChaiChaiTheme
+import dev.chaichai.mobile.platform.adaptive.PlaybackSystemBars
 import java.time.Instant
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
@@ -47,7 +48,7 @@ class PlaybackLifecycleTest {
         val playback = RecordingPlayback(active())
         var size by mutableStateOf(DpSize(400.dp, 700.dp))
         var hinge by mutableStateOf<SeparatingHinge?>(null)
-        val immersive = mutableListOf<Boolean>()
+        val systemBars = mutableListOf<PlaybackSystemBars>()
         restoration.setContent {
             CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
                 ChaiChaiTheme(reducedMotion = true) {
@@ -55,25 +56,44 @@ class PlaybackLifecycleTest {
                         boundaries(playback = playback),
                         separatingHinge = hinge,
                         modifier = Modifier.size(size.width, size.height),
-                        onPlaybackImmersiveChanged = immersive::add,
+                        onPlaybackSystemBarsChanged = systemBars::add,
                     )
                 }
             }
         }
 
         compose.onNodeWithText("Arrival").assertIsDisplayed()
-        compose.runOnIdle { size = DpSize(800.dp, 420.dp) }
+        // Compact landscape.
+        compose.runOnIdle { size = DpSize(580.dp, 350.dp) }
         compose.onNodeWithContentDescription("Pause").assertIsDisplayed()
+        // Medium split-screen.
         compose.runOnIdle { size = DpSize(700.dp, 700.dp) }
         compose.onNodeWithText("Arrival").assertIsDisplayed()
+        // Expanded/unfolded.
         compose.runOnIdle { size = DpSize(1_000.dp, 700.dp) }
         compose.onNodeWithContentDescription("Tracks").assertIsDisplayed()
+        // Vertical separating fold.
         compose.runOnIdle {
             hinge = SeparatingHinge(480, 0, 520, 700, HingeOrientation.Vertical)
         }
-        val safeControls = compose.onNodeWithTag("playback-controls", useUnmergedTree = true)
+        var safeControls = compose.onNodeWithTag("playback-controls", useUnmergedTree = true)
             .getUnclippedBoundsInRoot()
         assertTrue(safeControls.right <= 480.dp || safeControls.left >= 520.dp)
+        // Horizontal tabletop fold.
+        compose.runOnIdle {
+            hinge = SeparatingHinge(0, 330, 1_000, 370, HingeOrientation.Horizontal)
+        }
+        safeControls = compose.onNodeWithTag("playback-controls", useUnmergedTree = true)
+            .getUnclippedBoundsInRoot()
+        assertTrue(safeControls.bottom <= 330.dp || safeControls.top >= 370.dp)
+        // Folded and unfolded again.
+        compose.runOnIdle {
+            hinge = null
+            size = DpSize(420.dp, 700.dp)
+        }
+        compose.onNodeWithContentDescription("Pause").assertIsDisplayed()
+        compose.runOnIdle { size = DpSize(1_000.dp, 700.dp) }
+        compose.onNodeWithContentDescription("Tracks").assertIsDisplayed()
 
         restoration.emulateSavedInstanceStateRestore()
 
@@ -82,12 +102,12 @@ class PlaybackLifecycleTest {
         assertEquals(600_000_000, (playback.state.value as PlaybackState.Active).positionTicks)
         assertEquals(0, playback.submitCount)
         assertEquals(0, playback.exitCount)
-        assertTrue(immersive.contains(true))
+        assertTrue(systemBars.contains(PlaybackSystemBars.Immersive))
     }
 
     @Test
     fun unsafe_process_restore_returns_to_details_without_autoplay() {
-        val playback = RecordingPlayback(PlaybackState.Idle)
+        val playback = RecordingPlayback(active())
         val setup = AuthenticatedSetup("movies/server/movie")
         val gateway = object : EmbyGateway {
             override val connectionState = MutableStateFlow(GatewayConnectionState.Connected)
@@ -103,11 +123,17 @@ class PlaybackLifecycleTest {
             }
         }
 
-        compose.waitUntil(5_000) {
-            compose.onAllNodesWithText("Arrival").fetchSemanticsNodes().isNotEmpty()
+        compose.onNodeWithContentDescription("Pause").assertIsDisplayed()
+        compose.runOnIdle {
+            // Process death removes the service/coordinator session; only navigation state is safe to restore.
+            playback.state.value = PlaybackState.Idle
+            playback.isPlaying.value = false
         }
         restoration.emulateSavedInstanceStateRestore()
 
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText("Arrival").fetchSemanticsNodes().isNotEmpty()
+        }
         compose.onNodeWithText("Arrival").assertIsDisplayed()
         assertEquals(PlaybackState.Idle, playback.state.value)
         assertEquals(0, playback.submitCount)

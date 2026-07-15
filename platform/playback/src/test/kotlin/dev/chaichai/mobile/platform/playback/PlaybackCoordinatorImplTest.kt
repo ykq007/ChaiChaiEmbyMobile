@@ -175,7 +175,7 @@ class PlaybackCoordinatorImplTest {
     }
 
     @Test
-    fun `backgrounding reports the service snapshot and leaves playback active`() = runTest {
+    fun `service owned background event reports its snapshot and leaves playback active`() = runTest {
         val gateway = FakeGateway()
         val engine = FakeEngine()
         val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
@@ -185,7 +185,13 @@ class PlaybackCoordinatorImplTest {
         runCurrent()
         engine.positionTicks = 700_000_000
 
-        coordinator.onAppBackgrounded()
+        engine.eventsFlow.emit(
+            PlaybackEngineEvent.Progress(
+                dev.chaichai.mobile.platform.server.PlaybackProgressEvent.TimeUpdate,
+                700_000_000,
+                false,
+            ),
+        )
         runCurrent()
 
         val background = gateway.reports.last()

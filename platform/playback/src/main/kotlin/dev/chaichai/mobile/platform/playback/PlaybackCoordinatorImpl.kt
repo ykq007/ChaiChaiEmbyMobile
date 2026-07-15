@@ -229,13 +229,6 @@ class PlaybackCoordinatorImpl(
         lastRequest?.let(::submit)
     }
 
-    override fun onAppBackgrounded() {
-        val plan = activePlan ?: return
-        scope.launch {
-            if (activePlan == plan) gateway.report(report(plan, PlaybackReportKind.Progress))
-        }
-    }
-
     override fun exit() {
         negotiationJob?.cancel()
         trackChangeJob?.cancel()

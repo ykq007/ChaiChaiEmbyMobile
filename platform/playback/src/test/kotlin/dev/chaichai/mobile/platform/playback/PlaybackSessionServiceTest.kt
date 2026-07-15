@@ -93,6 +93,31 @@ class PlaybackSessionServiceTest {
         }
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `service reports app backgrounding without stopping playback`() = runTest {
+        val progress = mutableListOf<PlaybackEngineEvent.Progress>()
+        val collector = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            PlaybackServiceOwner.events.collect { if (it is PlaybackEngineEvent.Progress) progress += it }
+        }
+        val serviceController = Robolectric.buildService(PlaybackSessionService::class.java).create()
+        val service = serviceController.get()
+        service.acknowledgePlayingReported()
+        val activity = Robolectric.buildActivity(android.app.Activity::class.java).create().start().resume()
+
+        activity.pause().stop()
+        runCurrent()
+
+        assertEquals(
+            listOf(dev.chaichai.mobile.platform.server.PlaybackProgressEvent.TimeUpdate),
+            progress.map { it.event },
+        )
+        assertSame(service, PlaybackServiceOwner.serviceOrNull())
+        activity.destroy()
+        collector.cancel()
+        serviceController.destroy()
+    }
+
     @Test
     fun `playback client rejects redirects before authenticated headers can cross authority`() {
         MockWebServer().use { origin ->

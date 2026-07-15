@@ -36,8 +36,10 @@ data class PlaybackTracksLayout(
 
 data class PlaybackWindowLayout(
     val safePane: PlaybackSafePane,
-    val isImmersive: Boolean,
+    val systemBars: PlaybackSystemBars,
 )
+
+enum class PlaybackSystemBars { Visible, Immersive }
 
 object AdaptiveNavigationPolicy {
     private const val RailMinimumWidthDp = 600
@@ -81,9 +83,13 @@ object AdaptiveNavigationPolicy {
         )
     }
 
-    fun playback(window: WindowCharacteristics): PlaybackWindowLayout = PlaybackWindowLayout(
+    fun playbackWindowLayout(window: WindowCharacteristics): PlaybackWindowLayout = PlaybackWindowLayout(
         safePane = playbackSafePane(window),
-        isImmersive = window.usableWidthDp > window.usableHeightDp,
+        systemBars = if (window.usableWidthDp > window.usableHeightDp) {
+            PlaybackSystemBars.Immersive
+        } else {
+            PlaybackSystemBars.Visible
+        },
     )
 
     private fun playbackSafePane(window: WindowCharacteristics): PlaybackSafePane =
