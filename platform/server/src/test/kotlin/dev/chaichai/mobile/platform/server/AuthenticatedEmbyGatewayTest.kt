@@ -76,6 +76,39 @@ class AuthenticatedEmbyGatewayTest {
     }
 
     @Test
+    fun process_recreation_restores_only_matching_server_user_content_and_artwork() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            repeat(5) { server.enqueue(items("Durable $it")) }
+            server.enqueue(MockResponse.Builder().code(200).body("durable-art").build())
+            val cache = InMemoryHomeCache()
+            val vault = FakeVault(stored(valid(server.url("/emby").toString())))
+            val first = AuthenticatedEmbyGateway(vault, homeCache = cache)
+            first.refreshHome()
+            // The fixture without a tag has no artwork; use a server-scoped reference to exercise the cache.
+            val reference = dev.chaichai.mobile.core.contracts.ArtworkReference(
+                dev.chaichai.mobile.core.contracts.MediaIdentity("server", "item"), "tag",
+            )
+            assertEquals("durable-art", first.loadArtwork(reference)!!.decodeToString())
+            repeat(5) { server.enqueue(MockResponse.Builder().code(503).build()) }
+
+            val recreated = AuthenticatedEmbyGateway(vault, homeCache = cache)
+            recreated.refreshHome()
+
+            val restored = recreated.homeFeed.value as HomeFeedState.Ready
+            assertEquals("Durable 0", restored.sections.getValue(HomeSection.ContinueWatching).items.single().title)
+            assertEquals(true, restored.sections.getValue(HomeSection.ContinueWatching).isStale)
+            assertEquals("durable-art", recreated.loadArtwork(reference)!!.decodeToString())
+            assertEquals(11, server.requestCount)
+
+            vault.save(stored(valid(server.url("/emby").toString())).copy(serverId = "other-server"))
+            repeat(5) { server.enqueue(MockResponse.Builder().code(503).build()) }
+            recreated.refreshHome()
+            assert(recreated.homeFeed.value is HomeFeedState.Failure)
+        }
+    }
+
+    @Test
     fun authenticated_request_uses_scoped_token_and_reports_expiration() = runTest {
         MockWebServer().use { server ->
             server.start()

@@ -1,5 +1,6 @@
 package dev.chaichai.mobile
 
+import android.net.Uri
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
@@ -49,8 +50,11 @@ import androidx.navigation.compose.rememberNavController
 import dev.chaichai.mobile.core.contracts.AppBoundaries
 import dev.chaichai.mobile.core.contracts.GatewayConnectionState
 import dev.chaichai.mobile.core.contracts.GatewayAuthenticationStatus
+import dev.chaichai.mobile.core.contracts.HomeMediaAction
+import dev.chaichai.mobile.design.system.EmptyDestination
 import dev.chaichai.mobile.design.system.LocalReducedMotion
 import dev.chaichai.mobile.feature.home.HomeScreen
+import dev.chaichai.mobile.feature.home.HomeWindowClass
 import dev.chaichai.mobile.feature.libraries.LibrariesScreen
 import dev.chaichai.mobile.feature.search.SearchScreen
 import dev.chaichai.mobile.feature.settings.SettingsScreen
@@ -78,6 +82,8 @@ private enum class TopLevelDestination(val route: String, val label: String, val
     Search("search", "Search", Icons.Default.Search),
     Settings("settings", "Settings", Icons.Default.Settings),
 }
+
+private const val MediaActionRoute = "media/{serverId}/{itemId}/{intent}"
 
 @Composable
 fun MobileApp(
@@ -150,13 +156,12 @@ private fun AdaptiveShell(
         val verticalInsetsDp = with(density) {
             (safeDrawing.getTop(density) + safeDrawing.getBottom(density)).toDp().value
         }
-        val layout = AdaptiveNavigationPolicy.layout(
-            WindowCharacteristics(
-                usableWidthDp = (maxWidth.value - horizontalInsetsDp).roundToInt(),
-                usableHeightDp = (maxHeight.value - verticalInsetsDp).roundToInt(),
-                hasSeparatingVerticalHinge = isHingeSeparated,
-            ),
+        val window = WindowCharacteristics(
+            usableWidthDp = (maxWidth.value - horizontalInsetsDp).roundToInt(),
+            usableHeightDp = (maxHeight.value - verticalInsetsDp).roundToInt(),
+            hasSeparatingVerticalHinge = isHingeSeparated,
         )
+        val layout = AdaptiveNavigationPolicy.layout(window)
         val gatewayState by boundaries.gateway.connectionState.collectAsState()
         val isPlaying by boundaries.playback.isPlaying.collectAsState()
         val isOnline by boundaries.connectivity.isOnline.collectAsState()
@@ -197,7 +202,21 @@ private fun AdaptiveShell(
                     HomeScreen(
                         gateway = boundaries.gateway,
                         isHeightConstrained = layout.isHeightConstrained,
-                        isExpanded = layout.navigationPlacement == NavigationPlacement.Rail,
+                        windowClass = when {
+                            window.usableWidthDp >= 840 -> HomeWindowClass.Expanded
+                            window.usableWidthDp >= 600 -> HomeWindowClass.Medium
+                            else -> HomeWindowClass.Compact
+                        },
+                        onMediaAction = { action ->
+                            boundaries.homeMediaActions.submit(action)
+                            navController.navigate(action.navigationRoute())
+                        },
+                    )
+                }
+                composable(MediaActionRoute) {
+                    EmptyDestination(
+                        title = "Opening media",
+                        description = "The selected item is ready for its destination feature.",
                     )
                 }
                 composable(TopLevelDestination.Libraries.route) { LibrariesScreen() }
@@ -237,6 +256,14 @@ private fun AdaptiveShell(
             ) { padding -> content(Modifier.fillMaxSize().padding(padding)) }
         }
     }
+}
+
+private fun HomeMediaAction.navigationRoute(): String {
+    val intent = when (this) {
+        is HomeMediaAction.OpenDetails -> "details"
+        is HomeMediaAction.Resume -> "resume"
+    }
+    return "media/${Uri.encode(identity.serverId)}/${Uri.encode(identity.itemId)}/$intent"
 }
 
 private fun NavDestination?.isSelected(destination: TopLevelDestination): Boolean =

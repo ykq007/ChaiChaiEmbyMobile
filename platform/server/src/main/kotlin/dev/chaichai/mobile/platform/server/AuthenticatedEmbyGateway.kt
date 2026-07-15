@@ -1,13 +1,16 @@
 package dev.chaichai.mobile.platform.server
 
-import dev.chaichai.mobile.core.contracts.EmbyGateway
 import dev.chaichai.mobile.core.contracts.ArtworkReference
+import dev.chaichai.mobile.core.contracts.ArtworkKind
+import dev.chaichai.mobile.core.contracts.EmbyGateway
 import dev.chaichai.mobile.core.contracts.GatewayAuthenticationStatus
 import dev.chaichai.mobile.core.contracts.GatewayConnectionState
 import dev.chaichai.mobile.core.contracts.HomeFeedState
 import dev.chaichai.mobile.core.contracts.HomeMediaItem
 import dev.chaichai.mobile.core.contracts.HomeSection
 import dev.chaichai.mobile.core.contracts.HomeSectionContent
+import dev.chaichai.mobile.core.contracts.HomeScope
+import dev.chaichai.mobile.core.contracts.MediaIdentity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -27,6 +30,7 @@ fun interface SessionVerifier {
 class AuthenticatedEmbyGateway(
     private val vault: SessionVault,
     private val clients: AuthorityScopedHttpClients = AuthorityScopedHttpClients(),
+    private val homeCache: HomeCache = InMemoryHomeCache(),
 ) : EmbyGateway, SessionVerifier {
     private val mutableConnectionState = MutableStateFlow(GatewayConnectionState.Disconnected)
     override val connectionState: StateFlow<GatewayConnectionState> = mutableConnectionState
@@ -80,22 +84,20 @@ class AuthenticatedEmbyGateway(
     }
 
     override suspend fun refreshHome() {
-        val previous = (mutableHomeFeed.value as? HomeFeedState.Ready)?.sections.orEmpty()
-        mutableHomeFeed.value = if (previous.isEmpty()) HomeFeedState.Loading else HomeFeedState.Ready(previous, true)
-        loadSections(HomeSection.entries.toSet(), previous)
+        refreshSections(HomeSection.entries.toSet())
     }
 
     override suspend fun retryHomeSection(section: HomeSection) {
-        val previous = (mutableHomeFeed.value as? HomeFeedState.Ready)?.sections.orEmpty()
-        mutableHomeFeed.value = if (previous.isEmpty()) HomeFeedState.Loading else HomeFeedState.Ready(previous, true)
-        loadSections(setOf(section), previous)
+        refreshSections(setOf(section))
     }
 
     override suspend fun loadArtwork(artwork: ArtworkReference): ByteArray? = withContext(Dispatchers.IO) {
-        val session = vault.restore()?.takeIf { it.serverId == artwork.serverId } ?: return@withContext null
+        val session = vault.restore()?.takeIf { it.serverId == artwork.identity.serverId } ?: return@withContext null
+        val scope = HomeScope(session.serverId, session.userId)
+        homeCache.loadArtwork(scope, artwork)?.let { return@withContext it }
         val request = Request.Builder()
             .url(
-                session.address.apiUrl("Items/${artwork.itemId}/Images/${artwork.imageType}").toString().toHttpUrl()
+                session.address.apiUrl("Items/${artwork.identity.itemId}/Images/${artwork.kind.routeName}").toString().toHttpUrl()
                     .newBuilder().addQueryParameter("tag", artwork.imageTag).addQueryParameter("maxWidth", "1280").build(),
             )
             .header("X-Emby-Token", session.accessToken.encoded())
@@ -103,21 +105,33 @@ class AuthenticatedEmbyGateway(
             .build()
         try {
             clients.forRequest(session.address.authority, session.certificateBypassAuthority)
-                .newCall(request).execute().use { if (it.isSuccessful) it.body.bytes() else null }
+                .newCall(request).execute().use {
+                    if (it.isSuccessful) it.body.bytes().also { bytes -> homeCache.saveArtwork(scope, artwork, bytes) } else null
+                }
         } catch (_: Exception) {
             null
         }
     }
 
-    private suspend fun loadSections(
-        requested: Set<HomeSection>,
-        previous: Map<HomeSection, HomeSectionContent>,
-    ) = withContext(Dispatchers.IO) {
+    private suspend fun refreshSections(requested: Set<HomeSection>) {
         val session = vault.restore()
         if (session == null) {
             mutableHomeFeed.value = HomeFeedState.Failure("Sign in again to refresh Home.")
-            return@withContext
+            return
         }
+        val scope = HomeScope(session.serverId, session.userId)
+        val current = (mutableHomeFeed.value as? HomeFeedState.Ready)?.takeIf { it.scope == scope }?.sections
+        val previous = current ?: homeCache.loadFeed(scope).orEmpty()
+        mutableHomeFeed.value = if (previous.isEmpty()) HomeFeedState.Loading else HomeFeedState.Ready(scope, previous, true)
+        loadSections(session, scope, requested, previous)
+    }
+
+    private suspend fun loadSections(
+        session: StoredSession,
+        scope: HomeScope,
+        requested: Set<HomeSection>,
+        previous: Map<HomeSection, HomeSectionContent>,
+    ) = withContext(Dispatchers.IO) {
         val merged = previous.toMutableMap()
         requested.forEach { section ->
             merged[section] = try {
@@ -129,11 +143,13 @@ class AuthenticatedEmbyGateway(
         }
         val failures = merged.values.count { it.failureMessage != null }
         val successful = merged.values.filter { it.failureMessage == null }
+        val cacheable = merged.filterValues { it.failureMessage == null || it.items.isNotEmpty() }
+        if (cacheable.isNotEmpty()) homeCache.saveFeed(scope, cacheable)
         mutableHomeFeed.value = when {
             failures == merged.size && merged.values.none { it.items.isNotEmpty() } ->
                 HomeFeedState.Failure("Home couldn't be loaded. Check the connection and retry.")
-            successful.isNotEmpty() && successful.all { it.items.isEmpty() } && failures == 0 -> HomeFeedState.Empty()
-            else -> HomeFeedState.Ready(merged.toMap())
+            successful.isNotEmpty() && successful.all { it.items.isEmpty() } && failures == 0 -> HomeFeedState.Empty
+            else -> HomeFeedState.Ready(scope, merged.toMap())
         }
     }
 
@@ -195,17 +211,21 @@ class AuthenticatedEmbyGateway(
         @kotlinx.serialization.SerialName("BackdropImageTags") val backdropImageTags: List<String> = emptyList(),
         @kotlinx.serialization.SerialName("UserData") val userData: HomeUserDataDto? = null,
     ) {
-        fun toContract(serverId: String, itemId: String) = HomeMediaItem(
-            serverId = serverId,
-            itemId = itemId,
-            title = name ?: "Untitled",
-            mediaType = type ?: "Unknown",
-            subtitle = seriesName,
-            playbackPositionTicks = userData?.playbackPositionTicks ?: 0,
-            runtimeTicks = runtimeTicks,
-            artwork = imageTags["Primary"]?.let { ArtworkReference(serverId, itemId, it) },
-            backdrop = backdropImageTags.firstOrNull()?.let { ArtworkReference(serverId, itemId, it, "Backdrop") },
-        )
+        fun toContract(serverId: String, itemId: String): HomeMediaItem {
+            val identity = MediaIdentity(serverId, itemId)
+            return HomeMediaItem(
+                identity = identity,
+                title = name ?: "Untitled",
+                mediaType = type ?: "Unknown",
+                subtitle = seriesName,
+                playbackPositionTicks = userData?.playbackPositionTicks ?: 0,
+                runtimeTicks = runtimeTicks,
+                artwork = imageTags["Primary"]?.let { ArtworkReference(identity, it) },
+                backdrop = backdropImageTags.firstOrNull()?.let {
+                    ArtworkReference(identity, it, ArtworkKind.Backdrop)
+                },
+            )
+        }
     }
 
     @Serializable

@@ -1,8 +1,7 @@
 package dev.chaichai.mobile.feature.home
 
-import android.graphics.BitmapFactory
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,17 +25,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.isTraversalGroup
+import androidx.compose.ui.semantics.traversalIndex
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.testTag
@@ -45,15 +41,20 @@ import dev.chaichai.mobile.core.contracts.EmbyGateway
 import dev.chaichai.mobile.core.contracts.HomeFeedState
 import dev.chaichai.mobile.core.contracts.HomeMediaItem
 import dev.chaichai.mobile.core.contracts.HomeSection
+import dev.chaichai.mobile.core.contracts.HomeMediaAction
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
+import dev.chaichai.mobile.design.system.AuthenticatedArtwork
+
+enum class HomeWindowClass { Compact, Medium, Expanded }
 
 @Composable
 fun HomeScreen(
     gateway: EmbyGateway,
     modifier: Modifier = Modifier,
     isHeightConstrained: Boolean,
-    isExpanded: Boolean,
+    windowClass: HomeWindowClass,
+    onMediaAction: (HomeMediaAction) -> Unit,
 ) {
     val state by gateway.homeFeed.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
@@ -61,7 +62,10 @@ fun HomeScreen(
         if (gateway.homeFeed.value is HomeFeedState.Loading) gateway.refreshHome()
     }
     Box(
-        modifier.fillMaxSize().semantics { contentDescription = "Home discovery content" },
+        modifier.fillMaxSize().semantics {
+            contentDescription = "Home discovery content, ${windowClass.name.lowercase()} layout"
+            isTraversalGroup = true
+        },
         contentAlignment = Alignment.Center,
     ) {
         if (state !is HomeFeedState.Ready) {
@@ -79,7 +83,8 @@ fun HomeScreen(
                 gateway = gateway,
                 feed = feed,
                 isHeightConstrained = isHeightConstrained,
-                isExpanded = isExpanded,
+                windowClass = windowClass,
+                onMediaAction = onMediaAction,
                 refresh = { scope.launch { gateway.refreshHome() } },
                 retry = { scope.launch { gateway.retryHomeSection(it) } },
             )
@@ -92,7 +97,8 @@ private fun HomeContent(
     gateway: EmbyGateway,
     feed: HomeFeedState.Ready,
     isHeightConstrained: Boolean,
-    isExpanded: Boolean,
+    windowClass: HomeWindowClass,
+    onMediaAction: (HomeMediaAction) -> Unit,
     refresh: () -> Unit,
     retry: (HomeSection) -> Unit,
 ) {
@@ -105,18 +111,24 @@ private fun HomeContent(
     ) {
         item("home-header") {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = if (isExpanded) 28.dp else 16.dp, vertical = 12.dp),
+                Modifier.fillMaxWidth().padding(horizontal = windowClass.horizontalPadding, vertical = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Home", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
+                Text(
+                    "Home",
+                    style = MaterialTheme.typography.headlineMedium,
+                    modifier = Modifier.semantics { heading(); traversalIndex = 0f },
+                )
                 OutlinedButton(onClick = refresh, enabled = !feed.isRefreshing) {
                     Text(if (feed.isRefreshing) "Refreshing" else "Refresh")
                 }
             }
         }
         if (hero != null && !isHeightConstrained) {
-            item("spotlight-${hero.itemId}") { Spotlight(gateway, hero, isExpanded) }
+            item("spotlight-${hero.identity.itemId}") {
+                Spotlight(gateway, hero, windowClass, onMediaAction)
+            }
         }
         HomeSection.entries.forEach { section ->
             val content = feed.sections[section] ?: return@forEach
@@ -126,27 +138,29 @@ private fun HomeContent(
                         Text(
                             section.title,
                             style = MaterialTheme.typography.titleLarge,
-                            modifier = Modifier.padding(horizontal = if (isExpanded) 28.dp else 16.dp).semantics { heading() },
+                            modifier = Modifier.padding(horizontal = windowClass.horizontalPadding).semantics {
+                                heading(); traversalIndex = 2f + section.ordinal * 2f
+                            },
                         )
                         if (content.isStale) {
                             Text(
                                 "Showing saved content",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = if (isExpanded) 28.dp else 16.dp),
+                                modifier = Modifier.padding(horizontal = windowClass.horizontalPadding),
                             )
                         }
                     }
                 }
                 if (content.items.isNotEmpty()) {
                     item("shelf-${section.name}") {
-                        MediaShelf(gateway, content.items, section, isExpanded)
+                        MediaShelf(gateway, content.items, section, windowClass, onMediaAction)
                     }
                 }
                 content.failureMessage?.let { message ->
                     item("error-${section.name}") {
                         Row(
-                            Modifier.fillMaxWidth().padding(horizontal = if (isExpanded) 28.dp else 16.dp, vertical = 8.dp),
+                            Modifier.fillMaxWidth().padding(horizontal = windowClass.horizontalPadding, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
@@ -162,54 +176,70 @@ private fun HomeContent(
 
 private fun spotlightItem(feed: HomeFeedState.Ready): HomeMediaItem? {
     val resumable = feed.sections[HomeSection.ContinueWatching]?.items?.firstOrNull {
-        val runtime = it.runtimeTicks
-        it.playbackPositionTicks >= 100_000_000 &&
-            (runtime == null || runtime - it.playbackPositionTicks >= 600_000_000)
+        it.hasMeaningfulResume
     }
     return resumable ?: feed.sections[HomeSection.NextUp]?.items?.firstOrNull()
 }
 
 @Composable
-private fun Spotlight(gateway: EmbyGateway, item: HomeMediaItem, isExpanded: Boolean) {
+private fun Spotlight(
+    gateway: EmbyGateway,
+    item: HomeMediaItem,
+    windowClass: HomeWindowClass,
+    onMediaAction: (HomeMediaAction) -> Unit,
+) {
     Box(
-        Modifier.fillMaxWidth().heightIn(min = 220.dp, max = if (isExpanded) 300.dp else 280.dp)
+        Modifier.fillMaxWidth().heightIn(min = 220.dp, max = windowClass.heroMaxHeight)
             .background(MaterialTheme.colorScheme.surfaceVariant),
     ) {
-        item.backdrop?.let { AuthenticatedArtwork(gateway, it, item.title, Modifier.fillMaxSize()) }
+        item.backdrop?.let { HomeArtwork(gateway, it, item.title, Modifier.fillMaxSize()) }
         Column(
-            Modifier.align(Alignment.BottomStart).fillMaxWidth(if (isExpanded) .62f else .88f)
+            Modifier.align(Alignment.BottomStart).fillMaxWidth(if (windowClass == HomeWindowClass.Expanded) .58f else .88f)
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = .82f)).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text("Spotlight", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             Text(item.title, style = MaterialTheme.typography.headlineLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Button(onClick = { }) {
-                Text(if (item.playbackPositionTicks >= 100_000_000) "Resume ${formatTicks(item.playbackPositionTicks)}" else "View details")
+            Button(onClick = {
+                onMediaAction(
+                    if (item.hasMeaningfulResume) HomeMediaAction.Resume(item.identity, item.playbackPositionTicks)
+                    else HomeMediaAction.OpenDetails(item.identity),
+                )
+            }) {
+                Text(if (item.hasMeaningfulResume) "Resume ${formatTicks(item.playbackPositionTicks)}" else "View details")
             }
         }
     }
 }
 
 @Composable
-private fun MediaShelf(gateway: EmbyGateway, media: List<HomeMediaItem>, section: HomeSection, isExpanded: Boolean) {
+private fun MediaShelf(
+    gateway: EmbyGateway,
+    media: List<HomeMediaItem>,
+    section: HomeSection,
+    windowClass: HomeWindowClass,
+    onMediaAction: (HomeMediaAction) -> Unit,
+) {
     val state = rememberLazyListState()
     LazyRow(
         state = state,
         modifier = Modifier.testTag("shelf-${section.name}"),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = if (isExpanded) 28.dp else 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(if (isExpanded) 16.dp else 12.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = windowClass.horizontalPadding),
+        horizontalArrangement = Arrangement.spacedBy(windowClass.shelfGap),
     ) {
-        items(media, key = { "${it.serverId}:${it.itemId}" }) { item ->
+        items(media, key = { "${it.identity.serverId}:${it.identity.itemId}" }) { item ->
             Column(Modifier.width(if (section == HomeSection.ContinueWatching || section == HomeSection.NextUp) {
-                if (isExpanded) 300.dp else 252.dp
-            } else if (isExpanded) 172.dp else 144.dp)) {
+                windowClass.landscapeWidth
+            } else windowClass.posterWidth).clickable {
+                onMediaAction(HomeMediaAction.OpenDetails(item.identity))
+            }) {
                 Box(
                     Modifier.fillMaxWidth().aspectRatio(
                         if (section == HomeSection.ContinueWatching || section == HomeSection.NextUp) 16f / 9f else 2f / 3f,
                     ).background(MaterialTheme.colorScheme.surfaceVariant),
                     contentAlignment = Alignment.Center,
                 ) {
-                    item.artwork?.let { AuthenticatedArtwork(gateway, it, item.title, Modifier.fillMaxSize()) }
+                    item.artwork?.let { HomeArtwork(gateway, it, item.title, Modifier.fillMaxSize()) }
                 }
                 Text(item.title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 item.subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 1) }
@@ -219,14 +249,13 @@ private fun MediaShelf(gateway: EmbyGateway, media: List<HomeMediaItem>, section
 }
 
 @Composable
-private fun AuthenticatedArtwork(gateway: EmbyGateway, reference: ArtworkReference, title: String, modifier: Modifier) {
-    var bytes by remember(reference) { mutableStateOf<ByteArray?>(null) }
-    LaunchedEffect(gateway, reference) { bytes = gateway.loadArtwork(reference) }
-    bytes?.let { encoded ->
-        val bitmap = remember(encoded) { BitmapFactory.decodeByteArray(encoded, 0, encoded.size)?.asImageBitmap() }
-        bitmap?.let { Image(it, contentDescription = "$title artwork", contentScale = ContentScale.Crop, modifier = modifier) }
-    }
-}
+private fun HomeArtwork(gateway: EmbyGateway, reference: ArtworkReference, title: String, modifier: Modifier) =
+    AuthenticatedArtwork(
+        cacheIdentity = "${reference.identity.serverId}:${reference.identity.itemId}:${reference.kind}:${reference.imageTag}",
+        contentDescription = "$title artwork",
+        load = { gateway.loadArtwork(reference) },
+        modifier = modifier,
+    )
 
 @Composable
 private fun StateMessage(message: String, action: String? = null, onAction: () -> Unit = {}, showProgress: Boolean = false) {
@@ -238,6 +267,32 @@ private fun StateMessage(message: String, action: String? = null, onAction: () -
 }
 
 private fun formatTicks(ticks: Long): String {
-    val seconds = ticks / 10_000_000
+    val seconds = ticks / HomeMediaItem.TicksPerSecond
     return "%d:%02d".format(seconds / 60, seconds % 60)
+}
+
+private val HomeWindowClass.horizontalPadding get() = when (this) {
+    HomeWindowClass.Compact -> 16.dp
+    HomeWindowClass.Medium -> 22.dp
+    HomeWindowClass.Expanded -> 28.dp
+}
+private val HomeWindowClass.heroMaxHeight get() = when (this) {
+    HomeWindowClass.Compact -> 260.dp
+    HomeWindowClass.Medium -> 280.dp
+    HomeWindowClass.Expanded -> 300.dp
+}
+private val HomeWindowClass.shelfGap get() = when (this) {
+    HomeWindowClass.Compact -> 12.dp
+    HomeWindowClass.Medium -> 14.dp
+    HomeWindowClass.Expanded -> 16.dp
+}
+private val HomeWindowClass.landscapeWidth get() = when (this) {
+    HomeWindowClass.Compact -> 252.dp
+    HomeWindowClass.Medium -> 280.dp
+    HomeWindowClass.Expanded -> 320.dp
+}
+private val HomeWindowClass.posterWidth get() = when (this) {
+    HomeWindowClass.Compact -> 144.dp
+    HomeWindowClass.Medium -> 158.dp
+    HomeWindowClass.Expanded -> 176.dp
 }

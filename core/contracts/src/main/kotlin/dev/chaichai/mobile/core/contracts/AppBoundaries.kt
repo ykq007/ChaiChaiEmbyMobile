@@ -27,16 +27,20 @@ enum class HomeSection(val title: String) {
     AccessibleLibraries("Libraries"),
 }
 
+data class HomeScope(val serverId: String, val userId: String)
+
+data class MediaIdentity(val serverId: String, val itemId: String)
+
+enum class ArtworkKind(val routeName: String) { Primary("Primary"), Backdrop("Backdrop") }
+
 data class ArtworkReference(
-    val serverId: String,
-    val itemId: String,
+    val identity: MediaIdentity,
     val imageTag: String,
-    val imageType: String = "Primary",
+    val kind: ArtworkKind = ArtworkKind.Primary,
 )
 
 data class HomeMediaItem(
-    val serverId: String,
-    val itemId: String,
+    val identity: MediaIdentity,
     val title: String,
     val mediaType: String,
     val subtitle: String? = null,
@@ -44,7 +48,17 @@ data class HomeMediaItem(
     val runtimeTicks: Long? = null,
     val artwork: ArtworkReference? = null,
     val backdrop: ArtworkReference? = null,
-)
+) {
+    val hasMeaningfulResume: Boolean
+        get() = playbackPositionTicks >= MeaningfulResumeTicks &&
+            (runtimeTicks == null || runtimeTicks - playbackPositionTicks >= MeaningfulRemainingTicks)
+
+    companion object {
+        const val TicksPerSecond = 10_000_000L
+        private const val MeaningfulResumeTicks = 10 * TicksPerSecond
+        private const val MeaningfulRemainingTicks = 60 * TicksPerSecond
+    }
+}
 
 data class HomeSectionContent(
     val items: List<HomeMediaItem>,
@@ -55,12 +69,21 @@ data class HomeSectionContent(
 sealed interface HomeFeedState {
     data object Loading : HomeFeedState
     data class Ready(
+        val scope: HomeScope,
         val sections: Map<HomeSection, HomeSectionContent>,
         val isRefreshing: Boolean = false,
     ) : HomeFeedState
-    data class Empty(val canRefresh: Boolean = true) : HomeFeedState
-    data class Failure(val message: String, val canRetry: Boolean = true) : HomeFeedState
+    data object Empty : HomeFeedState
+    data class Failure(val message: String) : HomeFeedState
 }
+
+sealed interface HomeMediaAction {
+    val identity: MediaIdentity
+    data class OpenDetails(override val identity: MediaIdentity) : HomeMediaAction
+    data class Resume(override val identity: MediaIdentity, val positionTicks: Long) : HomeMediaAction
+}
+
+fun interface HomeMediaActionBoundary { fun submit(action: HomeMediaAction) }
 
 private object EmptyHomeFeed {
     val flow: StateFlow<HomeFeedState> = kotlinx.coroutines.flow.MutableStateFlow(HomeFeedState.Loading)
@@ -72,4 +95,5 @@ data class AppBoundaries(
     val clock: AppClock,
     val connectivity: ConnectivityMonitor,
     val serverSetup: ServerSetupBoundary? = null,
+    val homeMediaActions: HomeMediaActionBoundary = HomeMediaActionBoundary {},
 )
