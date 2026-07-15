@@ -334,12 +334,14 @@ class PlaybackCoordinatorImpl(
                 engine.acknowledgePlayingReported()
                 mutableIsPlaying.value = !engine.isPaused
                 publishTrackRollback(transition.activeState, transition.previousPlan)
+                if (scheduleTimelineUpdates) startTimelineUpdates()
             } else {
                 activePlan = transition.replacementPlan
                 gateway.report(report(transition.replacementPlan, PlaybackReportKind.Playing))
                 engine.acknowledgePlayingReported()
                 mutableIsPlaying.value = !engine.isPaused
                 publishActive(transition.activeState.title, controlsVisible = true)
+                if (scheduleTimelineUpdates) startTimelineUpdates()
             }
         }
     }

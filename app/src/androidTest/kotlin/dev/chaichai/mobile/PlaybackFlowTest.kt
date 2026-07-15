@@ -7,10 +7,14 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import dev.chaichai.mobile.core.contracts.MediaIdentity
@@ -201,7 +205,22 @@ class PlaybackFlowTest {
         compose.onNodeWithContentDescription("Tracks").performClick()
 
         compose.onNodeWithText("That track couldn't be applied. The previous track is still playing.").assertIsDisplayed()
+        compose.onNodeWithText("That track couldn't be applied. The previous track is still playing.")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
         compose.onNodeWithTag("playback-screen", useUnmergedTree = true).assertExists()
+    }
+
+    @Test
+    fun track_application_status_is_a_talkback_live_region() {
+        val playback = FakePlayback().apply {
+            mutableState.value = activeWithTracks().copy(isChangingTrack = true)
+        }
+        compose.setContent { ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback) } }
+
+        compose.onNodeWithContentDescription("Tracks").performClick()
+
+        compose.onNodeWithText("Applying track…")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
     }
 
     private class FakePlayback : NoOpPlaybackCoordinator() {

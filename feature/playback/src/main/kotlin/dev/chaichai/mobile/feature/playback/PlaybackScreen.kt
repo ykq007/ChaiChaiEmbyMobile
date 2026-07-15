@@ -54,6 +54,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.selection.selectable
@@ -244,7 +246,9 @@ private fun TracksSurface(
                         trackChangeError,
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(top = 8.dp),
+                        modifier = Modifier.padding(top = 8.dp).semantics {
+                            liveRegion = LiveRegionMode.Polite
+                        },
                     )
                 }
                 if (state.isChangingTrack) {
@@ -254,7 +258,11 @@ private fun TracksSurface(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        Text("Applying track…", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Applying track…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        )
                     }
                 }
                 LazyColumn(Modifier.padding(top = 8.dp)) {

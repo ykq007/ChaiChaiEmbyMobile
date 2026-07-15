@@ -255,7 +255,7 @@ class PlaybackCoordinatorImplTest {
     fun `successful audio change preserves media position pause state and negotiated session continuity`() = runTest {
         val gateway = FakeGateway()
         val engine = FakeEngine()
-        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), true)
         coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
             MediaIdentity("server", "movie"), HomeScope("server", "user"), "Arrival",
         ))
@@ -282,6 +282,10 @@ class PlaybackCoordinatorImplTest {
         assertEquals(PlaybackSessionReference("source", "session"), gateway.requests.last().sessionReference)
         assertEquals(1_200_000_000, gateway.requests.last().startPositionTicks)
         assertEquals(listOf(false, true), engine.preparePauseStates)
+        engine.positionTicks = 1_300_000_000
+        advanceTimeBy(1_001)
+        runCurrent()
+        assertEquals(1_300_000_000, (coordinator.state.value as PlaybackState.Active).positionTicks)
         coordinator.close()
     }
 
@@ -289,7 +293,7 @@ class PlaybackCoordinatorImplTest {
     fun `delayed replacement error restores the prior plan after it becomes ready`() = runTest {
         val gateway = FakeGateway()
         val engine = FakeEngine()
-        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), true)
         coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
             MediaIdentity("server", "movie"), HomeScope("server", "user"), "Arrival",
         ))
@@ -324,6 +328,10 @@ class PlaybackCoordinatorImplTest {
             ),
             gateway.reports.map { it.kind },
         )
+        engine.positionTicks = 1_000_000_000
+        advanceTimeBy(1_001)
+        runCurrent()
+        assertEquals(1_000_000_000, (coordinator.state.value as PlaybackState.Active).positionTicks)
         coordinator.close()
     }
 
