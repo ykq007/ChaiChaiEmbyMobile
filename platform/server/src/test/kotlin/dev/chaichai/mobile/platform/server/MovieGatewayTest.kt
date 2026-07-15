@@ -1,11 +1,18 @@
 package dev.chaichai.mobile.platform.server
 
 import dev.chaichai.mobile.core.contracts.MediaIdentity
+import dev.chaichai.mobile.core.contracts.HomeScope
+import dev.chaichai.mobile.core.contracts.GatewayConnectionState
+import dev.chaichai.mobile.core.contracts.MovieDetails
+import dev.chaichai.mobile.core.contracts.MoviePoster
 import dev.chaichai.mobile.core.contracts.MovieDetailsState
 import dev.chaichai.mobile.core.contracts.MovieLibraryQuery
 import dev.chaichai.mobile.core.contracts.MovieLibraryState
 import dev.chaichai.mobile.core.contracts.MovieSortField
 import dev.chaichai.mobile.core.contracts.SortDirection
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -14,6 +21,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.Executors
 
 class MovieGatewayTest {
     @Test
@@ -48,6 +56,89 @@ class MovieGatewayTest {
             assertEquals("Descending", itemsRequest.url.queryParameter("SortOrder"))
             assertEquals("Science Fiction", itemsRequest.url.queryParameter("Genres"))
             assertEquals("token-secret", itemsRequest.headers["X-Emby-Token"])
+            assertTrue(itemsRequest.headers["X-Emby-Authorization"]!!.contains("DeviceId=\"test-device\""))
+            assertTrue(itemsRequest.headers["X-Emby-Authorization"]!!.contains("UserId=\"user\""))
+        }
+    }
+
+    @Test
+    fun movie_work_is_dispatched_off_the_calling_context() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(ok("""{"Items":[]}"""))
+            server.enqueue(ok("""{"Items":[]}"""))
+            val cache = ThreadRecordingMovieCache()
+            val executor = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "movie-io") }
+            executor.asCoroutineDispatcher().use { dispatcher ->
+                val gateway = AuthenticatedEmbyGateway(
+                    FakeVault(stored(valid(server.url("/emby").toString()))),
+                    movieCache = cache,
+                    deviceId = "test-device",
+                    ioDispatcher = dispatcher,
+                )
+
+                gateway.refreshMovies()
+
+                assertEquals("movie-io", cache.loadThread)
+            }
+        }
+    }
+
+    @Test
+    fun revoked_movie_token_invalidates_content_and_enters_reauthentication() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(MockResponse.Builder().code(401).build())
+            val gateway = gateway(server)
+            var expiredDestination: String? = null
+            gateway.onAuthenticationExpired = { expiredDestination = it }
+            gateway.setConnected(true)
+
+            gateway.refreshMovies()
+
+            assertEquals(GatewayConnectionState.Disconnected, gateway.connectionState.value)
+            assertEquals(MovieLibraryState.Loading, gateway.movieLibrary.value)
+            assertEquals("libraries", expiredDestination)
+        }
+    }
+
+    @Test
+    fun scope_change_during_cache_load_cannot_publish_the_previous_users_movies() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            val vault = FakeVault(stored(valid(server.url("/emby").toString())))
+            val cache = BlockingLibraryCache()
+            val gateway = AuthenticatedEmbyGateway(vault, movieCache = cache, deviceId = "test-device")
+            val refresh = backgroundScope.launch { gateway.refreshMovies() }
+            cache.loadStarted.await()
+
+            vault.save(stored(valid(server.url("/emby").toString())).copy(serverId = "server-b", userId = "user-b"))
+            cache.releaseLoad.complete(Unit)
+            refresh.join()
+
+            assertEquals(MovieLibraryState.Loading, gateway.movieLibrary.value)
+            assertEquals(0, server.requestCount)
+        }
+    }
+
+    @Test
+    fun scope_change_during_detail_fallback_cannot_return_the_previous_users_details() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(MockResponse.Builder().code(503).build())
+            val vault = FakeVault(stored(valid(server.url("/emby").toString())))
+            val cache = BlockingDetailsCache()
+            val gateway = AuthenticatedEmbyGateway(vault, movieCache = cache, deviceId = "test-device")
+            val result = backgroundScope.launch {
+                cache.result = gateway.loadMovieDetails(MediaIdentity("server", "arrival"))
+            }
+            cache.loadStarted.await()
+
+            vault.save(stored(valid(server.url("/emby").toString())).copy(serverId = "server-b", userId = "user-b"))
+            cache.releaseLoad.complete(Unit)
+            result.join()
+
+            assertTrue(cache.result is MovieDetailsState.Failure)
         }
     }
 
@@ -122,13 +213,13 @@ class MovieGatewayTest {
             server.enqueue(ok("""{"Id":"arrival","Name":"Arrival","Overview":"Saved details"}"""))
             val cache = InMemoryMovieCache()
             val vault = FakeVault(stored(valid(server.url("/emby").toString())))
-            AuthenticatedEmbyGateway(vault, movieCache = cache).apply {
+            AuthenticatedEmbyGateway(vault, movieCache = cache, deviceId = "test-device").apply {
                 refreshMovies()
                 loadMovieDetails(MediaIdentity("server", "arrival"))
             }
             server.enqueue(MockResponse.Builder().code(503).build())
 
-            val recreated = AuthenticatedEmbyGateway(vault, movieCache = cache)
+            val recreated = AuthenticatedEmbyGateway(vault, movieCache = cache, deviceId = "test-device")
             recreated.refreshMovies()
 
             assertEquals("Arrival", (recreated.movieLibrary.value as MovieLibraryState.Ready).items.single().title)
@@ -157,6 +248,7 @@ class MovieGatewayTest {
 
     private fun gateway(server: MockWebServer) = AuthenticatedEmbyGateway(
         FakeVault(stored(valid(server.url("/emby").toString()))),
+        deviceId = "test-device",
     )
 
     private fun page(prefix: String, total: Int, start: Int, count: Int): String =
@@ -170,6 +262,66 @@ class MovieGatewayTest {
         override fun restore() = session
         override fun save(session: StoredSession) { this.session = session }
         override fun clear() { session = null }
+    }
+
+    private class ThreadRecordingMovieCache : MovieCache {
+        var loadThread: String? = null
+        override suspend fun loadLibrary(scope: HomeScope, query: MovieLibraryQuery): MovieLibrarySnapshot? {
+            loadThread = Thread.currentThread().name
+            return null
+        }
+        override suspend fun saveLibrary(
+            scope: HomeScope,
+            query: MovieLibraryQuery,
+            items: List<MoviePoster>,
+            totalCount: Int,
+            availableGenres: List<String>,
+        ) = Unit
+        override suspend fun loadDetails(scope: HomeScope, identity: MediaIdentity): MovieDetails? = null
+        override suspend fun saveDetails(scope: HomeScope, details: MovieDetails) = Unit
+    }
+
+    private class BlockingLibraryCache : MovieCache {
+        val loadStarted = CompletableDeferred<Unit>()
+        val releaseLoad = CompletableDeferred<Unit>()
+        override suspend fun loadLibrary(scope: HomeScope, query: MovieLibraryQuery): MovieLibrarySnapshot? {
+            loadStarted.complete(Unit)
+            releaseLoad.await()
+            return MovieLibrarySnapshot(
+                listOf(MoviePoster(MediaIdentity(scope.serverId, "old"), "Old private movie")),
+                1,
+                emptyList(),
+            )
+        }
+        override suspend fun saveLibrary(
+            scope: HomeScope,
+            query: MovieLibraryQuery,
+            items: List<MoviePoster>,
+            totalCount: Int,
+            availableGenres: List<String>,
+        ) = Unit
+        override suspend fun loadDetails(scope: HomeScope, identity: MediaIdentity): MovieDetails? = null
+        override suspend fun saveDetails(scope: HomeScope, details: MovieDetails) = Unit
+    }
+
+    private class BlockingDetailsCache : MovieCache {
+        val loadStarted = CompletableDeferred<Unit>()
+        val releaseLoad = CompletableDeferred<Unit>()
+        var result: MovieDetailsState? = null
+        override suspend fun loadLibrary(scope: HomeScope, query: MovieLibraryQuery): MovieLibrarySnapshot? = null
+        override suspend fun saveLibrary(
+            scope: HomeScope,
+            query: MovieLibraryQuery,
+            items: List<MoviePoster>,
+            totalCount: Int,
+            availableGenres: List<String>,
+        ) = Unit
+        override suspend fun loadDetails(scope: HomeScope, identity: MediaIdentity): MovieDetails {
+            loadStarted.complete(Unit)
+            releaseLoad.await()
+            return MovieDetails(identity, "Old private details")
+        }
+        override suspend fun saveDetails(scope: HomeScope, details: MovieDetails) = Unit
     }
 
     private fun stored(address: ServerAddress) = StoredSession(

@@ -19,11 +19,13 @@ import dev.chaichai.mobile.core.contracts.MoviePoster
 import dev.chaichai.mobile.core.contracts.MovieSortField
 import dev.chaichai.mobile.core.contracts.MovieTrackAvailability
 import dev.chaichai.mobile.core.contracts.SortDirection
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -40,6 +42,8 @@ class AuthenticatedEmbyGateway(
     private val clients: AuthorityScopedHttpClients = AuthorityScopedHttpClients(),
     private val homeCache: HomeCache = InMemoryHomeCache(),
     private val movieCache: MovieCache = InMemoryMovieCache(),
+    private val deviceId: String,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : EmbyGateway, SessionVerifier {
     private val mutableConnectionState = MutableStateFlow(GatewayConnectionState.Disconnected)
     override val connectionState: StateFlow<GatewayConnectionState> = mutableConnectionState
@@ -78,10 +82,9 @@ class AuthenticatedEmbyGateway(
         }
     }
 
-    override suspend fun verify(session: StoredSession): GatewayAuthenticationStatus = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
+    override suspend fun verify(session: StoredSession): GatewayAuthenticationStatus = withContext(ioDispatcher) {
+        val request = authenticatedRequest(session)
             .url(session.address.apiUrl("Users/${session.userId}").toString())
-            .header("X-Emby-Token", session.accessToken.encoded())
             .get()
             .build()
         try {
@@ -108,53 +111,60 @@ class AuthenticatedEmbyGateway(
         refreshSections(setOf(section))
     }
 
-    override suspend fun loadArtwork(artwork: ArtworkReference): ByteArray? = withContext(Dispatchers.IO) {
+    override suspend fun loadArtwork(artwork: ArtworkReference): ByteArray? = withContext(ioDispatcher) {
         val session = vault.restore()?.takeIf { it.serverId == artwork.identity.serverId } ?: return@withContext null
         val scope = HomeScope(session.serverId, session.userId)
         homeCache.loadArtwork(scope, artwork)?.let { return@withContext it }
-        val request = Request.Builder()
+        val request = authenticatedRequest(session)
             .url(
                 session.address.apiUrl("Items/${artwork.identity.itemId}/Images/${artwork.kind.routeName}").toString().toHttpUrl()
                     .newBuilder().addQueryParameter("tag", artwork.imageTag).addQueryParameter("maxWidth", "1280").build(),
             )
-            .header("X-Emby-Token", session.accessToken.encoded())
             .get()
             .build()
         try {
             clients.forRequest(session.address.authority, session.certificateBypassAuthority)
                 .newCall(request).execute().use {
-                    if (it.isSuccessful) it.body.bytes().also { bytes -> homeCache.saveArtwork(scope, artwork, bytes) } else null
+                    it.requireAuthenticatedSuccess("Artwork request failed")
+                    it.body.bytes().also { bytes -> homeCache.saveArtwork(scope, artwork, bytes) }
                 }
+        } catch (_: AuthenticationExpiredException) {
+            expireAuthentication(null)
+            null
         } catch (_: Exception) {
             null
         }
     }
 
-    override suspend fun refreshMovies(query: MovieLibraryQuery) {
+    override suspend fun refreshMovies(query: MovieLibraryQuery) = withContext(ioDispatcher) {
         val session = vault.restore()
         if (session == null) {
             mutableMovieLibrary.value = MovieLibraryState.Failure("Sign in again to browse movies.", query = query)
-            return
+            return@withContext
         }
         val scope = HomeScope(session.serverId, session.userId)
         val generation = ++movieGeneration
         val cached = movieCache.loadLibrary(scope, query)
-        if (!isActiveMovieScope(scope, generation)) return
+        if (!isActiveMovieScope(scope, generation)) return@withContext
         mutableMovieLibrary.value = cached?.takeIf { it.items.isNotEmpty() }?.let {
             MovieLibraryState.Ready(scope, it.items, it.totalCount, query, it.availableGenres)
         } ?: MovieLibraryState.Loading
-        mutableMovieLibrary.value = try {
+        val refreshed = try {
             val genres = fetchGenres(session)
             val page = fetchMoviePage(session, query, 0)
-            if (!isActiveMovieScope(scope, generation)) return
+            if (!isActiveMovieScope(scope, generation)) return@withContext
             movieCache.saveLibrary(scope, query, page.items, page.totalCount, genres)
-            if (!isActiveMovieScope(scope, generation)) return
+            if (!isActiveMovieScope(scope, generation)) return@withContext
             when {
                 page.items.isNotEmpty() -> MovieLibraryState.Ready(scope, page.items, page.totalCount, query, genres)
                 query.genre != null -> MovieLibraryState.EmptyFiltered(scope, query, genres)
                 else -> MovieLibraryState.EmptyLibrary(scope, genres)
             }
+        } catch (_: AuthenticationExpiredException) {
+            expireAuthentication("libraries")
+            return@withContext
         } catch (_: Exception) {
+            if (!isActiveMovieScope(scope, generation)) return@withContext
             cached?.takeIf { it.items.isNotEmpty() }?.let {
                 MovieLibraryState.Ready(
                     scope, it.items, it.totalCount, query, it.availableGenres,
@@ -162,18 +172,19 @@ class AuthenticatedEmbyGateway(
                 )
             } ?: MovieLibraryState.Failure("Movies couldn't be loaded. Check the connection and retry.", scope, query)
         }
+        if (isActiveMovieScope(scope, generation)) mutableMovieLibrary.value = refreshed
     }
 
-    override suspend fun loadNextMoviePage() {
-        val ready = mutableMovieLibrary.value as? MovieLibraryState.Ready ?: return
-        if (ready.isLoadingMore || ready.items.size >= ready.totalCount) return
+    override suspend fun loadNextMoviePage() = withContext(ioDispatcher) {
+        val ready = mutableMovieLibrary.value as? MovieLibraryState.Ready ?: return@withContext
+        if (ready.isLoadingMore || ready.items.size >= ready.totalCount) return@withContext
         val session = vault.restore()?.takeIf { it.serverId == ready.scope.serverId && it.userId == ready.scope.userId }
-            ?: return
+            ?: return@withContext
         val generation = movieGeneration
         mutableMovieLibrary.value = ready.copy(isLoadingMore = true, pageFailureMessage = null)
-        mutableMovieLibrary.value = try {
+        val updated = try {
             val page = fetchMoviePage(session, ready.query, ready.items.size)
-            if (!isActiveMovieScope(ready.scope, generation)) return
+            if (!isActiveMovieScope(ready.scope, generation)) return@withContext
             val updated = ready.copy(
                 items = (ready.items + page.items).distinctBy { it.identity },
                 totalCount = page.totalCount,
@@ -181,35 +192,46 @@ class AuthenticatedEmbyGateway(
                 refreshFailureMessage = null,
             )
             movieCache.saveLibrary(ready.scope, ready.query, updated.items, updated.totalCount, updated.availableGenres)
-            if (!isActiveMovieScope(ready.scope, generation)) return
+            if (!isActiveMovieScope(ready.scope, generation)) return@withContext
             updated
+        } catch (_: AuthenticationExpiredException) {
+            expireAuthentication("libraries")
+            return@withContext
         } catch (_: Exception) {
+            if (!isActiveMovieScope(ready.scope, generation)) return@withContext
             ready.copy(pageFailureMessage = "Couldn't load more movies.")
         }
+        if (isActiveMovieScope(ready.scope, generation)) mutableMovieLibrary.value = updated
     }
 
     override suspend fun retryMoviePage() = loadNextMoviePage()
 
-    override suspend fun loadMovieDetails(identity: MediaIdentity): MovieDetailsState = withContext(Dispatchers.IO) {
+    override suspend fun loadMovieDetails(identity: MediaIdentity): MovieDetailsState = withContext(ioDispatcher) {
         val session = vault.restore()?.takeIf { it.serverId == identity.serverId }
             ?: return@withContext MovieDetailsState.Failure("Movie details aren't available for this server.")
         val scope = HomeScope(session.serverId, session.userId)
         try {
-            val request = Request.Builder()
+            val request = authenticatedRequest(session)
                 .url(session.address.apiUrl("Users/${session.userId}/Items/${identity.itemId}").toString().toHttpUrl()
                     .newBuilder().addQueryParameter("Fields", "Overview,Genres,MediaSources,RunTimeTicks,UserData").build())
-                .header("X-Emby-Token", session.accessToken.encoded()).get().build()
+                .get().build()
             clients.forRequest(session.address.authority, session.certificateBypassAuthority)
                 .newCall(request).execute().use { response ->
-                    check(response.isSuccessful) { "Details request failed" }
+                    response.requireAuthenticatedSuccess("Details request failed")
                     val dto = json.decodeFromString<MovieDetailsDto>(response.body.string())
                     val details = dto.toContract(identity)
                     if (!isActiveScope(scope)) return@use MovieDetailsState.Failure("Movie details are no longer active.")
                     movieCache.saveDetails(scope, details)
+                    if (!isActiveScope(scope)) return@use MovieDetailsState.Failure("Movie details are no longer active.")
                     MovieDetailsState.Ready(details)
                 }
+        } catch (_: AuthenticationExpiredException) {
+            expireAuthentication("libraries")
+            MovieDetailsState.Failure("Sign in again to view movie details.")
         } catch (_: Exception) {
-            movieCache.loadDetails(scope, identity)?.copy(tracks = MovieTrackAvailability())?.let(MovieDetailsState::Ready)
+            val cached = movieCache.loadDetails(scope, identity)
+            if (!isActiveScope(scope)) return@withContext MovieDetailsState.Failure("Movie details are no longer active.")
+            cached?.copy(tracks = MovieTrackAvailability())?.let(MovieDetailsState::Ready)
                 ?: MovieDetailsState.Failure("Movie details couldn't be loaded. Retry when the server is available.")
         }
     }
@@ -220,10 +242,10 @@ class AuthenticatedEmbyGateway(
             .addQueryParameter("IncludeItemTypes", "Movie")
             .addQueryParameter("Recursive", "true")
             .build()
-        val request = Request.Builder().url(url).header("X-Emby-Token", session.accessToken.encoded()).get().build()
+        val request = authenticatedRequest(session).url(url).get().build()
         return clients.forRequest(session.address.authority, session.certificateBypassAuthority)
             .newCall(request).execute().use { response ->
-                check(response.isSuccessful) { "Genre request failed" }
+                response.requireAuthenticatedSuccess("Genre request failed")
                 val root = json.parseToJsonElement(response.body.string()) as? JsonObject
                 (root?.get("Items") as? JsonArray).orEmpty().mapNotNull {
                     (it as? JsonObject)?.get("Name")?.let { name ->
@@ -246,10 +268,10 @@ class AuthenticatedEmbyGateway(
             addQueryParameter("SortOrder", query.sortDirection.toApiName())
             query.genre?.let { addQueryParameter("Genres", it) }
         }.build()
-        val request = Request.Builder().url(url).header("X-Emby-Token", session.accessToken.encoded()).get().build()
+        val request = authenticatedRequest(session).url(url).get().build()
         return clients.forRequest(session.address.authority, session.certificateBypassAuthority)
             .newCall(request).execute().use { response ->
-                check(response.isSuccessful) { "Movie request failed" }
+                response.requireAuthenticatedSuccess("Movie request failed")
                 val root = json.parseToJsonElement(response.body.string()) as? JsonObject ?: JsonObject(emptyMap())
                 val items = (root["Items"] as? JsonArray).orEmpty().mapNotNull { element ->
                     val dto = json.decodeFromJsonElement<MovieListItemDto>(element)
@@ -282,11 +304,14 @@ class AuthenticatedEmbyGateway(
         generation: Long,
         requested: Set<HomeSection>,
         previous: Map<HomeSection, HomeSectionContent>,
-    ) = withContext(Dispatchers.IO) {
+    ) = withContext(ioDispatcher) {
         val merged = previous.toMutableMap()
         requested.forEach { section ->
             merged[section] = try {
                 HomeSectionContent(fetchSection(session, section))
+            } catch (_: AuthenticationExpiredException) {
+                expireAuthentication("home")
+                return@withContext
             } catch (_: Exception) {
                 previous[section]?.copy(failureMessage = "Couldn't refresh ${section.title}.", isStale = true)
                     ?: HomeSectionContent(emptyList(), "Couldn't load ${section.title}.")
@@ -354,10 +379,10 @@ class AuthenticatedEmbyGateway(
                 HomeSection.AccessibleLibraries -> Unit
             }
         }.build()
-        val request = Request.Builder().url(url).header("X-Emby-Token", session.accessToken.encoded()).get().build()
+        val request = authenticatedRequest(session).url(url).get().build()
         return clients.forRequest(session.address.authority, session.certificateBypassAuthority)
             .newCall(request).execute().use { response ->
-                check(response.isSuccessful) { "Home request failed" }
+                response.requireAuthenticatedSuccess("Home request failed")
                 val root = json.parseToJsonElement(response.body.string())
                 val elements = when (root) {
                     is JsonArray -> root
@@ -475,8 +500,28 @@ class AuthenticatedEmbyGateway(
 
     private data class MoviePage(val items: List<MoviePoster>, val totalCount: Int)
 
+    private fun authenticatedRequest(session: StoredSession): Request.Builder = Request.Builder()
+        .header("X-Emby-Token", session.accessToken.encoded())
+        .header(
+            "X-Emby-Authorization",
+            "MediaBrowser Client=\"ChaiChai Mobile\", Device=\"Android Mobile\", " +
+                "DeviceId=\"$deviceId\", Version=\"0.1.0\", UserId=\"${session.userId}\"",
+        )
+
+    private fun Response.requireAuthenticatedSuccess(message: String) {
+        if (code == 401 || code == 403) throw AuthenticationExpiredException()
+        check(isSuccessful) { message }
+    }
+
+    private fun expireAuthentication(destination: String?) {
+        setConnected(false)
+        onAuthenticationExpired?.invoke(destination)
+    }
+
     private companion object { const val MoviePageSize = 40 }
 }
+
+private class AuthenticationExpiredException : Exception()
 
 private fun MovieSortField.toApiName(): String = when (this) {
     MovieSortField.Name -> "SortName"

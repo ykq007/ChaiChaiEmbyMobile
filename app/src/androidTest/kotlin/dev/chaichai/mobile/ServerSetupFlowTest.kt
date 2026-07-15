@@ -63,7 +63,7 @@ class ServerSetupFlowTest {
             server.enqueue(MockResponse.Builder().code(401).build())
             server.enqueue(authenticated("token-two"))
             server.enqueue(MockResponse.Builder().body("{}").build())
-            val gateway = AuthenticatedEmbyGateway(vault)
+            val gateway = AuthenticatedEmbyGateway(vault, deviceId = "binding-device")
             val setup = ServerSetupCoordinator(
                 scope, EmbyProbe(), EmbyAuthenticator(), vault, "binding-device", gateway,
             )
@@ -93,7 +93,7 @@ class ServerSetupFlowTest {
                 composeRule.onAllNodes(hasText("Search") and isHeading()).fetchSemanticsNodes().isNotEmpty()
             }
 
-            val restoredGateway = AuthenticatedEmbyGateway(vault)
+            val restoredGateway = AuthenticatedEmbyGateway(vault, deviceId = "binding-device")
             val restored = ServerSetupCoordinator(
                 scope, EmbyProbe(), EmbyAuthenticator(), vault, "binding-device", restoredGateway,
             )

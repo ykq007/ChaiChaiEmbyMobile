@@ -31,7 +31,7 @@ class AuthenticatedEmbyGatewayTest {
                 )
             }
             server.enqueue(MockResponse.Builder().code(200).body("artwork").build())
-            val gateway = AuthenticatedEmbyGateway(FakeVault(stored(valid(server.url("/emby").toString()))))
+            val gateway = gateway(FakeVault(stored(valid(server.url("/emby").toString()))))
 
             gateway.refreshHome()
 
@@ -52,7 +52,7 @@ class AuthenticatedEmbyGatewayTest {
         MockWebServer().use { server ->
             server.start()
             repeat(5) { server.enqueue(items("Before $it")) }
-            val gateway = AuthenticatedEmbyGateway(FakeVault(stored(valid(server.url("/emby").toString()))))
+            val gateway = gateway(FakeVault(stored(valid(server.url("/emby").toString()))))
             gateway.refreshHome()
             server.enqueue(items("After continue"))
             server.enqueue(MockResponse.Builder().code(503).build())
@@ -74,7 +74,7 @@ class AuthenticatedEmbyGatewayTest {
         MockWebServer().use { server ->
             server.start()
             repeat(5) { server.enqueue(MockResponse.Builder().code(503).build()) }
-            val gateway = AuthenticatedEmbyGateway(FakeVault(stored(valid(server.url("/emby").toString()))))
+            val gateway = gateway(FakeVault(stored(valid(server.url("/emby").toString()))))
             gateway.refreshHome()
             assertEquals(HomeScope("server", "user"), (gateway.homeFeed.value as HomeFeedState.Failure).scope)
             repeat(5) { server.enqueue(MockResponse.Builder().code(200).body("{\"Items\":[]}").build()) }
@@ -91,7 +91,7 @@ class AuthenticatedEmbyGatewayTest {
             server.enqueue(MockResponse.Builder().code(200).body("durable-art").build())
             val cache = InMemoryHomeCache()
             val vault = FakeVault(stored(valid(server.url("/emby").toString())))
-            val first = AuthenticatedEmbyGateway(vault, homeCache = cache)
+            val first = gateway(vault, homeCache = cache)
             first.refreshHome()
             // The fixture without a tag has no artwork; use a server-scoped reference to exercise the cache.
             val reference = dev.chaichai.mobile.core.contracts.ArtworkReference(
@@ -100,7 +100,7 @@ class AuthenticatedEmbyGatewayTest {
             assertEquals("durable-art", first.loadArtwork(reference)!!.decodeToString())
             repeat(5) { server.enqueue(MockResponse.Builder().code(503).build()) }
 
-            val recreated = AuthenticatedEmbyGateway(vault, homeCache = cache)
+            val recreated = gateway(vault, homeCache = cache)
             recreated.refreshHome()
 
             val restored = recreated.homeFeed.value as HomeFeedState.Ready
@@ -123,7 +123,7 @@ class AuthenticatedEmbyGatewayTest {
             repeat(10) { server.enqueue(items("Response $it")) }
             val vault = FakeVault(stored(valid(server.url("/emby").toString())))
             val cache = FirstLoadBlockingCache()
-            val gateway = AuthenticatedEmbyGateway(vault, homeCache = cache)
+            val gateway = gateway(vault, homeCache = cache)
             val oldRefresh = backgroundScope.launch { gateway.refreshHome() }
             cache.firstLoadStarted.await()
             vault.save(stored(valid(server.url("/emby").toString())).copy(serverId = "server-b", userId = "user-b"))
@@ -148,6 +148,7 @@ class AuthenticatedEmbyGatewayTest {
             val gateway = AuthenticatedEmbyGateway(
                 FakeVault(stored(valid(server.url("/emby").toString()))),
                 homeCache = cache,
+                deviceId = "test-device",
             )
             val refresh = backgroundScope.launch { gateway.refreshHome() }
             cache.firstLoadStarted.await()
@@ -169,6 +170,7 @@ class AuthenticatedEmbyGatewayTest {
             val gateway = AuthenticatedEmbyGateway(
                 FakeVault(stored(valid(server.url("/emby").toString()))),
                 homeCache = cache,
+                deviceId = "test-device",
             )
             val refresh = backgroundScope.launch { gateway.refreshHome() }
             cache.saveStarted.await()
@@ -186,7 +188,7 @@ class AuthenticatedEmbyGatewayTest {
         MockWebServer().use { server ->
             server.start()
             server.enqueue(MockResponse.Builder().code(401).build())
-            val gateway = AuthenticatedEmbyGateway(FakeVault(stored(valid(server.url("/emby").toString()))))
+            val gateway = gateway(FakeVault(stored(valid(server.url("/emby").toString()))))
             var expiredDestination: String? = null
             gateway.onAuthenticationExpired = { expiredDestination = it }
 
@@ -197,6 +199,11 @@ class AuthenticatedEmbyGatewayTest {
             val request = server.takeRequest()
             assertEquals("/emby/Users/user", request.url.encodedPath)
             assertEquals("token-secret", request.headers["X-Emby-Token"])
+            assertEquals(
+                "MediaBrowser Client=\"ChaiChai Mobile\", Device=\"Android Mobile\", " +
+                    "DeviceId=\"test-device\", Version=\"0.1.0\", UserId=\"user\"",
+                request.headers["X-Emby-Authorization"],
+            )
             assertNull(request.headers["Authorization"])
         }
     }
@@ -210,13 +217,18 @@ class AuthenticatedEmbyGatewayTest {
                 first.enqueue(
                     MockResponse.Builder().code(307).addHeader("Location", second.url("/capture")).build(),
                 )
-                val gateway = AuthenticatedEmbyGateway(FakeVault(stored(valid(first.url("/emby").toString()))))
+                val gateway = gateway(FakeVault(stored(valid(first.url("/emby").toString()))))
 
                 assertEquals(GatewayAuthenticationStatus.Unavailable, gateway.verifyAuthentication())
                 assertEquals(0, second.requestCount)
             }
         }
     }
+
+    private fun gateway(
+        vault: SessionVault,
+        homeCache: HomeCache = InMemoryHomeCache(),
+    ) = AuthenticatedEmbyGateway(vault, homeCache = homeCache, deviceId = "test-device")
 
     private class FakeVault(private var session: StoredSession?) : SessionVault {
         override fun restore() = session

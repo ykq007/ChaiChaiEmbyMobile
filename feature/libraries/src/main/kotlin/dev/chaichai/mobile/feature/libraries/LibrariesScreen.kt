@@ -6,6 +6,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
@@ -163,11 +164,6 @@ private fun ReadyMovieGrid(
     val gridState = rememberLazyGridState()
     val density = LocalDensity.current
     val fontScale = density.fontScale
-    val minimumPosterWidth = when (windowClass) {
-        LibraryWindowClass.Compact -> 132.dp
-        LibraryWindowClass.Medium -> 150.dp
-        LibraryWindowClass.Expanded -> 164.dp
-    } * fontScale.coerceAtMost(1.35f)
     LaunchedEffect(gridState, state.items.size, state.totalCount) {
         snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }.collect { last ->
             if (last >= state.items.lastIndex - 4 && state.items.size < state.totalCount && !state.isLoadingMore) {
@@ -175,42 +171,59 @@ private fun ReadyMovieGrid(
             }
         }
     }
-    LazyVerticalGrid(
-        columns = GridCells.Adaptive(minimumPosterWidth),
-        state = gridState,
-        modifier = modifier.fillMaxSize().testTag("movie-grid"),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalArrangement = Arrangement.spacedBy(if (isHeightConstrained) 8.dp else 16.dp),
-    ) {
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            Column {
-                Text("Movies", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.semantics { heading() })
-                LibraryControls(state.query, state.availableGenres, onQuery)
-            }
-        }
-        items(state.items, key = { "${it.identity.serverId}:${it.identity.itemId}" }) { movie ->
-            MoviePosterCard(gateway, movie, onOpenDetails)
-        }
-        if (state.isLoadingMore) item(span = { GridItemSpan(maxLineSpan) }) {
-            Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-        }
-        state.refreshFailureMessage?.let { message ->
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val columns = movieGridColumnCount(windowClass, maxWidth.value, fontScale)
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(columns),
+            state = gridState,
+            modifier = Modifier.fillMaxSize().testTag("movie-grid"),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(if (isHeightConstrained) 8.dp else 16.dp),
+        ) {
             item(span = { GridItemSpan(maxLineSpan) }) {
-                Row(Modifier.fillMaxWidth().padding(12.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                    Text(message, modifier = Modifier.weight(1f))
-                    OutlinedButton(onClick = { scope.launch { gateway.refreshMovies(state.query) } }) { Text("Retry refresh") }
+                Column {
+                    Text("Movies", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.semantics { heading() })
+                    LibraryControls(state.query, state.availableGenres, onQuery)
                 }
             }
-        }
-        state.pageFailureMessage?.let { message ->
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                Row(Modifier.fillMaxWidth().padding(12.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                    Text(message, modifier = Modifier.weight(1f))
-                    OutlinedButton(onClick = { scope.launch { gateway.retryMoviePage() } }) { Text("Retry page") }
+            items(state.items, key = { "${it.identity.serverId}:${it.identity.itemId}" }) { movie ->
+                MoviePosterCard(gateway, movie, onOpenDetails)
+            }
+            if (state.isLoadingMore) item(span = { GridItemSpan(maxLineSpan) }) {
+                Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            }
+            state.refreshFailureMessage?.let { message ->
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Row(Modifier.fillMaxWidth().padding(12.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                        Text(message, modifier = Modifier.weight(1f))
+                        OutlinedButton(onClick = { scope.launch { gateway.refreshMovies(state.query) } }) { Text("Retry refresh") }
+                    }
+                }
+            }
+            state.pageFailureMessage?.let { message ->
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Row(Modifier.fillMaxWidth().padding(12.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                        Text(message, modifier = Modifier.weight(1f))
+                        OutlinedButton(onClick = { scope.launch { gateway.retryMoviePage() } }) { Text("Retry page") }
+                    }
                 }
             }
         }
     }
+}
+
+internal fun movieGridColumnCount(
+    windowClass: LibraryWindowClass,
+    usableWidthDp: Float,
+    fontScale: Float,
+): Int {
+    val (minimumWidth, range) = when (windowClass) {
+        LibraryWindowClass.Compact -> 132f to 2..3
+        LibraryWindowClass.Medium -> 150f to 4..6
+        LibraryWindowClass.Expanded -> 164f to 6..8
+    }
+    val scaledMinimum = minimumWidth * fontScale.coerceIn(1f, 1.35f)
+    return (usableWidthDp / scaledMinimum).toInt().coerceIn(range)
 }
 
 @Composable

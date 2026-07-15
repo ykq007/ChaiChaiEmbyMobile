@@ -45,6 +45,7 @@ object ProductionBoundariesModule {
             vault,
             homeCache = createRoomHomeCache(context),
             movieCache = createRoomMovieCache(context),
+            deviceId = deviceId,
         )
         val serverSetup = ServerSetupCoordinator(
             applicationScope,
