@@ -24,6 +24,7 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     testImplementation("com.squareup.okhttp3:mockwebserver3:5.3.2")
     testImplementation("com.squareup.okhttp3:okhttp-tls:5.3.2")
+    testImplementation("org.bouncycastle:bcprov-jdk18on:1.84")
     testImplementation("org.robolectric:robolectric:4.16.1")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
