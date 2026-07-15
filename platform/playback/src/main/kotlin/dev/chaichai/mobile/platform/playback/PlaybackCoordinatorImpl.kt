@@ -229,6 +229,13 @@ class PlaybackCoordinatorImpl(
         lastRequest?.let(::submit)
     }
 
+    override fun onAppBackgrounded() {
+        val plan = activePlan ?: return
+        scope.launch {
+            if (activePlan == plan) gateway.report(report(plan, PlaybackReportKind.Progress))
+        }
+    }
+
     override fun exit() {
         negotiationJob?.cancel()
         trackChangeJob?.cancel()
@@ -254,6 +261,15 @@ class PlaybackCoordinatorImpl(
 
     private fun reportServiceProgress(event: PlaybackEngineEvent.Progress) {
         val plan = activePlan ?: return
+        val current = mutableState.value as? PlaybackState.Active
+        if (current != null && !current.isChangingTrack) {
+            mutableIsPlaying.value = !event.isPaused
+            mutableState.value = current.copy(
+                positionTicks = event.positionTicks.coerceIn(0, plan.runtimeTicks),
+                isPaused = event.isPaused,
+                controlsVisible = true,
+            )
+        }
         scope.launch {
             if (activePlan == plan) gateway.report(
                 PlaybackReport(

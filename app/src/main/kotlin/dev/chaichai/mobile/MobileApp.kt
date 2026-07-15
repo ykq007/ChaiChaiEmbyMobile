@@ -96,6 +96,8 @@ import dev.chaichai.mobile.platform.adaptive.PlaybackTracksLayout
 import dev.chaichai.mobile.platform.adaptive.PlaybackTracksPresentation
 import dev.chaichai.mobile.platform.adaptive.PlaybackSafePane
 import dev.chaichai.mobile.platform.adaptive.WindowCharacteristics
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import kotlin.math.roundToInt
 import kotlin.math.max
 import kotlinx.coroutines.launch
@@ -168,7 +170,12 @@ fun MobileApp(
     onTogglePlaybackOrientation: () -> Unit = {},
     onTogglePlaybackFullscreen: () -> Unit = {},
     onPlaybackEnded: () -> Unit = {},
+    onPlaybackImmersiveChanged: (Boolean) -> Unit = {},
+    keepPlaybackControlsVisible: Boolean = false,
 ) {
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        boundaries.playback.onAppBackgrounded()
+    }
     val serverSetup = boundaries.serverSetup
     val setupState = serverSetup?.state?.collectAsState()?.value
     val movieLibraryState by boundaries.gateway.movieLibrary.collectAsState()
@@ -331,6 +338,13 @@ fun MobileApp(
         }
         }
         val tracksLayout = AdaptiveNavigationPolicy.playbackTracks(window)
+        val playbackWindowLayout = AdaptiveNavigationPolicy.playback(window)
+        LaunchedEffect(playbackState, playbackWindowLayout.isImmersive) {
+            onPlaybackImmersiveChanged(
+                playbackWindowLayout.isImmersive &&
+                    (playbackState is PlaybackState.Negotiating || playbackState is PlaybackState.Active),
+            )
+        }
         if (playbackState is PlaybackState.Active) Media3VideoSurface(Modifier.fillMaxSize())
         PlaybackHost(
             boundaries.playback,
@@ -339,6 +353,8 @@ fun MobileApp(
             onTogglePlaybackFullscreen,
             onPlaybackEnded,
             tracksLayout = tracksLayout,
+            windowLayout = playbackWindowLayout,
+            keepControlsVisible = keepPlaybackControlsVisible,
         )
         }
 }

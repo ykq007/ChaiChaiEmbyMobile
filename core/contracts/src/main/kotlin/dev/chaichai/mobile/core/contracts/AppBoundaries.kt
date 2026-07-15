@@ -55,6 +55,7 @@ interface PlaybackCoordinator {
     fun seekBy(deltaTicks: Long)
     fun seekTo(positionTicks: Long)
     fun selectTrack(selection: PlaybackTrackSelection) = Unit
+    fun onAppBackgrounded() = Unit
     fun retry()
     fun exit()
 }

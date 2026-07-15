@@ -107,4 +107,35 @@ class AdaptiveNavigationPolicyTest {
             ),
         )
     }
+
+    @Test
+    fun `compact landscape playback is immersive while portrait remains supported`() {
+        assertEquals(
+            PlaybackWindowLayout(PlaybackSafePane.WholeWindow, isImmersive = true),
+            AdaptiveNavigationPolicy.playback(WindowCharacteristics(800, 420)),
+        )
+        assertEquals(
+            PlaybackWindowLayout(PlaybackSafePane.WholeWindow, isImmersive = false),
+            AdaptiveNavigationPolicy.playback(WindowCharacteristics(420, 800)),
+        )
+    }
+
+    @Test
+    fun `essential playback controls stay together on the largest hinge safe pane`() {
+        assertEquals(
+            PlaybackWindowLayout(PlaybackSafePane.Right(420), isImmersive = false),
+            AdaptiveNavigationPolicy.playback(
+                WindowCharacteristics(420, 700, true, listOf(380, 420)),
+            ),
+        )
+        assertEquals(
+            PlaybackWindowLayout(PlaybackSafePane.Top(390), isImmersive = true),
+            AdaptiveNavigationPolicy.playback(
+                WindowCharacteristics(
+                    800, 390, hasSeparatingHorizontalHinge = true,
+                    horizontalPaneHeightsDp = listOf(390, 280),
+                ),
+            ),
+        )
+    }
 }

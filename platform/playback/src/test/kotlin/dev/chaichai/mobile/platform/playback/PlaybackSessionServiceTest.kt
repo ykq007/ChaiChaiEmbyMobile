@@ -1,5 +1,10 @@
 package dev.chaichai.mobile.platform.playback
 
+import android.content.Intent
+import android.media.AudioManager
+import android.os.Looper
+import androidx.media3.common.C
+import androidx.media3.common.DeviceInfo
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertEquals
@@ -7,6 +12,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -64,6 +70,27 @@ class PlaybackSessionServiceTest {
         assertEquals(true, service.isPaused())
 
         controller.destroy()
+    }
+
+    @Test
+    fun `service exposes conventional media audio volume and system transport behavior`() {
+        val context = org.robolectric.RuntimeEnvironment.getApplication()
+        val controller = Robolectric.buildService(PlaybackSessionService::class.java).create()
+        val service = controller.get()
+        val player = service.playerForSurface()
+        try {
+            assertEquals(C.USAGE_MEDIA, player.audioAttributes.usage)
+            assertEquals(C.AUDIO_CONTENT_TYPE_MOVIE, player.audioAttributes.contentType)
+            assertEquals(DeviceInfo.PLAYBACK_TYPE_LOCAL, player.deviceInfo.playbackType)
+
+            player.play()
+            context.sendBroadcast(Intent(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
+            shadowOf(Looper.getMainLooper()).idle()
+
+            assertEquals(false, player.playWhenReady)
+        } finally {
+            controller.destroy()
+        }
     }
 
     @Test

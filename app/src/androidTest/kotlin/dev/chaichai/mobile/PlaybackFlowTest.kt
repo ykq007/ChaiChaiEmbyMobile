@@ -17,6 +17,9 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.platform.LocalDensity
+import androidx.test.espresso.Espresso.pressBack
 import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.MediaPlaybackRequest
 import dev.chaichai.mobile.core.contracts.PlaybackCoordinator
@@ -32,6 +35,7 @@ import dev.chaichai.mobile.feature.playback.PlaybackHost
 import dev.chaichai.mobile.platform.adaptive.PlaybackSafePane
 import dev.chaichai.mobile.platform.adaptive.PlaybackTracksLayout
 import dev.chaichai.mobile.platform.adaptive.PlaybackTracksPresentation
+import dev.chaichai.mobile.platform.adaptive.PlaybackWindowLayout
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -223,6 +227,71 @@ class PlaybackFlowTest {
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
     }
 
+    @Test
+    fun hinge_keeps_all_essential_controls_together_on_the_safe_pane() {
+        val playback = FakePlayback()
+        compose.setContent {
+            ChaiChaiTheme(reducedMotion = true) {
+                PlaybackHost(
+                    playback,
+                    Modifier.size(400.dp, 700.dp),
+                    windowLayout = PlaybackWindowLayout(PlaybackSafePane.Right(180), isImmersive = false),
+                )
+            }
+        }
+
+        val pane = compose.onNodeWithTag("playback-controls", useUnmergedTree = true)
+            .getUnclippedBoundsInRoot()
+        assertTrue(pane.left >= 220.dp)
+        compose.onNodeWithContentDescription("Pause").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Playback position 1:00 of 12:00").assertExists()
+    }
+
+    @Test
+    fun large_text_keeps_transport_tracks_and_timeline_reachable_without_motion() {
+        val playback = FakePlayback()
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(1f, fontScale = 2f)) {
+                ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback, Modifier.size(360.dp, 640.dp)) }
+            }
+        }
+
+        compose.onNodeWithContentDescription("Pause").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Tracks").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Playback position 1:00 of 12:00").assertExists()
+    }
+
+    @Test
+    fun accessibility_exploration_keeps_controls_visible_after_video_tap() {
+        val playback = FakePlayback()
+        compose.setContent {
+            ChaiChaiTheme(reducedMotion = true) {
+                PlaybackHost(playback, keepControlsVisible = true)
+            }
+        }
+
+        compose.onNodeWithTag("playback-screen").performClick()
+
+        compose.onNodeWithContentDescription("Pause").assertIsDisplayed()
+        assertEquals(0, playback.toggleControlsCount)
+    }
+
+    @Test
+    fun back_dismisses_tracks_before_exiting_playback() {
+        val playback = FakePlayback()
+        compose.setContent { ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback) } }
+        compose.onNodeWithContentDescription("Tracks").performClick()
+
+        pressBack()
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("tracks-bottom-sheet", useUnmergedTree = true).assertDoesNotExist()
+        assertEquals(0, playback.exitCount)
+        pressBack()
+        compose.waitForIdle()
+        assertEquals(1, playback.exitCount)
+    }
+
     private class FakePlayback : NoOpPlaybackCoordinator() {
         val mutableState = MutableStateFlow<PlaybackState>(
             PlaybackState.Active(MediaIdentity("server", "movie"), "Arrival", 600_000_000, 7_200_000_000, false),
@@ -233,12 +302,19 @@ class PlaybackFlowTest {
         var playPauseCount = 0
         var exitCount = 0
         var retryCount = 0
+        var toggleControlsCount = 0
         var selection: PlaybackTrackSelection? = null
         override fun submit(request: MediaPlaybackRequest) = Unit
         override fun seekBy(deltaTicks: Long) { seekDelta += deltaTicks }
         override fun playPause() { playPauseCount++ }
         override fun exit() { exitCount++ }
         override fun retry() { retryCount++ }
+        override fun toggleControls() {
+            toggleControlsCount++
+            mutableState.value = (mutableState.value as PlaybackState.Active).copy(
+                controlsVisible = !(mutableState.value as PlaybackState.Active).controlsVisible,
+            )
+        }
         override fun selectTrack(selection: PlaybackTrackSelection) { this.selection = selection }
     }
 

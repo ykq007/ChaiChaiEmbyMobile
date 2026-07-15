@@ -9,8 +9,14 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import android.view.accessibility.AccessibilityManager
 import androidx.window.layout.FoldingFeature
 import androidx.window.layout.WindowInfoTracker
 import dev.chaichai.mobile.design.system.ChaiChaiTheme
@@ -21,6 +27,7 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
     @Inject lateinit var boundaries: dev.chaichai.mobile.core.contracts.AppBoundaries
     private var playbackFullscreen = false
+    private var playbackAutoImmersive = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,6 +39,19 @@ class MainActivity : ComponentActivity() {
             val separatingHinge = layoutInfo?.displayFeatures
                 ?.filterIsInstance<FoldingFeature>()
                 ?.firstOrNull { it.isSeparating }
+            val accessibilityManager = remember {
+                getSystemService(AccessibilityManager::class.java)
+            }
+            var touchExplorationEnabled by remember {
+                mutableStateOf(accessibilityManager.isTouchExplorationEnabled)
+            }
+            DisposableEffect(accessibilityManager) {
+                val listener = AccessibilityManager.TouchExplorationStateChangeListener { enabled ->
+                    touchExplorationEnabled = enabled
+                }
+                accessibilityManager.addTouchExplorationStateChangeListener(listener)
+                onDispose { accessibilityManager.removeTouchExplorationStateChangeListener(listener) }
+            }
 
             ChaiChaiTheme(reducedMotion = !ValueAnimator.areAnimatorsEnabled()) {
                 MobileApp(
@@ -52,6 +72,8 @@ class MainActivity : ComponentActivity() {
                     onTogglePlaybackOrientation = ::togglePlaybackOrientation,
                     onTogglePlaybackFullscreen = ::togglePlaybackFullscreen,
                     onPlaybackEnded = ::restorePlaybackWindow,
+                    onPlaybackImmersiveChanged = ::setPlaybackAutoImmersive,
+                    keepPlaybackControlsVisible = touchExplorationEnabled,
                 )
             }
         }
@@ -67,15 +89,27 @@ class MainActivity : ComponentActivity() {
 
     private fun togglePlaybackFullscreen() {
         playbackFullscreen = !playbackFullscreen
-        WindowCompat.getInsetsController(window, window.decorView).run {
-            if (playbackFullscreen) hide(WindowInsetsCompat.Type.systemBars())
-            else show(WindowInsetsCompat.Type.systemBars())
-        }
+        updatePlaybackSystemBars()
+    }
+
+    private fun setPlaybackAutoImmersive(immersive: Boolean) {
+        if (playbackAutoImmersive == immersive) return
+        playbackAutoImmersive = immersive
+        updatePlaybackSystemBars()
     }
 
     private fun restorePlaybackWindow() {
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         playbackFullscreen = false
-        WindowCompat.getInsetsController(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
+        playbackAutoImmersive = false
+        updatePlaybackSystemBars()
+    }
+
+    private fun updatePlaybackSystemBars() {
+        WindowCompat.getInsetsController(window, window.decorView).run {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            if (playbackFullscreen || playbackAutoImmersive) hide(WindowInsetsCompat.Type.systemBars())
+            else show(WindowInsetsCompat.Type.systemBars())
+        }
     }
 }

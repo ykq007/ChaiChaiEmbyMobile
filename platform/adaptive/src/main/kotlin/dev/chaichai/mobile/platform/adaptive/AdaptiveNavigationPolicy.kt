@@ -34,6 +34,11 @@ data class PlaybackTracksLayout(
     val safePane: PlaybackSafePane,
 )
 
+data class PlaybackWindowLayout(
+    val safePane: PlaybackSafePane,
+    val isImmersive: Boolean,
+)
+
 object AdaptiveNavigationPolicy {
     private const val RailMinimumWidthDp = 600
     private const val ExpandedMinimumWidthDp = 840
@@ -65,7 +70,24 @@ object AdaptiveNavigationPolicy {
     )
 
     fun playbackTracks(window: WindowCharacteristics): PlaybackTracksLayout {
-        val pane = when {
+        val pane = playbackSafePane(window)
+        return PlaybackTracksLayout(
+            presentation = if (pane == PlaybackSafePane.WholeWindow && window.usableWidthDp >= ExpandedMinimumWidthDp) {
+                PlaybackTracksPresentation.AnchoredSide
+            } else {
+                PlaybackTracksPresentation.ModalBottom
+            },
+            safePane = pane,
+        )
+    }
+
+    fun playback(window: WindowCharacteristics): PlaybackWindowLayout = PlaybackWindowLayout(
+        safePane = playbackSafePane(window),
+        isImmersive = window.usableWidthDp > window.usableHeightDp,
+    )
+
+    private fun playbackSafePane(window: WindowCharacteristics): PlaybackSafePane =
+        when {
             window.hasSeparatingVerticalHinge && window.verticalPaneWidthsDp.size == 2 -> {
                 val (left, right) = window.verticalPaneWidthsDp
                 if (left >= right) PlaybackSafePane.Left(left) else PlaybackSafePane.Right(right)
@@ -76,13 +98,4 @@ object AdaptiveNavigationPolicy {
             }
             else -> PlaybackSafePane.WholeWindow
         }
-        return PlaybackTracksLayout(
-            presentation = if (pane == PlaybackSafePane.WholeWindow && window.usableWidthDp >= ExpandedMinimumWidthDp) {
-                PlaybackTracksPresentation.AnchoredSide
-            } else {
-                PlaybackTracksPresentation.ModalBottom
-            },
-            safePane = pane,
-        )
-    }
 }

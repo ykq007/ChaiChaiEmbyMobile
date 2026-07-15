@@ -76,6 +76,7 @@ import androidx.compose.ui.window.DialogProperties
 import dev.chaichai.mobile.platform.adaptive.PlaybackSafePane
 import dev.chaichai.mobile.platform.adaptive.PlaybackTracksLayout
 import dev.chaichai.mobile.platform.adaptive.PlaybackTracksPresentation
+import dev.chaichai.mobile.platform.adaptive.PlaybackWindowLayout
 import java.util.Locale
 
 @Composable
@@ -89,6 +90,11 @@ fun PlaybackHost(
         PlaybackTracksPresentation.ModalBottom,
         PlaybackSafePane.WholeWindow,
     ),
+    windowLayout: PlaybackWindowLayout = PlaybackWindowLayout(
+        PlaybackSafePane.WholeWindow,
+        isImmersive = false,
+    ),
+    keepControlsVisible: Boolean = false,
 ) {
     val state by coordinator.state.collectAsState()
     LaunchedEffect(state) {
@@ -98,21 +104,31 @@ fun PlaybackHost(
     BackHandler(enabled = state !is PlaybackState.Idle && state !is PlaybackState.Exited) { coordinator.exit() }
     when (val snapshot = state) {
         PlaybackState.Idle, is PlaybackState.Exited -> Unit
-        is PlaybackState.Negotiating -> PlaybackLoading(snapshot.title, coordinator::exit, modifier)
+        is PlaybackState.Negotiating -> PlaybackLoading(
+            snapshot.title, coordinator::exit, windowLayout, modifier,
+        )
         is PlaybackState.Active -> PlaybackControls(
-            snapshot, coordinator, onToggleOrientation, onToggleFullscreen, tracksLayout, modifier,
+            snapshot, coordinator, onToggleOrientation, onToggleFullscreen, tracksLayout,
+            windowLayout, keepControlsVisible, modifier,
         )
         is PlaybackState.Failed -> PlaybackFailure(snapshot, coordinator, modifier)
     }
 }
 
 @Composable
-private fun PlaybackLoading(title: String, onBack: () -> Unit, modifier: Modifier) {
-    Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).windowInsetsPadding(WindowInsets.safeDrawing)) {
-        BackButton(onBack, Modifier.align(Alignment.TopStart))
-        Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-            CircularProgressIndicator()
-            Text(if (title.isBlank()) "Preparing playback" else "Preparing $title", color = MaterialTheme.colorScheme.onSurface)
+private fun PlaybackLoading(
+    title: String,
+    onBack: () -> Unit,
+    windowLayout: PlaybackWindowLayout,
+    modifier: Modifier,
+) {
+    Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
+        Box(safePane(windowLayout.safePane).windowInsetsPadding(WindowInsets.safeDrawing)) {
+            BackButton(onBack, Modifier.align(Alignment.TopStart))
+            Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator()
+                Text(if (title.isBlank()) "Preparing playback" else "Preparing $title", color = MaterialTheme.colorScheme.onSurface)
+            }
         }
     }
 }
@@ -124,12 +140,17 @@ private fun PlaybackControls(
     onToggleOrientation: () -> Unit,
     onToggleFullscreen: () -> Unit,
     tracksLayout: PlaybackTracksLayout,
+    windowLayout: PlaybackWindowLayout,
+    keepControlsVisible: Boolean,
     modifier: Modifier,
 ) {
     var showTracks by rememberSaveable(state.identity.serverId, state.identity.itemId) { mutableStateOf(false) }
+    LaunchedEffect(keepControlsVisible, state.controlsVisible) {
+        if (keepControlsVisible && !state.controlsVisible) coordinator.toggleControls()
+    }
     Box(
         modifier.fillMaxSize().then(
-            if (showTracks) Modifier else Modifier.clickable(
+            if (showTracks || keepControlsVisible) Modifier else Modifier.clickable(
                 onClickLabel = if (state.controlsVisible) "Hide playback controls" else "Show playback controls",
                 onClick = coordinator::toggleControls,
             ),
@@ -137,7 +158,11 @@ private fun PlaybackControls(
     ) {
         if (!state.controlsVisible) return@Box
         Column(
-            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(12.dp).then(
+            safePane(windowLayout.safePane)
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .padding(12.dp)
+                .testTag("playback-controls")
+                .then(
                 if (showTracks) Modifier.clearAndSetSemantics { } else Modifier,
             ),
             verticalArrangement = Arrangement.SpaceBetween,
