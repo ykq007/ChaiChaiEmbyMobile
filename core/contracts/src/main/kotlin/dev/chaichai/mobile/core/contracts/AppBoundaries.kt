@@ -1,0 +1,17 @@
+package dev.chaichai.mobile.core.contracts
+
+import kotlinx.coroutines.flow.StateFlow
+import java.time.Instant
+
+interface EmbyGateway { val connectionState: StateFlow<GatewayConnectionState> }
+enum class GatewayConnectionState { Disconnected, Connected }
+interface PlaybackCoordinator { val isPlaying: StateFlow<Boolean> }
+fun interface AppClock { fun now(): Instant }
+interface ConnectivityMonitor { val isOnline: StateFlow<Boolean> }
+
+data class AppBoundaries(
+    val gateway: EmbyGateway,
+    val playback: PlaybackCoordinator,
+    val clock: AppClock,
+    val connectivity: ConnectivityMonitor,
+)
