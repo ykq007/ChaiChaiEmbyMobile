@@ -13,6 +13,7 @@ import dev.chaichai.mobile.core.contracts.SortDirection
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
@@ -361,7 +362,7 @@ class MovieGatewayTest {
     }
 
     @Test
-    fun pagination_is_ignored_while_a_cached_refresh_is_in_flight() = runTest {
+    fun pagination_queued_while_cached_refresh_is_in_flight_uses_the_refreshed_prefix() = runTest {
         MockWebServer().use { server ->
             server.start()
             val scope = HomeScope("server", "user")
@@ -382,16 +383,57 @@ class MovieGatewayTest {
                 while ((gateway.movieLibrary.value as? MovieLibraryState.Ready)?.isRefreshing != true) yield()
             }
 
-            gateway.loadNextMoviePage()
+            val pagination = async { gateway.loadNextMoviePage() }
             server.enqueue(ok("""{"Items":[]}"""))
             server.enqueue(ok(page("Fresh", 100, 1, 40)))
+            server.enqueue(ok(page("Fresh", 100, 41, 40)))
             refresh.join()
+            pagination.await()
 
             val ready = gateway.movieLibrary.value as MovieLibraryState.Ready
             assertFalse(ready.isRefreshing)
-            assertEquals(40, ready.items.size)
+            assertEquals(80, ready.items.size)
             assertEquals("movie-1", ready.items.first().identity.itemId)
-            assertEquals(2, server.requestCount)
+            assertEquals("movie-80", ready.items.last().identity.itemId)
+            assertEquals(3, server.requestCount)
+        }
+    }
+
+    @Test
+    fun refresh_mutex_excludes_pagination_before_refresh_state_is_published() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            repeat(2) {
+                server.enqueue(ok("""{"Items":[]}"""))
+                server.enqueue(ok(page("Fresh", 40, 0, 40)))
+            }
+            val scope = HomeScope("server", "user")
+            val query = MovieLibraryQuery(MovieSortField.DateAdded, SortDirection.Descending)
+            val cache = SwitchableBlockingLibraryCache(
+                MovieLibrarySnapshot(
+                    (0 until 40).map { MoviePoster(MediaIdentity("server", "movie-$it"), "Cached $it") },
+                    40,
+                    emptyList(),
+                ),
+            )
+            val gateway = AuthenticatedEmbyGateway(
+                FakeVault(stored(valid(server.url("/emby").toString()))), movieCache = cache,
+                deviceId = "test-device",
+            )
+            gateway.refreshMovies(query)
+            cache.blockLoads = true
+            val refresh = launch { gateway.refreshMovies(query) }
+            cache.loadStarted.await()
+
+            val pagination = async { gateway.loadNextMoviePage() }
+            yield()
+            assertFalse(pagination.isCompleted)
+            cache.releaseLoad.complete(Unit)
+            refresh.join()
+            pagination.await()
+
+            assertEquals(40, (gateway.movieLibrary.value as MovieLibraryState.Ready).items.size)
+            assertEquals(4, server.requestCount)
         }
     }
 
@@ -588,6 +630,32 @@ class MovieGatewayTest {
             releaseLoad.await()
             return MovieDetails(identity, "Old private details")
         }
+        override suspend fun saveDetails(scope: HomeScope, details: MovieDetails) = Unit
+    }
+
+    private class SwitchableBlockingLibraryCache(
+        private var snapshot: MovieLibrarySnapshot,
+    ) : MovieCache {
+        var blockLoads = false
+        val loadStarted = CompletableDeferred<Unit>()
+        val releaseLoad = CompletableDeferred<Unit>()
+        override suspend fun loadLibrary(scope: HomeScope, query: MovieLibraryQuery): MovieLibrarySnapshot {
+            if (blockLoads) {
+                loadStarted.complete(Unit)
+                releaseLoad.await()
+            }
+            return snapshot
+        }
+        override suspend fun saveLibrary(
+            scope: HomeScope,
+            query: MovieLibraryQuery,
+            items: List<MoviePoster>,
+            totalCount: Int,
+            availableGenres: List<String>,
+        ) {
+            snapshot = MovieLibrarySnapshot(items, totalCount, availableGenres)
+        }
+        override suspend fun loadDetails(scope: HomeScope, identity: MediaIdentity): MovieDetails? = null
         override suspend fun saveDetails(scope: HomeScope, details: MovieDetails) = Unit
     }
 

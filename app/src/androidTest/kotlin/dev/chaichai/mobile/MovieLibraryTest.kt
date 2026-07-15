@@ -427,6 +427,24 @@ class MovieLibraryTest {
         composeRule.onNodeWithText("Movie 60").assertIsDisplayed()
     }
 
+    @Test
+    fun near_tail_pagination_replays_when_cached_refresh_finishes_without_count_changes() {
+        val movies = (0 until 80).map { MoviePoster(MediaIdentity("server", "movie-$it"), "Movie $it") }
+        val gateway = FakeMovieGateway(
+            ready().copy(items = movies, totalCount = 100, isRefreshing = true),
+        )
+        showLibrary(gateway)
+        composeRule.onNodeWithTag("movie-grid").performScrollToIndex(79)
+        composeRule.runOnIdle { assertEquals(0, gateway.nextPageRequests) }
+
+        composeRule.runOnIdle {
+            val state = gateway.movieLibrary.value as MovieLibraryState.Ready
+            gateway.movieLibrary.value = state.copy(isRefreshing = false)
+        }
+
+        composeRule.runOnIdle { assertEquals(1, gateway.nextPageRequests) }
+    }
+
     private fun showApp(gateway: EmbyGateway, playback: PlaybackCoordinator) {
         composeRule.setContent {
             themed {
@@ -460,6 +478,7 @@ class MovieLibraryTest {
         override val connectionState = MutableStateFlow(GatewayConnectionState.Connected)
         override val movieLibrary = MutableStateFlow<MovieLibraryState>(initial)
         var lastRefreshQuery: MovieLibraryQuery? = null
+        var nextPageRequests = 0
         override suspend fun refreshMovies(query: MovieLibraryQuery) {
             lastRefreshQuery = query
             val ready = movieLibrary.value as? MovieLibraryState.Ready ?: return
@@ -472,6 +491,9 @@ class MovieLibraryTest {
                 totalCount = ready.items.size + 1,
                 pageFailureMessage = null,
             )
+        }
+        override suspend fun loadNextMoviePage() {
+            nextPageRequests += 1
         }
         override suspend fun loadMovieDetails(identity: MediaIdentity, authenticationReturnDestination: String?) =
             MovieDetailsState.Ready(movieDetails.copy(identity = identity))

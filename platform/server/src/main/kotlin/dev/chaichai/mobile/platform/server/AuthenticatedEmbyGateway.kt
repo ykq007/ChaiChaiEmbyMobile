@@ -23,6 +23,8 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import okhttp3.Response
@@ -50,6 +52,7 @@ class AuthenticatedEmbyGateway(
     private val mutableHomeFeed = MutableStateFlow<HomeFeedState>(HomeFeedState.Loading)
     override val homeFeed: StateFlow<HomeFeedState> = mutableHomeFeed
     private val mutableMovieLibrary = MutableStateFlow<MovieLibraryState>(MovieLibraryState.Loading)
+    private val movieOperationMutex = Mutex()
     override val movieLibrary: StateFlow<MovieLibraryState> = mutableMovieLibrary
     private val json = Json { ignoreUnknownKeys = true }
     private var homeGeneration = 0L
@@ -156,6 +159,7 @@ class AuthenticatedEmbyGateway(
     }
 
     override suspend fun refreshMovies(query: MovieLibraryQuery) = withContext(ioDispatcher) {
+        movieOperationMutex.withLock {
         val session = vault.restore()
         if (session == null) {
             mutableMovieLibrary.value = MovieLibraryState.Failure("Sign in again to browse movies.", query = query)
@@ -195,9 +199,11 @@ class AuthenticatedEmbyGateway(
             } ?: MovieLibraryState.Failure("Movies couldn't be loaded. Check the connection and retry.", scope, query)
         }
         if (isActiveMovieRequest(scope, generation, session, authentication)) mutableMovieLibrary.value = refreshed
+        }
     }
 
     override suspend fun loadNextMoviePage() = withContext(ioDispatcher) {
+        movieOperationMutex.withLock {
         val ready = mutableMovieLibrary.value as? MovieLibraryState.Ready ?: return@withContext
         if (ready.isRefreshing || ready.isLoadingMore || ready.items.size >= ready.totalCount) return@withContext
         val session = vault.restore()?.takeIf { it.serverId == ready.scope.serverId && it.userId == ready.scope.userId }
@@ -225,6 +231,7 @@ class AuthenticatedEmbyGateway(
             ready.copy(pageFailureMessage = "Couldn't load more movies.")
         }
         if (isActiveMovieRequest(ready.scope, generation, session, authentication)) mutableMovieLibrary.value = updated
+        }
     }
 
     override suspend fun retryMoviePage() = loadNextMoviePage()

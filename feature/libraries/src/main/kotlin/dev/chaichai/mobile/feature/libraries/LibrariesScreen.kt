@@ -227,9 +227,11 @@ private fun ReadyMovieGrid(
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val fontScale = density.fontScale
-    LaunchedEffect(gridState, state.items.size, state.totalCount) {
+    LaunchedEffect(gridState, state.items.size, state.totalCount, state.isRefreshing) {
         snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }.collect { last ->
-            if (last >= state.items.lastIndex - 4 && state.items.size < state.totalCount && !state.isLoadingMore) {
+            if (!state.isRefreshing && last >= state.items.lastIndex - 4 &&
+                state.items.size < state.totalCount && !state.isLoadingMore
+            ) {
                 gateway.loadNextMoviePage()
             }
         }
