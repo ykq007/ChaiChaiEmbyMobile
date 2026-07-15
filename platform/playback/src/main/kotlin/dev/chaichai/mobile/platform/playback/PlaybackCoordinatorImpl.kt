@@ -25,8 +25,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 
 interface PlaybackEngine {
+    val snapshot: PlaybackEngineSnapshot
     val positionTicks: Long
+        get() = snapshot.positionTicks
     val isPaused: Boolean
+        get() = snapshot.isPaused
     val events: Flow<PlaybackEngineEvent> get() = emptyFlow()
     suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long)
     suspend fun acknowledgePlayingReported()
@@ -34,6 +37,7 @@ interface PlaybackEngine {
     suspend fun seekTo(positionTicks: Long)
     suspend fun stop()
 }
+data class PlaybackEngineSnapshot(val positionTicks: Long, val isPaused: Boolean)
 sealed interface PlaybackEngineEvent {
     data object Completed : PlaybackEngineEvent
     data object FatalError : PlaybackEngineEvent
@@ -133,10 +137,10 @@ class PlaybackCoordinatorImpl(
                         mutableState.value = PlaybackState.Failed(PlaybackFailureKind.SourceUnavailable)
                         return@launch
                     }
-                    mutableIsPlaying.value = true
-                    publishActive(title, controlsVisible = true)
                     gateway.report(report(result.plan, PlaybackReportKind.Playing))
                     engine.acknowledgePlayingReported()
+                    mutableIsPlaying.value = true
+                    publishActive(title, controlsVisible = true)
                     if (scheduleTimelineUpdates) startTimelineUpdates()
                 }
             }
@@ -223,9 +227,10 @@ class PlaybackCoordinatorImpl(
         plan: AuthoritativePlaybackPlan,
         kind: PlaybackReportKind,
         event: dev.chaichai.mobile.platform.server.PlaybackProgressEvent? = null,
-    ) = PlaybackReport(
-        plan, kind, engine.positionTicks, engine.isPaused, event = event,
-    )
+    ): PlaybackReport {
+        val snapshot = engine.snapshot
+        return PlaybackReport(plan, kind, snapshot.positionTicks, snapshot.isPaused, event = event)
+    }
 
     private fun failActivePlayback() {
         val plan = activePlan ?: return
@@ -260,12 +265,13 @@ class PlaybackCoordinatorImpl(
 
     private fun publishActive(title: String, controlsVisible: Boolean) {
         val plan = activePlan ?: return
+        val snapshot = engine.snapshot
         mutableState.value = PlaybackState.Active(
             identity = dev.chaichai.mobile.core.contracts.MediaIdentity(plan.request.serverId, plan.request.itemId),
             title = title,
-            positionTicks = engine.positionTicks,
+            positionTicks = snapshot.positionTicks,
             runtimeTicks = plan.runtimeTicks,
-            isPaused = engine.isPaused,
+            isPaused = snapshot.isPaused,
             controlsVisible = controlsVisible,
         )
     }

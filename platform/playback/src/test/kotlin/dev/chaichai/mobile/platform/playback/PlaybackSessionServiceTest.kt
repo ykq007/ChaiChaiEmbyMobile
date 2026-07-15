@@ -44,6 +44,16 @@ class PlaybackSessionServiceTest {
     }
 
     @Test
+    fun `snapshot read cannot mix fields from different player observations`() {
+        PlaybackServiceOwner.updateSnapshot(10, true)
+        val observed = PlaybackServiceOwner.snapshot()
+        PlaybackServiceOwner.updateSnapshot(20, false)
+
+        assertEquals(PlaybackEngineSnapshot(10, true), observed)
+        assertEquals(PlaybackEngineSnapshot(20, false), PlaybackServiceOwner.snapshot())
+    }
+
+    @Test
     fun `play pause follows play intent even when media is buffering`() {
         val controller = Robolectric.buildService(PlaybackSessionService::class.java).create()
         val service = controller.get()
@@ -96,5 +106,25 @@ class PlaybackSessionServiceTest {
 
         assertEquals(1, stopped.size)
         collector.cancel()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `seek is suppressed until playing has been acknowledged`() = runTest {
+        val progress = mutableListOf<PlaybackEngineEvent.Progress>()
+        val collector = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            PlaybackServiceOwner.events.collect { if (it is PlaybackEngineEvent.Progress) progress += it }
+        }
+        val controller = Robolectric.buildService(PlaybackSessionService::class.java).create()
+        val service = controller.get()
+
+        service.publishControlProgress(dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek, 10, false)
+        service.acknowledgePlayingReported()
+        service.publishControlProgress(dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek, 20, false)
+        runCurrent()
+
+        assertEquals(listOf(20L), progress.map { it.positionTicks })
+        collector.cancel()
+        controller.destroy()
     }
 }

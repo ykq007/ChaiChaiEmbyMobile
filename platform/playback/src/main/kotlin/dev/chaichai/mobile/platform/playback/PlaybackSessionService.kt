@@ -75,14 +75,11 @@ class PlaybackSessionService : MediaSessionService() {
                 PlaybackServiceOwner.publish(PlaybackEngineEvent.FatalError)
             }
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                if (!reportControlEvents) return
-                PlaybackServiceOwner.publish(
-                    PlaybackEngineEvent.Progress(
-                        if (playWhenReady) dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Unpause
-                        else dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Pause,
-                        player.currentPosition * TICKS_PER_MILLISECOND,
-                        !playWhenReady,
-                    ),
+                publishControlProgress(
+                    if (playWhenReady) dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Unpause
+                    else dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Pause,
+                    player.currentPosition * TICKS_PER_MILLISECOND,
+                    !playWhenReady,
                 )
             }
             override fun onPositionDiscontinuity(
@@ -91,12 +88,10 @@ class PlaybackSessionService : MediaSessionService() {
                 reason: Int,
             ) {
                 if (reason == Player.DISCONTINUITY_REASON_SEEK) {
-                    PlaybackServiceOwner.publish(
-                        PlaybackEngineEvent.Progress(
-                            dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek,
-                            newPosition.positionMs * TICKS_PER_MILLISECOND,
-                            !player.playWhenReady,
-                        ),
+                    publishControlProgress(
+                        dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek,
+                        newPosition.positionMs * TICKS_PER_MILLISECOND,
+                        !player.playWhenReady,
                     )
                 }
             }
@@ -123,6 +118,15 @@ class PlaybackSessionService : MediaSessionService() {
     }
 
     internal fun acknowledgePlayingReported() { reportControlEvents = true }
+
+    internal fun publishControlProgress(
+        event: dev.chaichai.mobile.platform.server.PlaybackProgressEvent,
+        positionTicks: Long,
+        isPaused: Boolean,
+    ) {
+        if (!reportControlEvents) return
+        PlaybackServiceOwner.publish(PlaybackEngineEvent.Progress(event, positionTicks, isPaused))
+    }
 
     internal fun playPause() { if (player.playWhenReady) player.pause() else player.play() }
     internal fun seekTo(positionTicks: Long) { player.seekTo(positionTicks / TICKS_PER_MILLISECOND) }
@@ -186,8 +190,7 @@ internal object PlaybackServiceOwner {
     private val current = AtomicReference<PlaybackSessionService?>()
     @Volatile private var ready = CompletableDeferred<PlaybackSessionService>()
     private val mutableEvents = MutableSharedFlow<PlaybackEngineEvent>(extraBufferCapacity = 4)
-    @Volatile private var snapshotPositionTicks = 0L
-    @Volatile private var snapshotPaused = true
+    private val snapshot = AtomicReference(PlaybackEngineSnapshot(0L, true))
     val events: SharedFlow<PlaybackEngineEvent> = mutableEvents
 
     fun attach(service: PlaybackSessionService) {
@@ -204,16 +207,13 @@ internal object PlaybackServiceOwner {
     suspend fun awaitService() = ready.await()
     fun publish(event: PlaybackEngineEvent) { mutableEvents.tryEmit(event) }
     fun updateSnapshot(positionTicks: Long, paused: Boolean) {
-        snapshotPositionTicks = positionTicks
-        snapshotPaused = paused
+        snapshot.set(PlaybackEngineSnapshot(positionTicks, paused))
     }
-    fun positionTicks() = snapshotPositionTicks
-    fun isPaused() = snapshotPaused
+    fun snapshot(): PlaybackEngineSnapshot = snapshot.get()
 }
 
 class Media3ServicePlaybackEngine(private val context: Context) : PlaybackEngine {
-    override val positionTicks: Long get() = PlaybackServiceOwner.positionTicks()
-    override val isPaused: Boolean get() = PlaybackServiceOwner.isPaused()
+    override val snapshot: PlaybackEngineSnapshot get() = PlaybackServiceOwner.snapshot()
     override val events: SharedFlow<PlaybackEngineEvent> = PlaybackServiceOwner.events
 
     @UnstableApi

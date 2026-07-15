@@ -278,6 +278,7 @@ class PlaybackCoordinatorImplTest {
         override val events = eventsFlow
         override var positionTicks = 0L
         override var isPaused = false
+        override val snapshot: PlaybackEngineSnapshot get() = PlaybackEngineSnapshot(positionTicks, isPaused)
         var prepareFailure: Exception? = null
         var acknowledgedPlaying = false
         override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long) {
