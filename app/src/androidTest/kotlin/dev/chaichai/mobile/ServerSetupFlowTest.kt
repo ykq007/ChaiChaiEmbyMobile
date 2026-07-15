@@ -58,6 +58,7 @@ class ServerSetupFlowTest {
             server.start()
             server.enqueue(publicInfo(version))
             server.enqueue(authenticated("token-one"))
+            repeat(5) { server.enqueue(MockResponse.Builder().body("{\"Items\":[]}").build()) }
             server.enqueue(MockResponse.Builder().code(401).build())
             server.enqueue(authenticated("token-two"))
             server.enqueue(MockResponse.Builder().body("{}").build())

@@ -5,14 +5,66 @@ import java.time.Instant
 
 interface EmbyGateway {
     val connectionState: StateFlow<GatewayConnectionState>
+    val homeFeed: StateFlow<HomeFeedState>
+        get() = EmptyHomeFeed.flow
     suspend fun verifyAuthentication(requestedDestination: String? = null): GatewayAuthenticationStatus =
         GatewayAuthenticationStatus.Unavailable
+    suspend fun refreshHome() = Unit
+    suspend fun retryHomeSection(section: HomeSection) = refreshHome()
+    suspend fun loadArtwork(artwork: ArtworkReference): ByteArray? = null
 }
 enum class GatewayConnectionState { Disconnected, Connected }
 enum class GatewayAuthenticationStatus { Valid, Expired, Unavailable }
 interface PlaybackCoordinator { val isPlaying: StateFlow<Boolean> }
 fun interface AppClock { fun now(): Instant }
 interface ConnectivityMonitor { val isOnline: StateFlow<Boolean> }
+
+enum class HomeSection(val title: String) {
+    ContinueWatching("Continue Watching"),
+    NextUp("Next Up"),
+    LatestMovies("Latest Movies"),
+    LatestEpisodes("Latest Episodes"),
+    AccessibleLibraries("Libraries"),
+}
+
+data class ArtworkReference(
+    val serverId: String,
+    val itemId: String,
+    val imageTag: String,
+    val imageType: String = "Primary",
+)
+
+data class HomeMediaItem(
+    val serverId: String,
+    val itemId: String,
+    val title: String,
+    val mediaType: String,
+    val subtitle: String? = null,
+    val playbackPositionTicks: Long = 0,
+    val runtimeTicks: Long? = null,
+    val artwork: ArtworkReference? = null,
+    val backdrop: ArtworkReference? = null,
+)
+
+data class HomeSectionContent(
+    val items: List<HomeMediaItem>,
+    val failureMessage: String? = null,
+    val isStale: Boolean = false,
+)
+
+sealed interface HomeFeedState {
+    data object Loading : HomeFeedState
+    data class Ready(
+        val sections: Map<HomeSection, HomeSectionContent>,
+        val isRefreshing: Boolean = false,
+    ) : HomeFeedState
+    data class Empty(val canRefresh: Boolean = true) : HomeFeedState
+    data class Failure(val message: String, val canRetry: Boolean = true) : HomeFeedState
+}
+
+private object EmptyHomeFeed {
+    val flow: StateFlow<HomeFeedState> = kotlinx.coroutines.flow.MutableStateFlow(HomeFeedState.Loading)
+}
 
 data class AppBoundaries(
     val gateway: EmbyGateway,

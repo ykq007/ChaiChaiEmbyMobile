@@ -194,7 +194,11 @@ private fun AdaptiveShell(
                 popExitTransition = { if (reducedMotion) ExitTransition.None else fadeOut() },
             ) {
                 composable(TopLevelDestination.Home.route) {
-                    HomeScreen(isHeightConstrained = layout.isHeightConstrained, status = status)
+                    HomeScreen(
+                        gateway = boundaries.gateway,
+                        isHeightConstrained = layout.isHeightConstrained,
+                        isExpanded = layout.navigationPlacement == NavigationPlacement.Rail,
+                    )
                 }
                 composable(TopLevelDestination.Libraries.route) { LibrariesScreen() }
                 composable(TopLevelDestination.Search.route) { SearchScreen() }
