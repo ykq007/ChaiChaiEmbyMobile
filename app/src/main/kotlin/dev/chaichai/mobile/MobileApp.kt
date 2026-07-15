@@ -32,14 +32,15 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.testTag
 import androidx.navigation.NavDestination
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavHostController
@@ -48,19 +49,21 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.chaichai.mobile.core.contracts.AppBoundaries
-import dev.chaichai.mobile.core.contracts.GatewayConnectionState
 import dev.chaichai.mobile.core.contracts.GatewayAuthenticationStatus
 import dev.chaichai.mobile.core.contracts.HomeMediaAction
 import dev.chaichai.mobile.design.system.EmptyDestination
 import dev.chaichai.mobile.design.system.LocalReducedMotion
 import dev.chaichai.mobile.feature.home.HomeScreen
 import dev.chaichai.mobile.feature.home.HomeWindowClass
+import dev.chaichai.mobile.feature.home.HomeUiState
+import dev.chaichai.mobile.feature.home.rememberHomeUiState
 import dev.chaichai.mobile.feature.libraries.LibrariesScreen
 import dev.chaichai.mobile.feature.search.SearchScreen
 import dev.chaichai.mobile.feature.settings.SettingsScreen
 import dev.chaichai.mobile.feature.server.setup.ServerSetupScreen
 import dev.chaichai.mobile.core.contracts.ServerSetupState
 import dev.chaichai.mobile.platform.adaptive.AdaptiveNavigationPolicy
+import dev.chaichai.mobile.platform.adaptive.ContentWidthClass
 import dev.chaichai.mobile.platform.adaptive.NavigationPlacement
 import dev.chaichai.mobile.platform.adaptive.WindowCharacteristics
 import kotlin.math.roundToInt
@@ -101,6 +104,7 @@ fun MobileApp(
         ?.returnDestination
         ?.takeIf { route -> TopLevelDestination.entries.any { it.route == route } }
         ?: TopLevelDestination.Home.route
+    val homeUiState = rememberHomeUiState()
     BoxWithConstraints(modifier.fillMaxSize()) {
         val navController = rememberNavController()
         val density = LocalDensity.current
@@ -115,7 +119,7 @@ fun MobileApp(
                         .fillMaxHeight()
                         .align(if (useLeft) AbsoluteAlignment.CenterLeft else AbsoluteAlignment.CenterRight),
                 ) {
-                    AdaptiveShell(boundaries, navController, isHingeSeparated = true, restoredDestination = restoredDestination)
+                    AdaptiveShell(boundaries, navController, true, restoredDestination, homeUiState)
                 }
             }
 
@@ -129,11 +133,11 @@ fun MobileApp(
                         .height(if (useTop) topHeight else bottomHeight)
                         .align(if (useTop) Alignment.TopCenter else Alignment.BottomCenter),
                 ) {
-                    AdaptiveShell(boundaries, navController, isHingeSeparated = true, restoredDestination = restoredDestination)
+                    AdaptiveShell(boundaries, navController, true, restoredDestination, homeUiState)
                 }
             }
 
-            null -> AdaptiveShell(boundaries, navController, isHingeSeparated = false, restoredDestination = restoredDestination)
+            null -> AdaptiveShell(boundaries, navController, false, restoredDestination, homeUiState)
         }
     }
 }
@@ -144,6 +148,7 @@ private fun AdaptiveShell(
     navController: NavHostController,
     isHingeSeparated: Boolean,
     restoredDestination: String,
+    homeUiState: HomeUiState,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -162,21 +167,11 @@ private fun AdaptiveShell(
             hasSeparatingVerticalHinge = isHingeSeparated,
         )
         val layout = AdaptiveNavigationPolicy.layout(window)
-        val gatewayState by boundaries.gateway.connectionState.collectAsState()
-        val isPlaying by boundaries.playback.isPlaying.collectAsState()
-        val isOnline by boundaries.connectivity.isOnline.collectAsState()
-        val checkedAt = remember(boundaries.clock) { boundaries.clock.now() }
-        val status = listOf(
-            if (isOnline) "Online" else "Offline",
-            if (gatewayState == GatewayConnectionState.Connected) "Connected" else "No server",
-            if (isPlaying) "Playback active" else "Playback idle",
-            "Checked ${checkedAt.toString().substring(11, 16)} UTC",
-        ).joinToString(" • ")
-
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentDestination = backStackEntry?.destination
         val reducedMotion = LocalReducedMotion.current
         val scope = rememberCoroutineScope()
+        val adaptiveContentState = rememberSaveableStateHolder()
         val navigate: (TopLevelDestination) -> Unit = { destination ->
             scope.launch {
                 if (boundaries.gateway.verifyAuthentication(destination.route) != GatewayAuthenticationStatus.Expired) {
@@ -189,28 +184,30 @@ private fun AdaptiveShell(
             }
         }
         val content: @Composable (Modifier) -> Unit = { contentModifier ->
-            NavHost(
-                navController = navController,
-                startDestination = restoredDestination,
-                modifier = contentModifier,
-                enterTransition = { if (reducedMotion) EnterTransition.None else fadeIn() },
-                exitTransition = { if (reducedMotion) ExitTransition.None else fadeOut() },
-                popEnterTransition = { if (reducedMotion) EnterTransition.None else fadeIn() },
-                popExitTransition = { if (reducedMotion) ExitTransition.None else fadeOut() },
-            ) {
+            adaptiveContentState.SaveableStateProvider("adaptive-navigation-content") {
+                NavHost(
+                    navController = navController,
+                    startDestination = restoredDestination,
+                    modifier = contentModifier,
+                    enterTransition = { if (reducedMotion) EnterTransition.None else fadeIn() },
+                    exitTransition = { if (reducedMotion) ExitTransition.None else fadeOut() },
+                    popEnterTransition = { if (reducedMotion) EnterTransition.None else fadeIn() },
+                    popExitTransition = { if (reducedMotion) ExitTransition.None else fadeOut() },
+                ) {
                 composable(TopLevelDestination.Home.route) {
                     HomeScreen(
                         gateway = boundaries.gateway,
                         isHeightConstrained = layout.isHeightConstrained,
-                        windowClass = when {
-                            window.usableWidthDp >= 840 -> HomeWindowClass.Expanded
-                            window.usableWidthDp >= 600 -> HomeWindowClass.Medium
-                            else -> HomeWindowClass.Compact
+                        windowClass = when (layout.contentWidthClass) {
+                            ContentWidthClass.Compact -> HomeWindowClass.Compact
+                            ContentWidthClass.Medium -> HomeWindowClass.Medium
+                            ContentWidthClass.Expanded -> HomeWindowClass.Expanded
                         },
                         onMediaAction = { action ->
                             boundaries.homeMediaActions.submit(action)
                             navController.navigate(action.navigationRoute())
                         },
+                        uiState = homeUiState,
                     )
                 }
                 composable(MediaActionRoute) {
@@ -222,12 +219,13 @@ private fun AdaptiveShell(
                 composable(TopLevelDestination.Libraries.route) { LibrariesScreen() }
                 composable(TopLevelDestination.Search.route) { SearchScreen() }
                 composable(TopLevelDestination.Settings.route) { SettingsScreen() }
+                }
             }
         }
 
         if (layout.navigationPlacement == NavigationPlacement.Rail) {
             Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-                NavigationRail {
+                NavigationRail(Modifier.testTag("navigation-rail")) {
                     TopLevelDestination.entries.forEach { destination ->
                         NavigationRailItem(
                             selected = currentDestination.isSelected(destination),
@@ -242,7 +240,7 @@ private fun AdaptiveShell(
         } else {
             Scaffold(
                 bottomBar = {
-                    NavigationBar {
+                    NavigationBar(Modifier.testTag("bottom-navigation")) {
                         TopLevelDestination.entries.forEach { destination ->
                             NavigationBarItem(
                                 selected = currentDestination.isSelected(destination),

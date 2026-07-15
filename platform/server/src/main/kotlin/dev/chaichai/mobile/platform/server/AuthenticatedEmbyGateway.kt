@@ -37,6 +37,7 @@ class AuthenticatedEmbyGateway(
     private val mutableHomeFeed = MutableStateFlow<HomeFeedState>(HomeFeedState.Loading)
     override val homeFeed: StateFlow<HomeFeedState> = mutableHomeFeed
     private val json = Json { ignoreUnknownKeys = true }
+    private var homeGeneration = 0L
 
     var onAuthenticationExpired: ((String?) -> Unit)? = null
 
@@ -44,6 +45,8 @@ class AuthenticatedEmbyGateway(
         mutableConnectionState.value = if (connected) {
             GatewayConnectionState.Connected
         } else {
+            homeGeneration += 1
+            mutableHomeFeed.value = HomeFeedState.Loading
             GatewayConnectionState.Disconnected
         }
     }
@@ -120,15 +123,17 @@ class AuthenticatedEmbyGateway(
             return
         }
         val scope = HomeScope(session.serverId, session.userId)
+        val generation = ++homeGeneration
         val current = (mutableHomeFeed.value as? HomeFeedState.Ready)?.takeIf { it.scope == scope }?.sections
         val previous = current ?: homeCache.loadFeed(scope).orEmpty()
         mutableHomeFeed.value = if (previous.isEmpty()) HomeFeedState.Loading else HomeFeedState.Ready(scope, previous, true)
-        loadSections(session, scope, requested, previous)
+        loadSections(session, scope, generation, requested, previous)
     }
 
     private suspend fun loadSections(
         session: StoredSession,
         scope: HomeScope,
+        generation: Long,
         requested: Set<HomeSection>,
         previous: Map<HomeSection, HomeSectionContent>,
     ) = withContext(Dispatchers.IO) {
@@ -143,6 +148,12 @@ class AuthenticatedEmbyGateway(
         }
         val failures = merged.values.count { it.failureMessage != null }
         val successful = merged.values.filter { it.failureMessage == null }
+        val activeSession = vault.restore()
+        if (generation != homeGeneration) return@withContext
+        if (activeSession == null || HomeScope(activeSession.serverId, activeSession.userId) != scope) {
+            mutableHomeFeed.value = HomeFeedState.Loading
+            return@withContext
+        }
         val cacheable = merged.filterValues { it.failureMessage == null || it.items.isNotEmpty() }
         if (cacheable.isNotEmpty()) homeCache.saveFeed(scope, cacheable)
         mutableHomeFeed.value = when {

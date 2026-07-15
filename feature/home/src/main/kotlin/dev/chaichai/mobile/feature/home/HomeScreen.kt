@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,6 +26,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
@@ -44,9 +46,24 @@ import dev.chaichai.mobile.core.contracts.HomeSection
 import dev.chaichai.mobile.core.contracts.HomeMediaAction
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
+import androidx.compose.runtime.snapshotFlow
 import dev.chaichai.mobile.design.system.AuthenticatedArtwork
 
 enum class HomeWindowClass { Compact, Medium, Expanded }
+
+class HomeUiState internal constructor(private val shelfPositions: MutableMap<HomeSection, Int>) {
+    internal fun position(section: HomeSection) = shelfPositions[section] ?: 0
+    internal fun record(section: HomeSection, position: Int) { shelfPositions[section] = position }
+}
+
+@Composable
+fun rememberHomeUiState(): HomeUiState = rememberSaveable(
+    saver = listSaver(
+        save = { state -> HomeSection.entries.map(state::position) },
+        restore = { positions -> HomeUiState(HomeSection.entries.zip(positions).toMap().toMutableMap()) },
+    ),
+) { HomeUiState(mutableMapOf()) }
 
 @Composable
 fun HomeScreen(
@@ -55,10 +72,11 @@ fun HomeScreen(
     isHeightConstrained: Boolean,
     windowClass: HomeWindowClass,
     onMediaAction: (HomeMediaAction) -> Unit,
+    uiState: HomeUiState = rememberHomeUiState(),
 ) {
     val state by gateway.homeFeed.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    LaunchedEffect(gateway) {
+    LaunchedEffect(gateway, state is HomeFeedState.Loading) {
         if (gateway.homeFeed.value is HomeFeedState.Loading) gateway.refreshHome()
     }
     Box(
@@ -85,6 +103,7 @@ fun HomeScreen(
                 isHeightConstrained = isHeightConstrained,
                 windowClass = windowClass,
                 onMediaAction = onMediaAction,
+                uiState = uiState,
                 refresh = { scope.launch { gateway.refreshHome() } },
                 retry = { scope.launch { gateway.retryHomeSection(it) } },
             )
@@ -99,6 +118,7 @@ private fun HomeContent(
     isHeightConstrained: Boolean,
     windowClass: HomeWindowClass,
     onMediaAction: (HomeMediaAction) -> Unit,
+    uiState: HomeUiState,
     refresh: () -> Unit,
     retry: (HomeSection) -> Unit,
 ) {
@@ -111,7 +131,7 @@ private fun HomeContent(
     ) {
         item("home-header") {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = windowClass.horizontalPadding, vertical = 12.dp),
+                Modifier.fillMaxWidth().padding(horizontal = windowClass.metrics.horizontalPadding, vertical = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -120,7 +140,11 @@ private fun HomeContent(
                     style = MaterialTheme.typography.headlineMedium,
                     modifier = Modifier.semantics { heading(); traversalIndex = 0f },
                 )
-                OutlinedButton(onClick = refresh, enabled = !feed.isRefreshing) {
+                OutlinedButton(
+                    onClick = refresh,
+                    enabled = !feed.isRefreshing,
+                    modifier = Modifier.semantics { traversalIndex = .5f },
+                ) {
                     Text(if (feed.isRefreshing) "Refreshing" else "Refresh")
                 }
             }
@@ -138,8 +162,8 @@ private fun HomeContent(
                         Text(
                             section.title,
                             style = MaterialTheme.typography.titleLarge,
-                            modifier = Modifier.padding(horizontal = windowClass.horizontalPadding).semantics {
-                                heading(); traversalIndex = 2f + section.ordinal * 2f
+                            modifier = Modifier.padding(horizontal = windowClass.metrics.horizontalPadding).semantics {
+                                heading(); traversalIndex = 2f + section.ordinal * 10f
                             },
                         )
                         if (content.isStale) {
@@ -147,25 +171,30 @@ private fun HomeContent(
                                 "Showing saved content",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = windowClass.horizontalPadding),
+                                modifier = Modifier.padding(horizontal = windowClass.metrics.horizontalPadding)
+                                    .semantics { traversalIndex = 2.5f + section.ordinal * 10f },
                             )
                         }
                     }
                 }
                 if (content.items.isNotEmpty()) {
                     item("shelf-${section.name}") {
-                        MediaShelf(gateway, content.items, section, windowClass, onMediaAction)
+                        MediaShelf(gateway, content.items, section, windowClass, onMediaAction, uiState)
                     }
                 }
                 content.failureMessage?.let { message ->
                     item("error-${section.name}") {
                         Row(
-                            Modifier.fillMaxWidth().padding(horizontal = windowClass.horizontalPadding, vertical = 8.dp),
+                            Modifier.fillMaxWidth().padding(horizontal = windowClass.metrics.horizontalPadding, vertical = 8.dp)
+                                .semantics { traversalIndex = 8f + section.ordinal * 10f },
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             Text(message, modifier = Modifier.fillMaxWidth(.68f), color = MaterialTheme.colorScheme.error)
-                            Button(onClick = { retry(section) }) { Text("Retry ${section.title}") }
+                            Button(
+                                onClick = { retry(section) },
+                                modifier = Modifier.semantics { traversalIndex = 9f + section.ordinal * 10f },
+                            ) { Text("Retry ${section.title}") }
                         }
                     }
                 }
@@ -189,18 +218,18 @@ private fun Spotlight(
     onMediaAction: (HomeMediaAction) -> Unit,
 ) {
     Box(
-        Modifier.fillMaxWidth().heightIn(min = 220.dp, max = windowClass.heroMaxHeight)
+        Modifier.fillMaxWidth().height(windowClass.metrics.heroHeight).testTag("home-spotlight")
             .background(MaterialTheme.colorScheme.surfaceVariant),
     ) {
         item.backdrop?.let { HomeArtwork(gateway, it, item.title, Modifier.fillMaxSize()) }
         Column(
-            Modifier.align(Alignment.BottomStart).fillMaxWidth(if (windowClass == HomeWindowClass.Expanded) .58f else .88f)
+            Modifier.align(Alignment.BottomStart).fillMaxWidth(windowClass.metrics.heroTextWidthFraction)
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = .82f)).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text("Spotlight", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             Text(item.title, style = MaterialTheme.typography.headlineLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Button(onClick = {
+            Button(modifier = Modifier.semantics { traversalIndex = 1f }, onClick = {
                 onMediaAction(
                     if (item.hasMeaningfulResume) HomeMediaAction.Resume(item.identity, item.playbackPositionTicks)
                     else HomeMediaAction.OpenDetails(item.identity),
@@ -219,18 +248,25 @@ private fun MediaShelf(
     section: HomeSection,
     windowClass: HomeWindowClass,
     onMediaAction: (HomeMediaAction) -> Unit,
+    uiState: HomeUiState,
 ) {
-    val state = rememberLazyListState()
+    val state = rememberLazyListState(initialFirstVisibleItemIndex = uiState.position(section))
+    LaunchedEffect(state, section) {
+        snapshotFlow { state.firstVisibleItemIndex }.collectLatest { uiState.record(section, it) }
+    }
     LazyRow(
         state = state,
         modifier = Modifier.testTag("shelf-${section.name}"),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = windowClass.horizontalPadding),
-        horizontalArrangement = Arrangement.spacedBy(windowClass.shelfGap),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = windowClass.metrics.horizontalPadding),
+        horizontalArrangement = Arrangement.spacedBy(windowClass.metrics.shelfGap),
     ) {
         items(media, key = { "${it.identity.serverId}:${it.identity.itemId}" }) { item ->
             Column(Modifier.width(if (section == HomeSection.ContinueWatching || section == HomeSection.NextUp) {
-                windowClass.landscapeWidth
-            } else windowClass.posterWidth).clickable {
+                windowClass.metrics.landscapeWidth
+            } else windowClass.metrics.posterWidth).testTag("media-${item.identity.serverId}:${item.identity.itemId}").semantics {
+                contentDescription = "${item.title}, ${item.mediaType}"
+                traversalIndex = 3f + section.ordinal * 10f + media.indexOf(item) / 100f
+            }.clickable {
                 onMediaAction(HomeMediaAction.OpenDetails(item.identity))
             }) {
                 Box(
@@ -271,28 +307,17 @@ private fun formatTicks(ticks: Long): String {
     return "%d:%02d".format(seconds / 60, seconds % 60)
 }
 
-private val HomeWindowClass.horizontalPadding get() = when (this) {
-    HomeWindowClass.Compact -> 16.dp
-    HomeWindowClass.Medium -> 22.dp
-    HomeWindowClass.Expanded -> 28.dp
-}
-private val HomeWindowClass.heroMaxHeight get() = when (this) {
-    HomeWindowClass.Compact -> 260.dp
-    HomeWindowClass.Medium -> 280.dp
-    HomeWindowClass.Expanded -> 300.dp
-}
-private val HomeWindowClass.shelfGap get() = when (this) {
-    HomeWindowClass.Compact -> 12.dp
-    HomeWindowClass.Medium -> 14.dp
-    HomeWindowClass.Expanded -> 16.dp
-}
-private val HomeWindowClass.landscapeWidth get() = when (this) {
-    HomeWindowClass.Compact -> 252.dp
-    HomeWindowClass.Medium -> 280.dp
-    HomeWindowClass.Expanded -> 320.dp
-}
-private val HomeWindowClass.posterWidth get() = when (this) {
-    HomeWindowClass.Compact -> 144.dp
-    HomeWindowClass.Medium -> 158.dp
-    HomeWindowClass.Expanded -> 176.dp
+private data class HomeMetrics(
+    val horizontalPadding: androidx.compose.ui.unit.Dp,
+    val heroHeight: androidx.compose.ui.unit.Dp,
+    val heroTextWidthFraction: Float,
+    val shelfGap: androidx.compose.ui.unit.Dp,
+    val landscapeWidth: androidx.compose.ui.unit.Dp,
+    val posterWidth: androidx.compose.ui.unit.Dp,
+)
+
+private val HomeWindowClass.metrics get() = when (this) {
+    HomeWindowClass.Compact -> HomeMetrics(16.dp, 240.dp, .88f, 12.dp, 252.dp, 144.dp)
+    HomeWindowClass.Medium -> HomeMetrics(22.dp, 280.dp, .78f, 14.dp, 280.dp, 158.dp)
+    HomeWindowClass.Expanded -> HomeMetrics(28.dp, 320.dp, .58f, 16.dp, 320.dp, 176.dp)
 }

@@ -1,8 +1,14 @@
 package dev.chaichai.mobile.platform.server
 
 import dev.chaichai.mobile.core.contracts.GatewayAuthenticationStatus
+import dev.chaichai.mobile.core.contracts.ArtworkReference
 import dev.chaichai.mobile.core.contracts.HomeFeedState
+import dev.chaichai.mobile.core.contracts.HomeScope
+import dev.chaichai.mobile.core.contracts.HomeSectionContent
 import dev.chaichai.mobile.core.contracts.HomeSection
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -109,6 +115,48 @@ class AuthenticatedEmbyGatewayTest {
     }
 
     @Test
+    fun racing_old_and_new_sessions_only_publish_the_new_server_scope() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            repeat(10) { server.enqueue(items("Response $it")) }
+            val vault = FakeVault(stored(valid(server.url("/emby").toString())))
+            val cache = FirstLoadBlockingCache()
+            val gateway = AuthenticatedEmbyGateway(vault, homeCache = cache)
+            val oldRefresh = backgroundScope.launch { gateway.refreshHome() }
+            cache.firstLoadStarted.await()
+            vault.save(stored(valid(server.url("/emby").toString())).copy(serverId = "server-b", userId = "user-b"))
+            val newRefresh = backgroundScope.launch { gateway.refreshHome() }
+            cache.releaseFirstLoad.complete(Unit)
+
+            oldRefresh.join()
+            newRefresh.join()
+
+            assertEquals(HomeScope("server-b", "user-b"), (gateway.homeFeed.value as HomeFeedState.Ready).scope)
+        }
+    }
+
+    @Test
+    fun disconnect_invalidates_ready_content_and_rejects_in_flight_completion() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            repeat(5) { server.enqueue(items("Old scope $it")) }
+            val cache = FirstLoadBlockingCache()
+            val gateway = AuthenticatedEmbyGateway(
+                FakeVault(stored(valid(server.url("/emby").toString()))),
+                homeCache = cache,
+            )
+            val refresh = backgroundScope.launch { gateway.refreshHome() }
+            cache.firstLoadStarted.await()
+
+            gateway.setConnected(false)
+            cache.releaseFirstLoad.complete(Unit)
+            refresh.join()
+
+            assertEquals(HomeFeedState.Loading, gateway.homeFeed.value)
+        }
+    }
+
+    @Test
     fun authenticated_request_uses_scoped_token_and_reports_expiration() = runTest {
         MockWebServer().use { server ->
             server.start()
@@ -149,6 +197,22 @@ class AuthenticatedEmbyGatewayTest {
         override fun restore() = session
         override fun save(session: StoredSession) { this.session = session }
         override fun clear() { session = null }
+    }
+
+    private class FirstLoadBlockingCache : HomeCache {
+        val firstLoadStarted = CompletableDeferred<Unit>()
+        val releaseFirstLoad = CompletableDeferred<Unit>()
+        private val isFirst = AtomicBoolean(true)
+        override suspend fun loadFeed(scope: HomeScope): Map<HomeSection, HomeSectionContent>? {
+            if (isFirst.compareAndSet(true, false)) {
+                firstLoadStarted.complete(Unit)
+                releaseFirstLoad.await()
+            }
+            return null
+        }
+        override suspend fun saveFeed(scope: HomeScope, sections: Map<HomeSection, HomeSectionContent>) = Unit
+        override suspend fun loadArtwork(scope: HomeScope, reference: ArtworkReference): ByteArray? = null
+        override suspend fun saveArtwork(scope: HomeScope, reference: ArtworkReference, bytes: ByteArray) = Unit
     }
 
     private fun items(title: String) = MockResponse.Builder().code(200).body(

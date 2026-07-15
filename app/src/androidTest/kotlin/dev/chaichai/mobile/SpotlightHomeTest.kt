@@ -1,6 +1,8 @@
 package dev.chaichai.mobile
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertHeightIsEqualTo
+import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
@@ -21,6 +23,12 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.unit.DpSize
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.chaichai.mobile.core.contracts.AppBoundaries
 import dev.chaichai.mobile.core.contracts.AppClock
 import dev.chaichai.mobile.core.contracts.ConnectivityMonitor
@@ -132,7 +140,14 @@ class SpotlightHomeTest {
         showGateway(gateway)
         composeRule.onNodeWithText("Cached Arrival").assertIsDisplayed()
         composeRule.onNodeWithText("Refreshing").assertIsDisplayed()
-        refreshMayFail.complete(Unit)
+        composeRule.runOnIdle {
+            refreshMayFail.complete(Unit)
+            state.value = ready(
+                sections.mapValues { (_, content) ->
+                    content.copy(failureMessage = "Couldn't refresh Continue Watching.", isStale = true)
+                },
+            )
+        }
         composeRule.onNodeWithText("Cached Arrival").assertIsDisplayed()
         composeRule.onNodeWithText("Showing saved content").assertIsDisplayed()
             composeRule.onNodeWithText("Retry Continue Watching").assertIsDisplayed()
@@ -201,19 +216,52 @@ class SpotlightHomeTest {
 
     @Test
     fun talkback_traversal_orders_home_before_shelves() {
-        show(ready(mapOf(HomeSection.ContinueWatching to HomeSectionContent(listOf(media("movie", "Arrival"))))))
+        show(
+            ready(
+                mapOf(
+                    HomeSection.ContinueWatching to HomeSectionContent(
+                        listOf(media("movie", "Arrival", playbackPositionTicks = 600_000_000)),
+                        failureMessage = "Couldn't refresh Continue Watching.",
+                        isStale = true,
+                    ),
+                ),
+            ),
+        )
         composeRule.onNode(
             hasText("Home") and SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 0f),
         ).assertIsDisplayed()
         composeRule.onNode(
+            hasText("Refresh") and hasClickAction() and
+                SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, .5f),
+        ).assertIsDisplayed()
+        composeRule.onNode(
+            hasText("Resume 1:00") and hasClickAction() and
+                SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 1f),
+        ).assertIsDisplayed()
+        composeRule.onNode(
             hasText("Continue Watching") and SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 2f),
+        ).assertIsDisplayed()
+        composeRule.onNode(
+            hasContentDescription("Arrival, Movie") and hasClickAction() and
+                SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 3f),
+        ).assertIsDisplayed()
+        composeRule.onNode(
+            hasText("Showing saved content") and
+                SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 2.5f),
+        ).assertIsDisplayed()
+        composeRule.onNode(
+            hasText("Retry Continue Watching") and hasClickAction() and
+                SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 9f),
         ).assertIsDisplayed()
     }
 
     @Test
     fun compact_window_uses_compact_home_density() {
-        show(ready(mapOf(HomeSection.LatestMovies to HomeSectionContent(listOf(media("movie", "Arrival"))))), Modifier.size(400.dp, 700.dp), densityValue = 1f)
+        show(ready(mapOf(HomeSection.ContinueWatching to HomeSectionContent(listOf(media("movie", "Arrival", playbackPositionTicks = 600_000_000))))), Modifier.size(400.dp, 700.dp), densityValue = 1f)
         composeRule.onNode(hasContentDescription("Home discovery content, compact layout")).assertIsDisplayed()
+        composeRule.onNodeWithTag("home-spotlight").assertHeightIsEqualTo(240.dp)
+        composeRule.onNodeWithTag("media-server:movie").assertWidthIsEqualTo(252.dp)
+        composeRule.onNodeWithTag("bottom-navigation").assertIsDisplayed()
     }
 
     @Test
@@ -224,14 +272,20 @@ class SpotlightHomeTest {
 
     @Test
     fun medium_split_window_uses_medium_home_density() {
-        show(ready(mapOf(HomeSection.LatestMovies to HomeSectionContent(listOf(media("movie", "Arrival"))))), Modifier.size(700.dp, 500.dp), densityValue = 1f)
+        show(ready(mapOf(HomeSection.ContinueWatching to HomeSectionContent(listOf(media("movie", "Arrival", playbackPositionTicks = 600_000_000))))), Modifier.size(700.dp, 700.dp), densityValue = 1f)
         composeRule.onNode(hasContentDescription("Home discovery content, medium layout")).assertIsDisplayed()
+        composeRule.onNodeWithTag("home-spotlight").assertHeightIsEqualTo(280.dp)
+        composeRule.onNodeWithTag("media-server:movie").assertWidthIsEqualTo(280.dp)
+        composeRule.onNodeWithTag("navigation-rail").assertIsDisplayed()
     }
 
     @Test
     fun expanded_window_uses_expanded_home_density() {
-        show(ready(mapOf(HomeSection.LatestMovies to HomeSectionContent(listOf(media("movie", "Arrival"))))), Modifier.size(900.dp, 900.dp), densityValue = 1f)
+        show(ready(mapOf(HomeSection.ContinueWatching to HomeSectionContent(listOf(media("movie", "Arrival", playbackPositionTicks = 600_000_000))))), Modifier.size(900.dp, 900.dp), densityValue = 1f)
         composeRule.onNode(hasContentDescription("Home discovery content, expanded layout")).assertIsDisplayed()
+        composeRule.onNodeWithTag("home-spotlight").assertHeightIsEqualTo(320.dp)
+        composeRule.onNodeWithTag("media-server:movie").assertWidthIsEqualTo(320.dp)
+        composeRule.onNodeWithTag("navigation-rail").assertIsDisplayed()
     }
 
     @Test
@@ -254,7 +308,57 @@ class SpotlightHomeTest {
             densityValue = 1f,
             hinge = SeparatingHinge(400, 0, 420, 900, HingeOrientation.Vertical),
         )
-        composeRule.onNode(hasContentDescription("Home discovery content, compact layout")).assertIsDisplayed()
+        composeRule.onNode(hasContentDescription("Home discovery content, compact layout"))
+            .assertIsDisplayed().assertWidthIsEqualTo(480.dp)
+    }
+
+    @Test
+    fun shelf_and_destination_state_survive_resize_rotation_background_and_fold_transitions() {
+        val size = mutableStateOf(DpSize(400.dp, 700.dp))
+        val hinge = mutableStateOf<SeparatingHinge?>(null)
+        val lifecycleOwner = MutableLifecycleOwner()
+        composeRule.runOnIdle { lifecycleOwner.moveTo(Lifecycle.State.RESUMED) }
+        val media = (0..10).map { media("movie-$it", "Transition Movie $it") }
+        val state = MutableStateFlow<HomeFeedState>(
+            ready(mapOf(HomeSection.ContinueWatching to HomeSectionContent(media))),
+        )
+        composeRule.setContent {
+            CompositionLocalProvider(LocalLifecycleOwner provides lifecycleOwner) {
+                appContent(
+                    state,
+                    Modifier.size(size.value.width, size.value.height),
+                    1f,
+                    densityValue = 1f,
+                    hinge = hinge.value,
+                )
+            }
+        }
+        composeRule.onNodeWithTag("shelf-ContinueWatching").performScrollToIndex(8)
+        composeRule.onNodeWithText("Transition Movie 8").assertIsDisplayed()
+
+        composeRule.runOnIdle { size.value = DpSize(700.dp, 400.dp) }
+        composeRule.onNodeWithText("Transition Movie 8").assertIsDisplayed()
+        composeRule.runOnIdle {
+            lifecycleOwner.moveTo(Lifecycle.State.CREATED)
+        }
+        composeRule.runOnIdle {
+            lifecycleOwner.moveTo(Lifecycle.State.RESUMED)
+            size.value = DpSize(900.dp, 900.dp)
+            hinge.value = SeparatingHinge(400, 0, 420, 900, HingeOrientation.Vertical)
+        }
+        composeRule.onNodeWithText("Transition Movie 8").assertIsDisplayed()
+        composeRule.runOnIdle { hinge.value = null }
+        composeRule.onNodeWithText("Transition Movie 8").performClick()
+        composeRule.onNodeWithText("Opening media").assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            size.value = DpSize(400.dp, 700.dp)
+            lifecycleOwner.moveTo(Lifecycle.State.CREATED)
+        }
+        composeRule.runOnIdle {
+            lifecycleOwner.moveTo(Lifecycle.State.RESUMED)
+        }
+        composeRule.onNodeWithText("Opening media").assertIsDisplayed()
     }
 
     private fun show(
@@ -326,4 +430,10 @@ class SpotlightHomeTest {
         playbackPositionTicks = playbackPositionTicks,
         runtimeTicks = runtimeTicks,
     )
+
+    private class MutableLifecycleOwner : LifecycleOwner {
+        private val registry = LifecycleRegistry(this)
+        override val lifecycle: Lifecycle = registry
+        fun moveTo(state: Lifecycle.State) { registry.currentState = state }
+    }
 }

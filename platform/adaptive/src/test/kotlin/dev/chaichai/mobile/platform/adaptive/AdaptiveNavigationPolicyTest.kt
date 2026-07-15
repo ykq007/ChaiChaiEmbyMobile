@@ -46,5 +46,13 @@ class AdaptiveNavigationPolicyTest {
 
         assertEquals(NavigationPlacement.Rail, layout.navigationPlacement)
         assertEquals(true, layout.isHeightConstrained)
+        assertEquals(ContentWidthClass.Expanded, layout.contentWidthClass)
+    }
+
+    @Test
+    fun `content density breakpoints are owned by adaptive policy`() {
+        assertEquals(ContentWidthClass.Compact, AdaptiveNavigationPolicy.layout(WindowCharacteristics(599, 700)).contentWidthClass)
+        assertEquals(ContentWidthClass.Medium, AdaptiveNavigationPolicy.layout(WindowCharacteristics(600, 700)).contentWidthClass)
+        assertEquals(ContentWidthClass.Expanded, AdaptiveNavigationPolicy.layout(WindowCharacteristics(840, 700)).contentWidthClass)
     }
 }

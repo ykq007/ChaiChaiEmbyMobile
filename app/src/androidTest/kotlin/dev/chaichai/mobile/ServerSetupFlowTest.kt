@@ -79,7 +79,7 @@ class ServerSetupFlowTest {
             composeRule.onNodeWithText("Username").performTextInput("Ada")
             composeRule.onNodeWithText("Password").performTextInput("secret-password")
             composeRule.onNodeWithText("Sign in", useUnmergedTree = true).performClick()
-            composeRule.onNode(hasText("Home") and isHeading()).assertIsDisplayed()
+            composeRule.onNodeWithText("Your Home is empty").assertIsDisplayed()
             assertEquals("user", vault.restore()!!.userId)
 
             composeRule.onNodeWithText("Search").performClick()
