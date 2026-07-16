@@ -36,7 +36,7 @@ jobs:
             target: google_apis
             profile: pixel_2
             script: ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.notAnnotation=dev.chaichai.mobile.RequiresLargeTestWindow
-          - api-level: '37.0'
+          - api-level: '36'
             target: google_apis
             profile: pixel_c
             script: ./gradlew connectedDebugAndroidTest
@@ -67,7 +67,7 @@ jobs:
           adb devices -l > ci-diagnostics/adb-devices.txt 2>&1 || true
           timeout 10s adb logcat -d > ci-diagnostics/logcat.txt 2>&1 || true
           timeout 10s adb shell getprop > ci-diagnostics/device-properties.txt 2>&1 || true
-          emulator -accel-check > ci-diagnostics/emulator-acceleration.txt 2>&1 || true
+          "$ANDROID_SDK_ROOT/emulator/emulator" -accel-check > ci-diagnostics/emulator-acceleration.txt 2>&1 || true
           ls -la /dev/kvm > ci-diagnostics/kvm-device.txt 2>&1 || true
           ps aux > ci-diagnostics/processes.txt 2>&1 || true
           df -h > ci-diagnostics/disk.txt 2>&1 || true
