@@ -1,8 +1,10 @@
 package dev.chaichai.mobile.platform.playback
 
+import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.MediaPlaybackRequest
 import dev.chaichai.mobile.core.contracts.PlaybackCoordinator
 import dev.chaichai.mobile.core.contracts.PlaybackFailureKind
+import dev.chaichai.mobile.core.contracts.PlaybackPreferences
 import dev.chaichai.mobile.core.contracts.PlaybackState
 import dev.chaichai.mobile.core.contracts.PlaybackProgressSync
 import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
@@ -35,10 +37,16 @@ interface PlaybackEngine {
     val isPaused: Boolean
         get() = snapshot.isPaused
     val events: Flow<PlaybackEngineEvent> get() = emptyFlow()
+    /** Whether this engine can change playback speed without a restart. Gates the speed control in the UI. */
+    val speedControlSupported: Boolean get() = false
+    /** Whether this engine can apply a subtitle timing offset without a restart. Gates the subtitle-delay control. */
+    val subtitleDelaySupported: Boolean get() = false
     suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean = false)
     suspend fun acknowledgePlayingReported()
     suspend fun playPause()
     suspend fun seekTo(positionTicks: Long)
+    suspend fun setSpeed(speed: Float) = Unit
+    suspend fun setSubtitleDelayMs(delayMs: Long) = Unit
     suspend fun stop()
 }
 data class PlaybackEngineSnapshot(val positionTicks: Long, val isPaused: Boolean)
@@ -60,6 +68,7 @@ class PlaybackCoordinatorImpl(
     private val engine: PlaybackEngine,
     private val capabilities: PlaybackCapabilities,
     private val scheduleTimelineUpdates: Boolean = true,
+    private val preferences: PlaybackPreferences = object : PlaybackPreferences {},
 ) : PlaybackCoordinator, AutoCloseable {
     private val mutableState = MutableStateFlow<PlaybackState>(PlaybackState.Idle)
     override val state: StateFlow<PlaybackState> = mutableState
@@ -75,6 +84,8 @@ class PlaybackCoordinatorImpl(
     private var trackChangeJob: Job? = null
     private var pendingTrackTransition: PendingTrackTransition? = null
     private var progressStatusJob: Job? = null
+    private var currentSpeed: Float = 1.0f
+    private var currentSubtitleDelayMillis: Long = 0L
 
     private val engineEventJob = scope.launch {
             engine.events.collect { event ->
@@ -152,6 +163,7 @@ class PlaybackCoordinatorImpl(
                         mutableState.value = PlaybackState.Failed(PlaybackFailureKind.SourceUnavailable)
                         return@launch
                     }
+                    loadAndApplyPreferences(result.plan)
                     gateway.report(report(result.plan, PlaybackReportKind.Playing))
                     engine.acknowledgePlayingReported()
                     mutableIsPlaying.value = true
@@ -220,6 +232,7 @@ class PlaybackCoordinatorImpl(
                     activePlan = result.plan
                     try {
                         engine.prepare(result.plan, positionTicks, wasPaused)
+                        reapplyPreferences()
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
@@ -229,6 +242,45 @@ class PlaybackCoordinatorImpl(
                 }
             }
         }
+    }
+
+    override fun setPlaybackSpeed(speed: Float) {
+        val current = mutableState.value as? PlaybackState.Active ?: return
+        val plan = activePlan ?: return
+        if (!engine.speedControlSupported) return
+        currentSpeed = speed
+        preferences.setSpeed(plan.request.scope, speed)
+        scope.launch {
+            engine.setSpeed(speed)
+            publishActive(current.title, controlsVisible = true)
+        }
+    }
+
+    override fun setSubtitleDelay(deltaMillis: Long) {
+        val current = mutableState.value as? PlaybackState.Active ?: return
+        val plan = activePlan ?: return
+        if (!engine.subtitleDelaySupported) return
+        val identity = MediaIdentity(plan.request.serverId, plan.request.itemId)
+        val updated = currentSubtitleDelayMillis + deltaMillis
+        currentSubtitleDelayMillis = updated
+        preferences.setSubtitleDelay(identity, updated)
+        scope.launch {
+            engine.setSubtitleDelayMs(updated)
+            publishActive(current.title, controlsVisible = true)
+        }
+    }
+
+    private suspend fun loadAndApplyPreferences(plan: AuthoritativePlaybackPlan) {
+        val identity = MediaIdentity(plan.request.serverId, plan.request.itemId)
+        currentSpeed = preferences.speedFor(plan.request.scope)
+        currentSubtitleDelayMillis = preferences.subtitleDelayFor(identity)
+        if (engine.speedControlSupported) engine.setSpeed(currentSpeed)
+        if (engine.subtitleDelaySupported) engine.setSubtitleDelayMs(currentSubtitleDelayMillis)
+    }
+
+    private suspend fun reapplyPreferences() {
+        if (engine.speedControlSupported) engine.setSpeed(currentSpeed)
+        if (engine.subtitleDelaySupported) engine.setSubtitleDelayMs(currentSubtitleDelayMillis)
     }
 
     override fun retry() {
@@ -337,6 +389,7 @@ class PlaybackCoordinatorImpl(
         activePlan = restoring.previousPlan
         try {
             engine.prepare(restoring.previousPlan, restoring.positionTicks, restoring.wasPaused)
+            reapplyPreferences()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -402,6 +455,10 @@ class PlaybackCoordinatorImpl(
             subtitleTracks = plan.subtitleTracks,
             progressSync = (gateway as? ProgressAwarePlaybackGateway)?.progressStatus(plan.request.scope)?.value?.toContract()
                 ?: PlaybackProgressSync.Synced,
+            playbackSpeed = currentSpeed,
+            subtitleDelayMillis = currentSubtitleDelayMillis,
+            speedControlSupported = engine.speedControlSupported,
+            subtitleDelaySupported = engine.subtitleDelaySupported,
         )
     }
 

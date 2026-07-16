@@ -344,6 +344,52 @@ class PlaybackFlowTest {
     }
 
     @Test
+    fun speed_control_appears_and_adjusts_when_supported() {
+        val playback = FakePlayback().apply {
+            mutableState.value = activeWithTracks().copy(speedControlSupported = true, playbackSpeed = 1.0f)
+        }
+        compose.setContent { ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback) } }
+
+        compose.onNodeWithContentDescription("Tracks").performClick()
+        compose.onNodeWithContentDescription("Increase playback speed").performClick()
+
+        assertEquals(listOf(1.25f), playback.speedCalls)
+    }
+
+    @Test
+    fun speed_control_is_hidden_when_unsupported() {
+        val playback = FakePlayback().apply { mutableState.value = activeWithTracks() }
+        compose.setContent { ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback) } }
+
+        compose.onNodeWithContentDescription("Tracks").performClick()
+        compose.onNodeWithContentDescription("Increase playback speed").assertDoesNotExist()
+        compose.onNodeWithText("Playback speed").assertDoesNotExist()
+    }
+
+    @Test
+    fun subtitle_delay_control_appears_and_adjusts_when_supported() {
+        val playback = FakePlayback().apply {
+            mutableState.value = activeWithTracks().copy(subtitleDelaySupported = true, subtitleDelayMillis = 0L)
+        }
+        compose.setContent { ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback) } }
+
+        compose.onNodeWithContentDescription("Tracks").performClick()
+        compose.onNodeWithContentDescription("Increase subtitle delay").performClick()
+
+        assertEquals(listOf(250L), playback.subtitleDelayCalls)
+    }
+
+    @Test
+    fun subtitle_delay_control_is_hidden_when_unsupported() {
+        val playback = FakePlayback().apply { mutableState.value = activeWithTracks() }
+        compose.setContent { ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback) } }
+
+        compose.onNodeWithContentDescription("Tracks").performClick()
+        compose.onNodeWithContentDescription("Increase subtitle delay").assertDoesNotExist()
+        compose.onNodeWithText("Subtitle delay").assertDoesNotExist()
+    }
+
+    @Test
     fun back_dismisses_tracks_before_exiting_playback() {
         val playback = FakePlayback()
         compose.setContent { ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback) } }
@@ -385,11 +431,15 @@ class PlaybackFlowTest {
         var retryCount = 0
         var toggleControlsCount = 0
         var selection: PlaybackTrackSelection? = null
+        val speedCalls = mutableListOf<Float>()
+        val subtitleDelayCalls = mutableListOf<Long>()
         override fun submit(request: MediaPlaybackRequest) = Unit
         override fun seekBy(deltaTicks: Long) { seekDelta += deltaTicks }
         override fun playPause() { playPauseCount++ }
         override fun exit() { exitCount++ }
         override fun retry() { retryCount++ }
+        override fun setPlaybackSpeed(speed: Float) { speedCalls += speed }
+        override fun setSubtitleDelay(deltaMillis: Long) { subtitleDelayCalls += deltaMillis }
         override fun toggleControls() {
             toggleControlsCount++
             mutableState.value = (mutableState.value as PlaybackState.Active).copy(

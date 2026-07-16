@@ -11,6 +11,7 @@ import android.os.Bundle
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.PlaybackException
 import androidx.media3.exoplayer.ExoPlayer
@@ -161,6 +162,7 @@ class PlaybackSessionService : MediaSessionService() {
 
     internal fun playPause() { if (player.playWhenReady) player.pause() else player.play() }
     internal fun seekTo(positionTicks: Long) { player.seekTo(positionTicks / TICKS_PER_MILLISECOND) }
+    internal fun setSpeed(speed: Float) { player.playbackParameters = PlaybackParameters(speed) }
     internal fun positionTicks(): Long = player.currentPosition * TICKS_PER_MILLISECOND
     internal fun isPaused(): Boolean = player.isPausedForReporting()
     internal fun stopPlayback() {
@@ -250,6 +252,11 @@ internal object PlaybackServiceOwner {
 class Media3ServicePlaybackEngine(private val context: Context) : PlaybackEngine {
     override val snapshot: PlaybackEngineSnapshot get() = PlaybackServiceOwner.snapshot()
     override val events: SharedFlow<PlaybackEngineEvent> = PlaybackServiceOwner.events
+    // ExoPlayer natively supports PlaybackParameters(speed) applied in place, without restart.
+    override val speedControlSupported: Boolean get() = true
+    // Media3 has no native per-track subtitle timing offset API; faking support would violate
+    // AC1/AC4's "correctness over faking support" guidance, so the control stays hidden instead.
+    override val subtitleDelaySupported: Boolean get() = false
 
     @UnstableApi
     override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean) {
@@ -279,6 +286,10 @@ class Media3ServicePlaybackEngine(private val context: Context) : PlaybackEngine
             seekTo(positionTicks)
             PlaybackServiceOwner.updateSnapshot(positionTicks(), isPaused())
         }
+        Unit
+    }
+    override suspend fun setSpeed(speed: Float) = withContext(Dispatchers.Main.immediate) {
+        PlaybackServiceOwner.serviceOrNull()?.setSpeed(speed)
         Unit
     }
     override suspend fun stop() = withContext(Dispatchers.Main.immediate) {

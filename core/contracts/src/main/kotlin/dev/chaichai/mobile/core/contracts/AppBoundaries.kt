@@ -55,9 +55,24 @@ interface PlaybackCoordinator {
     fun seekBy(deltaTicks: Long)
     fun seekTo(positionTicks: Long)
     fun selectTrack(selection: PlaybackTrackSelection) = Unit
+    fun setPlaybackSpeed(speed: Float) = Unit
+    fun setSubtitleDelay(deltaMillis: Long) = Unit
     fun retry()
     fun retryProgressSync() = Unit
     fun exit()
+}
+
+/**
+ * Server-user scoped playback speed and media-scoped subtitle delay preferences.
+ * Speed persists per [HomeScope] (applies across media for that user/server); subtitle delay
+ * persists per [MediaIdentity] only (never globally). Default no-op bodies keep existing
+ * constructions (fakes, tests) compiling without a real persistence implementation.
+ */
+interface PlaybackPreferences {
+    fun speedFor(scope: HomeScope): Float = 1.0f
+    fun setSpeed(scope: HomeScope, speed: Float) = Unit
+    fun subtitleDelayFor(identity: MediaIdentity): Long = 0L
+    fun setSubtitleDelay(identity: MediaIdentity, delayMillis: Long) = Unit
 }
 fun interface AppClock { fun now(): Instant }
 interface ConnectivityMonitor { val isOnline: StateFlow<Boolean> }
@@ -348,6 +363,10 @@ sealed interface PlaybackState {
         val isChangingTrack: Boolean = false,
         val trackChangeError: String? = null,
         val progressSync: PlaybackProgressSync = PlaybackProgressSync.Synced,
+        val playbackSpeed: Float = 1.0f,
+        val subtitleDelayMillis: Long = 0L,
+        val speedControlSupported: Boolean = false,
+        val subtitleDelaySupported: Boolean = false,
     ) : PlaybackState
     data class Failed(val reason: PlaybackFailureKind) : PlaybackState
     data class Exited(val identity: MediaIdentity) : PlaybackState

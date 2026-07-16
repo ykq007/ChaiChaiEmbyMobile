@@ -4,6 +4,7 @@ import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.MediaPlaybackRequest
 import dev.chaichai.mobile.core.contracts.PlaybackFailureKind
+import dev.chaichai.mobile.core.contracts.PlaybackPreferences
 import dev.chaichai.mobile.core.contracts.PlaybackState
 import dev.chaichai.mobile.core.contracts.PlaybackTrack
 import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
@@ -421,6 +422,178 @@ class PlaybackCoordinatorImplTest {
         coordinator.close()
     }
 
+    @Test
+    fun `neutral default speed and no subtitle delay apply on first playback without persistence`() = runTest {
+        val engine = FakeEngine().apply { speedSupported = true; subtitleDelaySupportedFlag = true }
+        val coordinator = PlaybackCoordinatorImpl(this, FakeGateway(), engine, capabilities(), false, FakePreferences())
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+
+        val state = coordinator.state.value as PlaybackState.Active
+        assertEquals(1.0f, state.playbackSpeed)
+        assertEquals(0L, state.subtitleDelayMillis)
+        assertTrue(state.speedControlSupported)
+        assertTrue(state.subtitleDelaySupported)
+        assertEquals(listOf(1.0f), engine.appliedSpeeds)
+        coordinator.close()
+    }
+
+    @Test
+    fun `setting playback speed persists per server user scope and applies without renegotiation`() = runTest {
+        val gateway = FakeGateway()
+        val engine = FakeEngine().apply { speedSupported = true }
+        val preferences = FakePreferences()
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false, preferences)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+
+        coordinator.setPlaybackSpeed(1.5f)
+        advanceUntilIdle()
+
+        assertEquals(1.5f, (coordinator.state.value as PlaybackState.Active).playbackSpeed)
+        assertEquals(1.5f, preferences.speedFor(HomeScope("server", "user")))
+        assertEquals(1, gateway.requests.size)
+        assertEquals(listOf(1.0f, 1.5f), engine.appliedSpeeds)
+        coordinator.close()
+    }
+
+    @Test
+    fun `persisted speed applies across media for the same server user without restart`() = runTest {
+        val preferences = FakePreferences()
+        val engine = FakeEngine().apply { speedSupported = true }
+        val coordinator = PlaybackCoordinatorImpl(this, FakeGateway(), engine, capabilities(), false, preferences)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+        coordinator.setPlaybackSpeed(2.0f)
+        advanceUntilIdle()
+        coordinator.exit()
+        advanceUntilIdle()
+
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "other"), HomeScope("server", "user")))
+        advanceUntilIdle()
+
+        assertEquals(2.0f, (coordinator.state.value as PlaybackState.Active).playbackSpeed)
+        coordinator.close()
+    }
+
+    @Test
+    fun `subtitle delay persists only for the affected media identity not globally`() = runTest {
+        val preferences = FakePreferences()
+        val engine = FakeEngine().apply { subtitleDelaySupportedFlag = true }
+        val coordinator = PlaybackCoordinatorImpl(this, FakeGateway(), engine, capabilities(), false, preferences)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+        coordinator.setSubtitleDelay(250)
+        advanceUntilIdle()
+        assertEquals(250L, (coordinator.state.value as PlaybackState.Active).subtitleDelayMillis)
+        coordinator.exit()
+        advanceUntilIdle()
+
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "other"), HomeScope("server", "user")))
+        advanceUntilIdle()
+
+        assertEquals(0L, (coordinator.state.value as PlaybackState.Active).subtitleDelayMillis)
+        assertEquals(250L, preferences.subtitleDelayFor(MediaIdentity("server", "movie")))
+        assertEquals(0L, preferences.subtitleDelayFor(MediaIdentity("server", "other")))
+        coordinator.close()
+    }
+
+    @Test
+    fun `playback speed survives a track change re-negotiation`() = runTest {
+        val gateway = FakeGateway()
+        val engine = FakeEngine().apply { speedSupported = true }
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false, FakePreferences())
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+        coordinator.setPlaybackSpeed(1.75f)
+        advanceUntilIdle()
+        engine.appliedSpeeds.clear()
+
+        coordinator.selectTrack(PlaybackTrackSelection(audioStreamIndex = 2))
+        advanceUntilIdle()
+
+        val state = coordinator.state.value as PlaybackState.Active
+        assertEquals(1.75f, state.playbackSpeed)
+        assertEquals(listOf(1.75f), engine.appliedSpeeds)
+        coordinator.close()
+    }
+
+    @Test
+    fun `unsupported speed and subtitle delay capabilities hide state and disable controls`() = runTest {
+        val preferences = FakePreferences()
+        val engine = FakeEngine()
+        val coordinator = PlaybackCoordinatorImpl(this, FakeGateway(), engine, capabilities(), false, preferences)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+
+        val state = coordinator.state.value as PlaybackState.Active
+        assertFalse(state.speedControlSupported)
+        assertFalse(state.subtitleDelaySupported)
+
+        coordinator.setPlaybackSpeed(1.5f)
+        coordinator.setSubtitleDelay(250)
+        advanceUntilIdle()
+
+        assertEquals(1.0f, (coordinator.state.value as PlaybackState.Active).playbackSpeed)
+        assertEquals(0L, (coordinator.state.value as PlaybackState.Active).subtitleDelayMillis)
+        assertTrue(engine.appliedSpeeds.isEmpty())
+        assertTrue(preferences.speeds.isEmpty())
+        coordinator.close()
+    }
+
+    @Test
+    fun `engine failure during track change restores the previously applied speed`() = runTest {
+        val gateway = FakeGateway()
+        val engine = FakeEngine().apply { speedSupported = true }
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), true, FakePreferences())
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
+            MediaIdentity("server", "movie"), HomeScope("server", "user"), "Arrival",
+        ))
+        runCurrent()
+        coordinator.setPlaybackSpeed(1.5f)
+        runCurrent()
+        engine.autoReady = false
+
+        coordinator.selectTrack(PlaybackTrackSelection(audioStreamIndex = 2))
+        runCurrent()
+        engine.eventsFlow.emit(PlaybackEngineEvent.FatalError)
+        runCurrent()
+        engine.eventsFlow.emit(PlaybackEngineEvent.Ready)
+        runCurrent()
+
+        val restored = coordinator.state.value as PlaybackState.Active
+        assertFalse(restored.isChangingTrack)
+        assertEquals(1.5f, restored.playbackSpeed)
+        coordinator.close()
+    }
+
+    @Test
+    fun `rejected track change keeps the previously applied speed intact`() = runTest {
+        val gateway = FakeGateway().apply { failTrackChanges = true }
+        val engine = FakeEngine().apply { speedSupported = true }
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false, FakePreferences())
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+        coordinator.setPlaybackSpeed(1.25f)
+        advanceUntilIdle()
+
+        coordinator.selectTrack(PlaybackTrackSelection(audioStreamIndex = null, subtitleStreamIndex = 4))
+        advanceUntilIdle()
+
+        val state = coordinator.state.value as PlaybackState.Active
+        assertEquals(1.25f, state.playbackSpeed)
+        coordinator.close()
+    }
+
+    private class FakePreferences : PlaybackPreferences {
+        val speeds = mutableMapOf<HomeScope, Float>()
+        val delays = mutableMapOf<MediaIdentity, Long>()
+        override fun speedFor(scope: HomeScope): Float = speeds[scope] ?: 1.0f
+        override fun setSpeed(scope: HomeScope, speed: Float) { speeds[scope] = speed }
+        override fun subtitleDelayFor(identity: MediaIdentity): Long = delays[identity] ?: 0L
+        override fun setSubtitleDelay(identity: MediaIdentity, delayMillis: Long) { delays[identity] = delayMillis }
+    }
+
     private fun capabilities() = PlaybackCapabilities(
         18_000_000, 6, listOf(DirectPlayCapability("mp4", "h264", "aac")),
         listOf(TranscodeCapability("hls", "h264", "aac")),
@@ -470,6 +643,14 @@ class PlaybackCoordinatorImplTest {
         var acknowledgedPlaying = false
         var stopCount = 0
         val preparePauseStates = mutableListOf<Boolean>()
+        var speedSupported = false
+        var subtitleDelaySupportedFlag = false
+        override val speedControlSupported: Boolean get() = speedSupported
+        override val subtitleDelaySupported: Boolean get() = subtitleDelaySupportedFlag
+        val appliedSpeeds = mutableListOf<Float>()
+        val appliedSubtitleDelays = mutableListOf<Long>()
+        override suspend fun setSpeed(speed: Float) { appliedSpeeds += speed }
+        override suspend fun setSubtitleDelayMs(delayMs: Long) { appliedSubtitleDelays += delayMs }
         override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean) {
             prepareFailure?.let { throw it }
             positionTicks = startPositionTicks

@@ -22,9 +22,11 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -58,6 +60,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.traversalIndex
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.selection.selectable
@@ -205,6 +208,8 @@ private fun PlaybackControls(
                         layout = windowLayout,
                         onDismiss = { onShowTracksChanged(false) },
                         onSelect = coordinator::selectTrack,
+                        onSetSpeed = coordinator::setPlaybackSpeed,
+                        onAdjustSubtitleDelay = coordinator::setSubtitleDelay,
                     )
                 }
             }
@@ -325,6 +330,8 @@ private fun TracksSurface(
     layout: PlaybackWindowLayout,
     onDismiss: () -> Unit,
     onSelect: (PlaybackTrackSelection) -> Unit,
+    onSetSpeed: (Float) -> Unit,
+    onAdjustSubtitleDelay: (Long) -> Unit,
 ) {
     Dialog(
         onDismissRequest = onDismiss,
@@ -393,6 +400,12 @@ private fun TracksSurface(
                         audioStreamIndex = state.audioTracks.firstOrNull { it.isCurrent }?.index,
                         subtitleStreamIndex = state.subtitleTracks.firstOrNull { it.isCurrent }?.index,
                     )
+                    if (state.speedControlSupported) {
+                        item { PlaybackSpeedControl(state.playbackSpeed, onSetSpeed) }
+                    }
+                    if (state.subtitleDelaySupported) {
+                        item { SubtitleDelayControl(state.subtitleDelayMillis, onAdjustSubtitleDelay) }
+                    }
                     item { TrackSectionHeading("Audio") }
                     if (state.audioTracks.isEmpty()) {
                         item { MissingTracks("No audio tracks available") }
@@ -438,6 +451,89 @@ private fun BoxScope.safePane(pane: PlaybackSafePane): Modifier = when (pane) {
     is PlaybackSafePane.Right -> Modifier.align(AbsoluteAlignment.CenterRight).width(pane.widthDp.dp).fillMaxHeight()
     is PlaybackSafePane.Top -> Modifier.align(Alignment.TopCenter).fillMaxWidth().height(pane.heightDp.dp)
     is PlaybackSafePane.Bottom -> Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(pane.heightDp.dp)
+}
+
+private val SPEED_STEPS = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
+private const val SUBTITLE_DELAY_STEP_MILLIS = 250L
+
+@Composable
+private fun PlaybackSpeedControl(speed: Float, onSelect: (Float) -> Unit) {
+    val index = SPEED_STEPS.indexOfFirst { kotlin.math.abs(it - speed) < 0.01f }
+        .let { if (it == -1) SPEED_STEPS.indexOf(1.0f) else it }
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp).testTag("playback-speed-control")) {
+        Text(
+            "Playback speed",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.semantics { heading() },
+        )
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(
+                onClick = { if (index > 0) onSelect(SPEED_STEPS[index - 1]) },
+                enabled = index > 0,
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(Icons.Default.Remove, "Decrease playback speed", tint = MaterialTheme.colorScheme.onSurface)
+            }
+            Text(
+                formatSpeed(speed),
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite },
+            )
+            IconButton(
+                onClick = { if (index < SPEED_STEPS.lastIndex) onSelect(SPEED_STEPS[index + 1]) },
+                enabled = index < SPEED_STEPS.lastIndex,
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(Icons.Default.Add, "Increase playback speed", tint = MaterialTheme.colorScheme.onSurface)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubtitleDelayControl(delayMillis: Long, onAdjust: (Long) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp).testTag("subtitle-delay-control")) {
+        Text(
+            "Subtitle delay",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.semantics { heading() },
+        )
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(
+                onClick = { onAdjust(-SUBTITLE_DELAY_STEP_MILLIS) },
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(Icons.Default.Remove, "Decrease subtitle delay", tint = MaterialTheme.colorScheme.onSurface)
+            }
+            Text(
+                formatDelay(delayMillis),
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite },
+            )
+            IconButton(
+                onClick = { onAdjust(SUBTITLE_DELAY_STEP_MILLIS) },
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(Icons.Default.Add, "Increase subtitle delay", tint = MaterialTheme.colorScheme.onSurface)
+            }
+        }
+    }
+}
+
+private fun formatSpeed(speed: Float): String {
+    val rounded = kotlin.math.round(speed * 100) / 100.0
+    val text = if (rounded == rounded.toLong().toDouble()) rounded.toLong().toString() else rounded.toString()
+    return "${text}×"
+}
+
+private fun formatDelay(delayMillis: Long): String = when {
+    delayMillis == 0L -> "0 ms"
+    delayMillis > 0 -> "+$delayMillis ms"
+    else -> "$delayMillis ms"
 }
 
 @Composable
