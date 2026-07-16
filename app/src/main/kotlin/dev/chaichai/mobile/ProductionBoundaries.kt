@@ -29,6 +29,12 @@ import dev.chaichai.mobile.platform.server.WorkManagerProgressRetryScheduler
 import dev.chaichai.mobile.platform.server.createRoomProgressOutbox
 import dev.chaichai.mobile.platform.server.AccountManager
 import dev.chaichai.mobile.platform.server.ServerDirectoryManager
+import dev.chaichai.mobile.platform.server.ServerProxyManager
+import dev.chaichai.mobile.platform.server.ServerProxyStore
+import dev.chaichai.mobile.platform.server.ProxyConnectionTester
+import dev.chaichai.mobile.platform.server.KeystoreProxyCredentialVault
+import dev.chaichai.mobile.platform.server.SharedPreferencesProxyPersistence
+import dev.chaichai.mobile.platform.server.VaultBackedProxySelector
 import dev.chaichai.mobile.platform.server.ServerRegistryStore
 import dev.chaichai.mobile.platform.server.SharedPreferencesRegistryPersistence
 import dev.chaichai.mobile.platform.server.ServerPrivateDataCleaner
@@ -68,7 +74,16 @@ object ProductionBoundariesModule {
         val movieCache = createRoomMovieCache(context)
         val seriesCache = createRoomSeriesCache(context)
         val searchCache = createRoomSearchCache(context)
-        val httpClients = AuthorityScopedHttpClients()
+        // Proxy Routing (#30): non-secret config in a versioned scoped-JSON store, credentials in a
+        // Keystore-protected vault. A single VaultBackedProxySelector feeds the one shared
+        // AuthorityScopedHttpClients, so API, artwork, playback and subtitle traffic for a server all
+        // route identically. Certificate Bypass stays a separate per-authority decision inside the
+        // clients and is never touched here.
+        val proxyStore = ServerProxyStore(
+            SharedPreferencesProxyPersistence(context),
+            KeystoreProxyCredentialVault(context),
+        )
+        val httpClients = AuthorityScopedHttpClients(VaultBackedProxySelector(vault, proxyStore))
         val gateway = AuthenticatedEmbyGateway(
             vault,
             clients = httpClients,
@@ -145,7 +160,11 @@ object ProductionBoundariesModule {
             gateway = aggregatedGateway,
             playback = PlaybackCoordinatorImpl(
                 applicationScope,
-                DurableProgressGateway(EmbyPlaybackGateway(vault, deviceId = deviceId), progress, clock),
+                DurableProgressGateway(
+                    EmbyPlaybackGateway(vault, clients = httpClients, deviceId = deviceId),
+                    progress,
+                    clock,
+                ),
                 Media3ServicePlaybackEngine(context),
                 androidPlaybackCapabilities(),
                 preferences = SharedPreferencesPlaybackPreferences(context),
@@ -164,6 +183,10 @@ object ProductionBoundariesModule {
                 SharedPreferencesDanmakuConfigStore(context),
             ),
             serverDirectory = serverDirectory,
+            serverProxy = ServerProxyManager(
+                proxyStore,
+                ProxyConnectionTester(vault, proxyStore, httpClients),
+            ),
         )
     }
 }

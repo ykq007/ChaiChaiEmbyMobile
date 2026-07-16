@@ -534,6 +534,7 @@ private fun AdaptiveShell(
                     SettingsScreen(
                         account = boundaries.account,
                         serverDirectory = boundaries.serverDirectory,
+                        serverProxy = boundaries.serverProxy,
                     )
                 }
                 }

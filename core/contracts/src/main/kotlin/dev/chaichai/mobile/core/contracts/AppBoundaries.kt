@@ -482,4 +482,5 @@ data class AppBoundaries(
     val account: AccountBoundary? = null,
     val danmaku: DanmakuController? = null,
     val serverDirectory: ServerDirectory? = null,
+    val serverProxy: ServerProxyBoundary? = null,
 )

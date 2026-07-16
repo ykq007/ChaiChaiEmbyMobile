@@ -22,6 +22,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.chaichai.mobile.core.contracts.AccountBoundary
 import dev.chaichai.mobile.core.contracts.ServerDirectory
+import dev.chaichai.mobile.core.contracts.ServerProxyBoundary
 import dev.chaichai.mobile.core.contracts.SignOutState
 
 @Composable
@@ -29,6 +30,7 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
     account: AccountBoundary? = null,
     serverDirectory: ServerDirectory? = null,
+    serverProxy: ServerProxyBoundary? = null,
 ) {
     if (account == null) {
         SettingsPlaceholder(modifier)
@@ -43,7 +45,7 @@ fun SettingsScreen(
         Text("Settings", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
         Text("Account data and unsent watch progress stay scoped to this server and user.")
         if (serverDirectory != null) {
-            ServerManagementSection(serverDirectory)
+            ServerManagementSection(serverDirectory, serverProxy)
         }
         when (state) {
             SignOutState.Syncing -> CircularProgressIndicator()
