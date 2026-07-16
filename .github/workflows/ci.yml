@@ -21,6 +21,8 @@ jobs:
       - uses: android-actions/setup-android@v3
       - name: Install Android 17 SDK
         run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
+      - name: Validate CI workflow action references and emulator safeguards
+        run: ./scripts/check-ci-workflow.sh
       - name: Build, lint, and unit test
         run: ./gradlew verifyModuleGraph dependencies test lint assembleRelease --stacktrace
 
@@ -41,6 +43,11 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
       - uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api-level }}
@@ -48,6 +55,30 @@ jobs:
           arch: x86_64
           disable-animations: true
           script: ./gradlew connectedDebugAndroidTest
+      - name: Collect UI smoke failure diagnostics
+        if: failure()
+        run: |
+          mkdir -p .ci-diagnostics
+          adb devices -l > .ci-diagnostics/adb-devices.txt 2>&1 || true
+          timeout 10s adb logcat -d > .ci-diagnostics/logcat.txt 2>&1 || true
+          timeout 10s adb shell getprop > .ci-diagnostics/device-properties.txt 2>&1 || true
+          emulator -accel-check > .ci-diagnostics/emulator-acceleration.txt 2>&1 || true
+          ls -la /dev/kvm > .ci-diagnostics/kvm-device.txt 2>&1 || true
+          ps aux > .ci-diagnostics/processes.txt 2>&1 || true
+          df -h > .ci-diagnostics/disk.txt 2>&1 || true
+          free -h > .ci-diagnostics/memory.txt 2>&1 || true
+      - name: Retain UI smoke failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-smoke-${{ matrix.api-level }}-${{ matrix.target }}-diagnostics
+          path: |
+            **/build/reports/androidTests/**
+            **/build/outputs/androidTest-results/**
+            /tmp/android-runner/**
+            .ci-diagnostics/**
+          if-no-files-found: warn
+          retention-days: 7
 
   security:
     runs-on: ubuntu-latest
@@ -56,7 +87,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Scan dependencies and repository for high or critical vulnerabilities
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           severity: HIGH,CRITICAL
