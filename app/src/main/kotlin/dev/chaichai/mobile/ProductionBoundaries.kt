@@ -25,6 +25,9 @@ import dev.chaichai.mobile.platform.server.ProgressSyncManager
 import dev.chaichai.mobile.platform.server.WorkManagerProgressRetryScheduler
 import dev.chaichai.mobile.platform.server.createRoomProgressOutbox
 import dev.chaichai.mobile.platform.server.AccountManager
+import dev.chaichai.mobile.platform.server.ServerDirectoryManager
+import dev.chaichai.mobile.platform.server.ServerRegistryStore
+import dev.chaichai.mobile.platform.server.SharedPreferencesRegistryPersistence
 import dev.chaichai.mobile.platform.server.ServerPrivateDataCleaner
 import dev.chaichai.mobile.platform.server.SharedPreferencesPlaybackPreferences
 import dev.chaichai.mobile.platform.danmaku.DanmakuControllerImpl
@@ -79,9 +82,6 @@ object ProductionBoundariesModule {
             gateway,
         )
         gateway.onAuthenticationExpired = serverSetup::authenticationExpired
-        applicationScope.launch {
-            serverSetup.state.collect { gateway.setConnected(it is ServerSetupState.Authenticated) }
-        }
         val clock = AppClock { Instant.now() }
         val connectivity = AndroidConnectivityMonitor(context)
         val progress = ProgressSyncManager(
@@ -92,6 +92,30 @@ object ProductionBoundariesModule {
             WorkManagerProgressRetryScheduler(context),
             applicationScope,
         )
+        val privateDataCleaner = ServerPrivateDataCleaner(homeCache, movieCache, seriesCache, searchCache)
+        val serverDirectory = ServerDirectoryManager(
+            scope = applicationScope,
+            store = ServerRegistryStore(SharedPreferencesRegistryPersistence(context)),
+            vault = vault,
+            progress = progress,
+            privateData = privateDataCleaner,
+            // Switching re-points the vault's active scope, then resets the shared gateway so
+            // Home/library/search reload against the newly active server without a process restart.
+            onActiveRebind = {
+                gateway.setConnected(false)
+                gateway.setConnected(vault.restore() != null)
+            },
+            onBeginAddServer = serverSetup::beginAddServer,
+        )
+        applicationScope.launch {
+            serverSetup.state.collect { setupState ->
+                val authenticated = setupState is ServerSetupState.Authenticated
+                gateway.setConnected(authenticated)
+                // First server, an added server, and re-authentication all converge here: keep the
+                // registry's active entry aligned with the freshly authenticated vault session.
+                if (authenticated) serverDirectory.registerActiveSession()
+            }
+        }
         return AppBoundaries(
             gateway = gateway,
             playback = PlaybackCoordinatorImpl(
@@ -106,7 +130,7 @@ object ProductionBoundariesModule {
             serverSetup = serverSetup,
             account = AccountManager(
                 applicationScope, vault, progress,
-                ServerPrivateDataCleaner(homeCache, movieCache, seriesCache, searchCache),
+                privateDataCleaner,
                 serverSetup::signedOut,
             ),
             danmaku = DanmakuControllerImpl(
@@ -114,6 +138,7 @@ object ProductionBoundariesModule {
                 OkHttpDanmakuEndpointClient(),
                 SharedPreferencesDanmakuConfigStore(context),
             ),
+            serverDirectory = serverDirectory,
         )
     }
 }

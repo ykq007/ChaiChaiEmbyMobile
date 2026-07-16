@@ -460,4 +460,5 @@ data class AppBoundaries(
     val homeMediaActions: HomeMediaActionBoundary = HomeMediaActionBoundary {},
     val account: AccountBoundary? = null,
     val danmaku: DanmakuController? = null,
+    val serverDirectory: ServerDirectory? = null,
 )

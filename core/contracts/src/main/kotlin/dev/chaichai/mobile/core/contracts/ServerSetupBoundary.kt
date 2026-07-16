@@ -57,4 +57,10 @@ interface ServerSetupBoundary {
     fun retry()
     fun authenticationExpired(requestedDestination: String?)
     fun signedOut() = Unit
+
+    /**
+     * Restart the address + authenticate flow to register an additional server, without signing
+     * out of or clearing the currently active server. Defaults to the sign-out reset for fakes.
+     */
+    fun beginAddServer() = signedOut()
 }

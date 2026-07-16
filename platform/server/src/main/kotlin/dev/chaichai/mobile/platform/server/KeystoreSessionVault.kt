@@ -21,6 +21,30 @@ class KeystoreSessionVault(context: Context) : SessionVault {
 
     override fun restore(): StoredSession? {
         val scope = preferences.getString(CURRENT_SCOPE, null) ?: return null
+        return decryptScope(scope)
+    }
+
+    override fun sessions(): List<StoredSession> = preferences.all.keys
+        .filter { it.startsWith(SESSION_PREFIX) }
+        .map { it.removePrefix(SESSION_PREFIX) }
+        .mapNotNull { decryptScope(it) }
+
+    override fun selectActive(serverId: String, userId: String): Boolean {
+        val scope = scopeOf(serverId, userId)
+        if (preferences.getString(sessionKey(scope), null) == null) return false
+        preferences.edit().putString(CURRENT_SCOPE, scope).apply()
+        return true
+    }
+
+    override fun remove(serverId: String, userId: String) {
+        val scope = scopeOf(serverId, userId)
+        preferences.edit().apply {
+            remove(sessionKey(scope))
+            if (preferences.getString(CURRENT_SCOPE, null) == scope) remove(CURRENT_SCOPE)
+        }.apply()
+    }
+
+    private fun decryptScope(scope: String): StoredSession? {
         val encrypted = preferences.getString(sessionKey(scope), null) ?: return null
         return try {
             val payload = json.decodeFromString<EncryptedPayload>(encrypted)
@@ -43,14 +67,15 @@ class KeystoreSessionVault(context: Context) : SessionVault {
                 record.serverName,
             )
         } catch (_: Exception) {
-            preferences.edit().remove(sessionKey(scope)).remove(CURRENT_SCOPE).apply()
+            preferences.edit().remove(sessionKey(scope)).apply {
+                if (preferences.getString(CURRENT_SCOPE, null) == scope) remove(CURRENT_SCOPE)
+            }.apply()
             null
         }
     }
 
     override fun save(session: StoredSession) {
         val scope = scopeOf(session.serverId, session.userId)
-        val previousScope = preferences.getString(CURRENT_SCOPE, null)
         val record = SessionRecord(
             address = session.address.value,
             serverId = session.serverId,
@@ -69,9 +94,9 @@ class KeystoreSessionVault(context: Context) : SessionVault {
             iv = encode(cipher.iv),
             ciphertext = encode(cipher.doFinal(json.encodeToString(record).toByteArray(StandardCharsets.UTF_8))),
         )
-        preferences.edit().apply {
-            if (previousScope != null && previousScope != scope) remove(sessionKey(previousScope))
-        }
+        // Multiple Servers: saving a session never evicts another server's session. Each stays
+        // keyed by its own scope; only the active pointer moves to the just-saved session.
+        preferences.edit()
             .putString(sessionKey(scope), json.encodeToString(encrypted))
             .putString(CURRENT_SCOPE, scope)
             .apply()
@@ -106,7 +131,7 @@ class KeystoreSessionVault(context: Context) : SessionVault {
         .digest("$serverId\u0000$userId".toByteArray(StandardCharsets.UTF_8))
         .joinToString("") { "%02x".format(it) }
 
-    private fun sessionKey(scope: String) = "session_$scope"
+    private fun sessionKey(scope: String) = "$SESSION_PREFIX$scope"
     private fun encode(bytes: ByteArray) = Base64.encodeToString(bytes, Base64.NO_WRAP)
     private fun decode(value: String) = Base64.decode(value, Base64.NO_WRAP)
 
@@ -130,6 +155,7 @@ class KeystoreSessionVault(context: Context) : SessionVault {
         internal const val PREFERENCES_NAME = "server_user_sessions"
         internal const val KEY_ALIAS = "chai_chai_server_session_key"
         private const val CURRENT_SCOPE = "current_scope"
+        private const val SESSION_PREFIX = "session_"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
         private const val TAG_LENGTH_BITS = 128

@@ -524,7 +524,12 @@ private fun AdaptiveShell(
                         )
                     }
                 }
-                composable(TopLevelDestination.Settings.route) { SettingsScreen(account = boundaries.account) }
+                composable(TopLevelDestination.Settings.route) {
+                    SettingsScreen(
+                        account = boundaries.account,
+                        serverDirectory = boundaries.serverDirectory,
+                    )
+                }
                 }
             }
         }

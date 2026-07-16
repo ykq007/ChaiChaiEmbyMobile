@@ -40,10 +40,21 @@ class KeystoreSessionVaultTest {
                 "Archive",
             ),
         )
+        // Multiple Servers: the second save keeps the first server's session (both scopes plus the
+        // active pointer persist), and the just-saved server becomes active.
         val replacedRaw = context.getSharedPreferences(KeystoreSessionVault.PREFERENCES_NAME, Context.MODE_PRIVATE).all
-        assertEquals(2, replacedRaw.size)
+        assertEquals(3, replacedRaw.size)
         assertFalse(replacedRaw.values.joinToString().contains("other-token"))
         assertEquals("other-server", vault.restore()!!.serverId)
+        assertEquals(setOf("server", "other-server"), vault.sessions().map { it.serverId }.toSet())
+
+        // Switching the active pointer restores the other server's session with no data loss.
+        assertTrue(vault.selectActive("server", "user"))
+        assertEquals("token-secret", vault.restore()!!.accessToken.encoded())
+
+        // Removing one server leaves the other intact.
+        vault.remove("other-server", "other-user")
+        assertEquals(setOf("server"), vault.sessions().map { it.serverId }.toSet())
         assertTrue(KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.containsAlias(KeystoreSessionVault.KEY_ALIAS))
     }
 }

@@ -24,6 +24,22 @@ interface SessionVault {
     fun restore(): StoredSession?
     fun save(session: StoredSession)
     fun clear()
+
+    /**
+     * Every stored server-user session, active or not. Default single-session behaviour keeps
+     * existing fakes compiling; the real vault enumerates all registered scopes.
+     */
+    fun sessions(): List<StoredSession> = listOfNotNull(restore())
+
+    /** Re-point the active scope at an already-stored session. Returns false when none is stored. */
+    fun selectActive(serverId: String, userId: String): Boolean =
+        restore()?.let { it.serverId == serverId && it.userId == userId } ?: false
+
+    /** Remove only the named server-user session, never another server's. */
+    fun remove(serverId: String, userId: String) {
+        val restored = restore()
+        if (restored?.serverId == serverId && restored.userId == userId) clear()
+    }
 }
 
 class ServerSetupCoordinator(
@@ -187,6 +203,20 @@ class ServerSetupCoordinator(
     }
 
     override fun signedOut() {
+        enteredAddress = null
+        discovered = null
+        certificateBypassAuthority = null
+        acknowledgedCleartextAuthority = null
+        pendingReturnDestination = null
+        mutableState.value = ServerSetupState.EnterAddress()
+    }
+
+    /**
+     * Begin registering an additional server. Resets the interactive flow to address entry but,
+     * unlike [signedOut], leaves the currently active server's stored session untouched so the
+     * existing scope keeps resolving until the new server authenticates.
+     */
+    override fun beginAddServer() {
         enteredAddress = null
         discovered = null
         certificateBypassAuthority = null
