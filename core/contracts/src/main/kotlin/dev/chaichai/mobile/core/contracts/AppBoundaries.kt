@@ -483,4 +483,5 @@ data class AppBoundaries(
     val danmaku: DanmakuController? = null,
     val serverDirectory: ServerDirectory? = null,
     val serverProxy: ServerProxyBoundary? = null,
+    val danmakuEndpoints: DanmakuEndpointBoundary? = null,
 )

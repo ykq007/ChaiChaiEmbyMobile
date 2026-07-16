@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.chaichai.mobile.platform.danmaku"
+    namespace = "dev.chaichai.mobile.platform.proxy"
     compileSdk = 37
     defaultConfig { minSdk = 26 }
     testOptions { unitTests.isReturnDefaultValues = true }
@@ -17,14 +17,11 @@ kotlin { jvmToolchain(17) }
 
 dependencies {
     implementation(project(":core:contracts"))
-    implementation(project(":platform:proxy"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:5.3.2")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     testImplementation("com.squareup.okhttp3:mockwebserver3:5.3.2")
-    testImplementation("com.squareup.okhttp3:okhttp-tls:5.3.2")
-    testImplementation("org.bouncycastle:bcprov-jdk18on:1.84")
     testImplementation("org.robolectric:robolectric:4.16.1")
 }

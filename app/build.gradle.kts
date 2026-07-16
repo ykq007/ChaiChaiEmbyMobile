@@ -55,6 +55,7 @@ dependencies {
     implementation(project(":core:contracts"))
     implementation(project(":design:system"))
     implementation(project(":platform:adaptive"))
+    implementation(project(":platform:proxy"))
     implementation(project(":platform:server"))
     implementation(project(":platform:playback"))
     implementation(project(":platform:danmaku"))

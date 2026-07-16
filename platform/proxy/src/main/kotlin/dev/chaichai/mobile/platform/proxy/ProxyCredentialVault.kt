@@ -1,4 +1,4 @@
-package dev.chaichai.mobile.platform.server
+package dev.chaichai.mobile.platform.proxy
 
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
@@ -17,16 +17,47 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
- * Keystore-protected [ProxyCredentialVault], mirroring [KeystoreSessionVault]: each proxy secret is
- * AES/GCM-encrypted under an AndroidKeyStore key and keyed by a SHA-256 hash of the serverId, so the
- * proxy password is never persisted in cleartext and never shared across servers.
+ * Keystore-protected store for proxy authentication secrets. Kept behind an interface so non-secret
+ * config stores stay JVM-unit-testable with an in-memory fake. Reused by BOTH the Emby server proxy
+ * store and the Danmaku endpoint manager; each supplies its own namespace so the two never share or
+ * overwrite each other's secrets.
+ *
+ * The [key] argument is a caller-chosen scope identifier (a serverId for Emby, an endpoint id for
+ * Danmaku). The vault never interprets it beyond hashing it into an entry name.
  */
-class KeystoreProxyCredentialVault(context: Context) : ProxyCredentialVault {
-    private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+interface ProxyCredentialVault {
+    fun load(key: String): ProxyCredentials?
+    fun save(key: String, credentials: ProxyCredentials)
+    fun remove(key: String)
+}
+
+class InMemoryProxyCredentialVault : ProxyCredentialVault {
+    private val map = mutableMapOf<String, ProxyCredentials>()
+    override fun load(key: String): ProxyCredentials? = map[key]
+    override fun save(key: String, credentials: ProxyCredentials) { map[key] = credentials }
+    override fun remove(key: String) { map.remove(key) }
+}
+
+/**
+ * Keystore-protected [ProxyCredentialVault]: each secret is AES/GCM-encrypted under an AndroidKeyStore
+ * key and keyed by a SHA-256 hash of the scope [key], so the proxy password is never persisted in
+ * cleartext and never shared across scopes.
+ *
+ * The preferences file, Keystore alias and entry prefix are all injectable, so independent subsystems
+ * (Emby servers vs. Danmaku endpoints) get fully separate credential namespaces. Defaults preserve the
+ * original #30 Emby server-proxy locations so existing stored secrets keep loading unchanged.
+ */
+class KeystoreProxyCredentialVault(
+    context: Context,
+    private val preferencesName: String = "server_proxy_credentials",
+    private val keyAlias: String = "chai_chai_server_proxy_key",
+    private val entryPrefix: String = "proxy_",
+) : ProxyCredentialVault {
+    private val preferences = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
 
-    override fun load(serverId: String): ProxyCredentials? {
-        val encrypted = preferences.getString(entryKey(serverId), null) ?: return null
+    override fun load(key: String): ProxyCredentials? {
+        val encrypted = preferences.getString(entryKey(key), null) ?: return null
         return try {
             val payload = json.decodeFromString<EncryptedPayload>(encrypted)
             val cipher = Cipher.getInstance(TRANSFORMATION).apply {
@@ -37,32 +68,32 @@ class KeystoreProxyCredentialVault(context: Context) : ProxyCredentialVault {
             )
             ProxyCredentials(record.username, record.password)
         } catch (_: Exception) {
-            preferences.edit().remove(entryKey(serverId)).apply()
+            preferences.edit().remove(entryKey(key)).apply()
             null
         }
     }
 
-    override fun save(serverId: String, credentials: ProxyCredentials) {
+    override fun save(key: String, credentials: ProxyCredentials) {
         val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, encryptionKey()) }
         val record = CredentialRecord(credentials.username, credentials.password)
         val encrypted = EncryptedPayload(
             iv = encode(cipher.iv),
             ciphertext = encode(cipher.doFinal(json.encodeToString(record).toByteArray(StandardCharsets.UTF_8))),
         )
-        preferences.edit().putString(entryKey(serverId), json.encodeToString(encrypted)).apply()
+        preferences.edit().putString(entryKey(key), json.encodeToString(encrypted)).apply()
     }
 
-    override fun remove(serverId: String) {
-        preferences.edit().remove(entryKey(serverId)).apply()
+    override fun remove(key: String) {
+        preferences.edit().remove(entryKey(key)).apply()
     }
 
     private fun encryptionKey(): SecretKey {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        (keyStore.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
+        (keyStore.getKey(keyAlias, null) as? SecretKey)?.let { return it }
         return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE).run {
             init(
                 KeyGenParameterSpec.Builder(
-                    KEY_ALIAS,
+                    keyAlias,
                     KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
                 )
                     .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
@@ -74,11 +105,11 @@ class KeystoreProxyCredentialVault(context: Context) : ProxyCredentialVault {
         }
     }
 
-    private fun entryKey(serverId: String): String {
+    private fun entryKey(key: String): String {
         val hash = MessageDigest.getInstance("SHA-256")
-            .digest(serverId.toByteArray(StandardCharsets.UTF_8))
+            .digest(key.toByteArray(StandardCharsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
-        return "$ENTRY_PREFIX$hash"
+        return "$entryPrefix$hash"
     }
 
     private fun encode(bytes: ByteArray) = Base64.encodeToString(bytes, Base64.NO_WRAP)
@@ -91,9 +122,6 @@ class KeystoreProxyCredentialVault(context: Context) : ProxyCredentialVault {
     private data class CredentialRecord(val username: String, val password: String)
 
     private companion object {
-        const val PREFERENCES_NAME = "server_proxy_credentials"
-        const val KEY_ALIAS = "chai_chai_server_proxy_key"
-        const val ENTRY_PREFIX = "proxy_"
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val TAG_LENGTH_BITS = 128

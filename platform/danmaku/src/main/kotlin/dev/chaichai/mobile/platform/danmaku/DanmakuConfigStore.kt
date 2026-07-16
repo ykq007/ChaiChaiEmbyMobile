@@ -1,9 +1,12 @@
 package dev.chaichai.mobile.platform.danmaku
 
 import android.content.Context
+import dev.chaichai.mobile.core.contracts.DanmakuEndpointRouting
 import dev.chaichai.mobile.core.contracts.DanmakuMediaKey
 import dev.chaichai.mobile.core.contracts.DanmakuPosition
 import dev.chaichai.mobile.core.contracts.DanmakuTuning
+import dev.chaichai.mobile.core.contracts.ProxyKind
+import dev.chaichai.mobile.core.contracts.ServerProxyConfig
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -77,7 +80,7 @@ class SharedPreferencesDanmakuConfigStore(context: Context) : DanmakuConfigStore
         val enabled = preferences.getBoolean(KEY_ENABLED, false)
         val endpoints = preferences.getString(KEY_ENDPOINTS, null)
             ?.let { runCatching { json.decodeFromString<List<StoredEndpoint>>(it) }.getOrNull() }
-            ?.map { DanmakuEndpoint(it.name, it.baseUrl) }
+            ?.map { it.toEndpoint() }
             ?: emptyList()
         // Schema version is absent for v1 (#26) data; matches/tuning simply default to empty.
         val matches = preferences.getString(KEY_MATCHES, null)
@@ -96,7 +99,7 @@ class SharedPreferencesDanmakuConfigStore(context: Context) : DanmakuConfigStore
     }
 
     override fun setEndpoints(endpoints: List<DanmakuEndpoint>) {
-        val payload = json.encodeToString(endpoints.map { StoredEndpoint(it.name, it.baseUrl) })
+        val payload = json.encodeToString(endpoints.map { StoredEndpoint.from(it) })
         preferences.edit().putString(KEY_ENDPOINTS, payload).putInt(KEY_SCHEMA_VERSION, SCHEMA_VERSION).apply()
     }
 
@@ -128,8 +131,66 @@ class SharedPreferencesDanmakuConfigStore(context: Context) : DanmakuConfigStore
             .apply()
     }
 
+    /**
+     * Persisted endpoint. Schema v1/v2 (#26/#27) wrote only [name] and [baseUrl]; the [id] and
+     * [routingProxy] fields were added in v3 (#31) with defaults, so pre-#31 endpoints decode with a
+     * blank id (mapped to the name) and null routing (mapped to Direct) — no data loss on migration.
+     * [routingProxy] is non-secret; credentials live only in the Keystore vault, keyed by endpoint id.
+     */
     @Serializable
-    private data class StoredEndpoint(val name: String, val baseUrl: String)
+    private data class StoredEndpoint(
+        val name: String,
+        val baseUrl: String,
+        val id: String = "",
+        val routingProxy: StoredProxy? = null,
+    ) {
+        fun toEndpoint(): DanmakuEndpoint {
+            val endpointId = id.ifBlank { name }
+            val routing = routingProxy?.let { DanmakuEndpointRouting.Proxy(it.toConfig()) }
+                ?: DanmakuEndpointRouting.Direct
+            return DanmakuEndpoint(name = name, baseUrl = baseUrl, id = endpointId, routing = routing)
+        }
+
+        companion object {
+            fun from(endpoint: DanmakuEndpoint): StoredEndpoint = StoredEndpoint(
+                name = endpoint.name,
+                baseUrl = endpoint.baseUrl,
+                id = endpoint.id,
+                routingProxy = (endpoint.routing as? DanmakuEndpointRouting.Proxy)
+                    ?.let { StoredProxy.from(it.config) },
+            )
+        }
+    }
+
+    @Serializable
+    private data class StoredProxy(
+        val kind: String = ProxyKind.Http.name,
+        val host: String = "",
+        val port: Int = 0,
+        val enabled: Boolean = false,
+        val lanBypass: Boolean = false,
+        val hasCredentials: Boolean = false,
+    ) {
+        fun toConfig(): ServerProxyConfig = ServerProxyConfig(
+            kind = runCatching { ProxyKind.valueOf(kind) }.getOrDefault(ProxyKind.Http),
+            host = host,
+            port = port,
+            enabled = enabled,
+            lanBypass = lanBypass,
+            hasCredentials = hasCredentials,
+        )
+
+        companion object {
+            fun from(config: ServerProxyConfig): StoredProxy = StoredProxy(
+                kind = config.kind.name,
+                host = config.host,
+                port = config.port,
+                enabled = config.enabled,
+                lanBypass = config.lanBypass,
+                hasCredentials = config.hasCredentials,
+            )
+        }
+    }
 
     @Serializable
     private data class StoredMatch(val endpointName: String, val mediaId: String, val title: String)
@@ -173,6 +234,6 @@ class SharedPreferencesDanmakuConfigStore(context: Context) : DanmakuConfigStore
         private const val KEY_MATCHES = "matches_v2"
         private const val KEY_TUNINGS = "tunings_v2"
         private const val KEY_SCHEMA_VERSION = "schema_version"
-        private const val SCHEMA_VERSION = 2
+        private const val SCHEMA_VERSION = 3
     }
 }

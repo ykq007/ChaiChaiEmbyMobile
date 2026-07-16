@@ -1,7 +1,10 @@
 package dev.chaichai.mobile.platform.danmaku
 
+import dev.chaichai.mobile.core.contracts.DanmakuEndpointRouting
 import dev.chaichai.mobile.core.contracts.DanmakuMediaKey
 import dev.chaichai.mobile.core.contracts.DanmakuTuning
+import dev.chaichai.mobile.core.contracts.ProxyKind
+import dev.chaichai.mobile.core.contracts.ServerProxyConfig
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -81,5 +84,56 @@ class DanmakuConfigStoreTest {
 
         reloaded.clearMatch(movie)
         assertNull(reloaded.rememberedMatch(movie))
+    }
+
+    @Test
+    fun pre_31_endpoints_without_id_or_routing_migrate_to_direct_keyed_by_name() {
+        val context = RuntimeEnvironment.getApplication()
+        // #26/#27 stored endpoints as only name+baseUrl (no id, no routing).
+        context.getSharedPreferences("danmaku_config", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("enabled", true)
+            .putString("endpoints", """[{"name":"Community","baseUrl":"https://a.example"}]""")
+            .apply()
+
+        val migrated = SharedPreferencesDanmakuConfigStore(context).load()
+        val endpoint = migrated.endpoints.single()
+        assertEquals("Community", endpoint.name)
+        // No loss: id defaults to the name, routing defaults to Direct.
+        assertEquals("Community", endpoint.id)
+        assertEquals(DanmakuEndpointRouting.Direct, endpoint.routing)
+    }
+
+    @Test
+    fun per_endpoint_routing_round_trips_without_persisting_the_secret() {
+        val context = RuntimeEnvironment.getApplication()
+        val store = SharedPreferencesDanmakuConfigStore(context)
+        store.setEndpoints(
+            listOf(
+                DanmakuEndpoint("Direct", "https://d.example", id = "d1"),
+                DanmakuEndpoint(
+                    name = "Proxied",
+                    baseUrl = "https://p.example",
+                    id = "p1",
+                    routing = DanmakuEndpointRouting.Proxy(
+                        ServerProxyConfig(ProxyKind.Socks5, "proxy.example", 1080, enabled = true, lanBypass = true, hasCredentials = true),
+                    ),
+                ),
+            ),
+        )
+
+        val reloaded = SharedPreferencesDanmakuConfigStore(context).load().endpoints
+        assertEquals(DanmakuEndpointRouting.Direct, reloaded.first { it.id == "d1" }.routing)
+        val proxy = reloaded.first { it.id == "p1" }.routing as DanmakuEndpointRouting.Proxy
+        assertEquals(ProxyKind.Socks5, proxy.config.kind)
+        assertEquals("proxy.example", proxy.config.host)
+        assertEquals(1080, proxy.config.port)
+        assertTrue(proxy.config.lanBypass)
+        assertTrue(proxy.config.hasCredentials)
+        // The persisted JSON never contains a username/password — only the non-secret hasCredentials flag.
+        val raw = context.getSharedPreferences("danmaku_config", android.content.Context.MODE_PRIVATE)
+            .getString("endpoints", "")!!
+        assertFalse(raw.contains("password"))
+        assertFalse(raw.contains("username"))
     }
 }

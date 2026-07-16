@@ -3,6 +3,8 @@ package dev.chaichai.mobile.platform.server
 import dev.chaichai.mobile.core.contracts.ProxyCredentials
 import dev.chaichai.mobile.core.contracts.ProxyKind
 import dev.chaichai.mobile.core.contracts.ServerProxyConfig
+import dev.chaichai.mobile.platform.proxy.InMemoryProxyCredentialVault
+import dev.chaichai.mobile.platform.proxy.ProxyCredentialVault
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

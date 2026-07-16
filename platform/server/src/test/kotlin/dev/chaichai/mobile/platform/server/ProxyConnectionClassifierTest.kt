@@ -3,6 +3,9 @@ package dev.chaichai.mobile.platform.server
 import dev.chaichai.mobile.core.contracts.ProxyKind
 import dev.chaichai.mobile.core.contracts.ProxyTestResult
 import dev.chaichai.mobile.core.contracts.ServerProxyConfig
+import dev.chaichai.mobile.platform.proxy.ProxyProbeOutcome
+import dev.chaichai.mobile.platform.proxy.classifyProxyProbe
+import dev.chaichai.mobile.platform.proxy.validateProxyForTest
 import java.io.IOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException

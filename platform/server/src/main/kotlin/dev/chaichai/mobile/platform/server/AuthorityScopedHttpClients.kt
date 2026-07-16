@@ -1,10 +1,10 @@
 package dev.chaichai.mobile.platform.server
 
 import dev.chaichai.mobile.core.contracts.ProxyCredentials
-import okhttp3.Credentials
+import dev.chaichai.mobile.platform.proxy.ProxyRoute
+import dev.chaichai.mobile.platform.proxy.applyProxyRoute
+import dev.chaichai.mobile.platform.proxy.cacheKey
 import okhttp3.OkHttpClient
-import java.net.InetSocketAddress
-import java.net.Proxy
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import java.time.Duration
@@ -31,7 +31,7 @@ class AuthorityScopedHttpClients(
     fun forRequest(authority: ServerAuthority, bypassAuthority: ServerAuthority?): OkHttpClient {
         val route = selector.routeFor(authority)
         val bypass = bypassAuthority == authority
-        val key = "${routeKey(route)}|bypass=$bypass|host=${authority.host}"
+        val key = "${route.cacheKey()}|bypass=$bypass|host=${authority.host}"
         return cache.getOrPut(key) {
             // Credentials are resolved lazily on each 407 so a password change takes effect without
             // rebuilding (and without ever being baked into the cache key).
@@ -57,30 +57,11 @@ class AuthorityScopedHttpClients(
         route: ProxyRoute,
         credentials: () -> ProxyCredentials?,
     ): OkHttpClient {
-        val builder = baseBuilder()
-        applyProxy(builder, route, credentials)
+        // Proxy application is the shared `:platform:proxy` primitive; Certificate Bypass is applied
+        // here and ONLY here, gated on an authority-equality check that danmaku clients never reach.
+        val builder = baseBuilder().applyProxyRoute(route, credentials)
         if (bypass) applyCertificateBypass(builder, authority)
         return builder.build()
-    }
-
-    private fun applyProxy(
-        builder: OkHttpClient.Builder,
-        route: ProxyRoute,
-        credentials: () -> ProxyCredentials?,
-    ) {
-        if (route !is ProxyRoute.Through) return
-        builder.proxy(Proxy(route.proxyType, InetSocketAddress(route.host, route.port)))
-        if (route.hasCredentials) {
-            // HTTP proxy authentication only: respond to a 407 with Basic Proxy-Authorization, once.
-            // The proxy secret goes ONLY to the proxy, never to the target server.
-            builder.proxyAuthenticator { _, response ->
-                if (response.request.header("Proxy-Authorization") != null) return@proxyAuthenticator null
-                val c = credentials() ?: return@proxyAuthenticator null
-                response.request.newBuilder()
-                    .header("Proxy-Authorization", Credentials.basic(c.username, c.password))
-                    .build()
-            }
-        }
     }
 
     private fun applyCertificateBypass(builder: OkHttpClient.Builder, authority: ServerAuthority) {
@@ -97,11 +78,6 @@ class AuthorityScopedHttpClients(
         builder
             .sslSocketFactory(context.socketFactory, scopedTrust)
             .hostnameVerifier { host, _ -> host.equals(authority.host, ignoreCase = true) }
-    }
-
-    private fun routeKey(route: ProxyRoute): String = when (route) {
-        is ProxyRoute.Direct -> "direct"
-        is ProxyRoute.Through -> "${route.proxyType}:${route.host}:${route.port}:creds=${route.hasCredentials}"
     }
 
     private fun baseBuilder() = OkHttpClient.Builder()

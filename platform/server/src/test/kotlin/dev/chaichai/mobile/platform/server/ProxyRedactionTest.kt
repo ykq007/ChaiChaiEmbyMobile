@@ -2,6 +2,8 @@ package dev.chaichai.mobile.platform.server
 
 import dev.chaichai.mobile.core.contracts.ProxyKind
 import dev.chaichai.mobile.core.contracts.ServerProxyConfig
+import dev.chaichai.mobile.platform.proxy.ProxyDiagnostics
+import dev.chaichai.mobile.platform.proxy.ProxyRoute
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test

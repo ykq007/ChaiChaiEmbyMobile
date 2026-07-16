@@ -4,6 +4,7 @@ import dev.chaichai.mobile.core.contracts.ProxyCredentials
 import dev.chaichai.mobile.core.contracts.ProxyKind
 import dev.chaichai.mobile.core.contracts.ProxyTestResult
 import dev.chaichai.mobile.core.contracts.ServerProxyConfig
+import dev.chaichai.mobile.platform.proxy.InMemoryProxyCredentialVault
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer

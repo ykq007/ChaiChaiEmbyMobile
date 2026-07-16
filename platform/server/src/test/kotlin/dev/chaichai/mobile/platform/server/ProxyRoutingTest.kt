@@ -2,6 +2,9 @@ package dev.chaichai.mobile.platform.server
 
 import dev.chaichai.mobile.core.contracts.ProxyKind
 import dev.chaichai.mobile.core.contracts.ServerProxyConfig
+import dev.chaichai.mobile.platform.proxy.ProxyRoute
+import dev.chaichai.mobile.platform.proxy.isLanAuthority
+import dev.chaichai.mobile.platform.proxy.toProxyType
 import java.net.Proxy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

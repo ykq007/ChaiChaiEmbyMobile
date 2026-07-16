@@ -535,6 +535,7 @@ private fun AdaptiveShell(
                         account = boundaries.account,
                         serverDirectory = boundaries.serverDirectory,
                         serverProxy = boundaries.serverProxy,
+                        danmakuEndpoints = boundaries.danmakuEndpoints,
                     )
                 }
                 }

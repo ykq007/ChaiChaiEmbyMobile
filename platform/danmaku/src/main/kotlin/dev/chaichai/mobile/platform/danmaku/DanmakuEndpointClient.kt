@@ -1,21 +1,30 @@
 package dev.chaichai.mobile.platform.danmaku
 
 import dev.chaichai.mobile.core.contracts.DanmakuComment
+import dev.chaichai.mobile.core.contracts.DanmakuEndpointRouting
 import dev.chaichai.mobile.core.contracts.DanmakuPosition
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.util.concurrent.TimeUnit
 
 /**
  * A user-configured, independently named danmaku endpoint. There are NO embedded defaults; the user
  * supplies the name and base URL. [name] distinguishes endpoints; [baseUrl] is a compatible HTTP
  * host exposing the narrow match/comments JSON contract below.
+ *
+ * [id] is a stable identifier assigned when the endpoint is added; it survives renames and is the key
+ * under which any per-endpoint proxy credentials are stored. Legacy endpoints from #26/#27 (which had
+ * no id) migrate with [id] defaulted to [name]. [routing] is the per-endpoint Proxy Routing choice —
+ * default [DanmakuEndpointRouting.Direct] so every existing endpoint keeps connecting directly.
  */
-data class DanmakuEndpoint(val name: String, val baseUrl: String)
+data class DanmakuEndpoint(
+    val name: String,
+    val baseUrl: String,
+    val id: String = name,
+    val routing: DanmakuEndpointRouting = DanmakuEndpointRouting.Direct,
+)
 
 /** Everything the matcher knows about the current media, kept minimal and framework-free. */
 data class DanmakuMatchQuery(
@@ -56,9 +65,15 @@ interface DanmakuEndpointClient {
  *       -> { "candidates": [ { "mediaId", "title", "runtimeTicks?", "season?", "episode?" } ] }
  *   GET {baseUrl}/comments?mediaId=
  *       -> { "comments": [ { "timeMs", "text", "color?", "position?" } ] }
+ *
+ * Each request runs on a PER-ENDPOINT OkHttp client obtained from [clients], so every endpoint routes
+ * through its own proxy (or directly) fully independently: a dead proxy on one endpoint cannot affect
+ * another endpoint, nor any Emby traffic. Critically, [clients] has no notion of Certificate Bypass —
+ * a danmaku endpoint client is always built with the system-default TLS trust, so a Server Address's
+ * Certificate Bypass can never transfer to a danmaku endpoint or its proxy.
  */
 class OkHttpDanmakuEndpointClient(
-    private val client: OkHttpClient = defaultClient(),
+    private val clients: DanmakuEndpointHttpClients = DanmakuEndpointHttpClients(),
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) : DanmakuEndpointClient {
 
@@ -72,7 +87,7 @@ class OkHttpDanmakuEndpointClient(
                 query.episode?.let { addQueryParameter("episode", it.toString()) }
             }
             .build()
-        val body = get(url.toString())
+        val body = get(endpoint, url.toString())
         return json.decodeFromString<WireMatchResponse>(body).candidates.map {
             DanmakuMatchCandidate(it.mediaId, it.title, it.runtimeTicks, it.season, it.episode)
         }
@@ -83,23 +98,16 @@ class OkHttpDanmakuEndpointClient(
             .addPathSegment("comments")
             .addQueryParameter("mediaId", mediaId)
             .build()
-        val body = get(url.toString())
+        val body = get(endpoint, url.toString())
         return json.decodeFromString<WireCommentResponse>(body).comments.map { it.toContract() }
     }
 
-    private fun get(url: String): String {
+    private fun get(endpoint: DanmakuEndpoint, url: String): String {
         val request = Request.Builder().url(url).get().build()
-        client.newCall(request).execute().use { response ->
+        clients.clientFor(endpoint).newCall(request).execute().use { response ->
             if (!response.isSuccessful) error("HTTP ${response.code}")
             return response.body?.string() ?: error("Empty body")
         }
-    }
-
-    private companion object {
-        fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
-            .connectTimeout(8, TimeUnit.SECONDS)
-            .readTimeout(8, TimeUnit.SECONDS)
-            .build()
     }
 }
 

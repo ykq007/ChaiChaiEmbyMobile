@@ -1,76 +1,18 @@
 package dev.chaichai.mobile.platform.server
 
-import dev.chaichai.mobile.core.contracts.ProxyKind
 import dev.chaichai.mobile.core.contracts.ServerProxyConfig
-import java.net.Proxy
+import dev.chaichai.mobile.platform.proxy.ProxyRoute
 
 /**
- * The resolved decision for one authority: connect directly, or through a specific proxy. Pure data;
- * carries no secret (credentials are resolved separately, at the client-building chokepoint, so a
- * route can never leak a proxy password into logs).
- */
-sealed interface ProxyRoute {
-    data object Direct : ProxyRoute
-
-    data class Through(
-        val kind: ProxyKind,
-        val host: String,
-        val port: Int,
-        val hasCredentials: Boolean,
-    ) : ProxyRoute {
-        val proxyType: Proxy.Type = kind.toProxyType()
-    }
-}
-
-/** Maps the Android-free [ProxyKind] to the concrete `java.net.Proxy.Type`. */
-fun ProxyKind.toProxyType(): Proxy.Type = when (this) {
-    ProxyKind.Http -> Proxy.Type.HTTP
-    ProxyKind.Socks5 -> Proxy.Type.SOCKS
-}
-
-/**
- * The one pure, table-driven routing decision. Given a server's [config] and the target [authority]
- * of the request, decide whether to proxy. This function is the ONLY place LAN bypass is applied,
- * so the bypass is explicit and unit-testable.
+ * Server-side seam over the shared, Android-light `:platform:proxy` primitives. The reusable routing
+ * decision, OkHttp proxy application, credential vault, redaction and connection classifier now live in
+ * `:platform:proxy` so the Danmaku subsystem can reuse the identical building blocks WITHOUT depending
+ * on `:platform:server` (and therefore without any path to Certificate Bypass). Server code imports the
+ * proxy primitives directly; this thin overload keeps the [ServerAuthority]-based call sites (and the
+ * routing/bypass independence proofs) unchanged.
  *
- * Rules, in order:
- *  - no config, or a disabled config, or a config with no host ⇒ [ProxyRoute.Direct] (no defaults);
- *  - LAN bypass on AND the target authority is private/loopback ⇒ [ProxyRoute.Direct];
- *  - otherwise ⇒ [ProxyRoute.Through] with the configured kind/host/port.
- *
- * Note what this function deliberately does NOT touch: Certificate Bypass. Proxy Routing and
- * Certificate Bypass are independent decisions; nothing here reads or sets TLS trust.
+ * Delegates to the shared, host-based decision in `:platform:proxy`. Certificate Bypass is never
+ * consulted here.
  */
-fun resolveProxyRoute(config: ServerProxyConfig?, authority: ServerAuthority): ProxyRoute {
-    if (config == null || !config.enabled) return ProxyRoute.Direct
-    if (config.host.isBlank() || config.port !in 1..65535) return ProxyRoute.Direct
-    if (config.lanBypass && isLanAuthority(authority.host)) return ProxyRoute.Direct
-    return ProxyRoute.Through(config.kind, config.host.trim(), config.port, config.hasCredentials)
-}
-
-/**
- * Whether [host] is a private, loopback, link-local or mDNS (`.local`) address that LAN bypass keeps
- * off the proxy. Pure and testable; recognizes both IPv4 private ranges and IPv6 loopback/ULA.
- */
-fun isLanAuthority(host: String): Boolean {
-    val h = host.trim().lowercase().removePrefix("[").removeSuffix("]")
-    if (h.isEmpty()) return false
-    if (h == "localhost" || h.endsWith(".localhost")) return true
-    if (h.endsWith(".local")) return true
-    // IPv6 loopback and unique-local (fc00::/7) / link-local (fe80::/10).
-    if (h == "::1") return true
-    if (h.startsWith("fc") || h.startsWith("fd") || h.startsWith("fe80:")) return true
-    val octets = h.split('.')
-    if (octets.size == 4 && octets.all { it.toIntOrNull() in 0..255 }) {
-        val (a, b) = octets[0].toInt() to octets[1].toInt()
-        return when {
-            a == 127 -> true                       // 127.0.0.0/8 loopback
-            a == 10 -> true                         // 10.0.0.0/8
-            a == 192 && b == 168 -> true            // 192.168.0.0/16
-            a == 172 && b in 16..31 -> true         // 172.16.0.0/12
-            a == 169 && b == 254 -> true            // 169.254.0.0/16 link-local
-            else -> false
-        }
-    }
-    return false
-}
+fun resolveProxyRoute(config: ServerProxyConfig?, authority: ServerAuthority): ProxyRoute =
+    dev.chaichai.mobile.platform.proxy.resolveProxyRoute(config, authority.host)

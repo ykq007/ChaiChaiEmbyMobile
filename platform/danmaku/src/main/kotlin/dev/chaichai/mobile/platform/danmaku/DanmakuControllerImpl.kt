@@ -112,6 +112,16 @@ class DanmakuControllerImpl(
         mutableState.value = if (enabled) DanmakuState.Matching(NO_IDENTITY) else DanmakuState.Disabled
     }
 
+    /**
+     * The danmaku endpoint set or an endpoint's routing changed. If danmaku is enabled we re-run
+     * matching against the current endpoints so a route change takes effect immediately — this only
+     * ever reloads danmaku (a contained, isolated operation) and NEVER touches media playback. When
+     * disabled or nothing is attached it is a cheap no-op beyond refreshing the matching state.
+     */
+    fun onEndpointsChanged() {
+        if (enabled) startMatching()
+    }
+
     override fun onPlayback(positionTicks: Long, isPaused: Boolean, speed: Float) {
         if (!enabled) return
         lastPositionTicks = positionTicks

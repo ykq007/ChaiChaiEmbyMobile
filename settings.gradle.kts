@@ -21,6 +21,7 @@ include(
     ":core:contracts",
     ":design:system",
     ":platform:adaptive",
+    ":platform:proxy",
     ":platform:server",
     ":platform:playback",
     ":platform:danmaku",

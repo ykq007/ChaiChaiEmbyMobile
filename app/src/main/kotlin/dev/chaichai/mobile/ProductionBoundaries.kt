@@ -32,7 +32,6 @@ import dev.chaichai.mobile.platform.server.ServerDirectoryManager
 import dev.chaichai.mobile.platform.server.ServerProxyManager
 import dev.chaichai.mobile.platform.server.ServerProxyStore
 import dev.chaichai.mobile.platform.server.ProxyConnectionTester
-import dev.chaichai.mobile.platform.server.KeystoreProxyCredentialVault
 import dev.chaichai.mobile.platform.server.SharedPreferencesProxyPersistence
 import dev.chaichai.mobile.platform.server.VaultBackedProxySelector
 import dev.chaichai.mobile.platform.server.ServerRegistryStore
@@ -40,8 +39,12 @@ import dev.chaichai.mobile.platform.server.SharedPreferencesRegistryPersistence
 import dev.chaichai.mobile.platform.server.ServerPrivateDataCleaner
 import dev.chaichai.mobile.platform.server.SharedPreferencesPlaybackPreferences
 import dev.chaichai.mobile.platform.danmaku.DanmakuControllerImpl
+import dev.chaichai.mobile.platform.danmaku.DanmakuEndpointHttpClients
+import dev.chaichai.mobile.platform.danmaku.DanmakuEndpointManager
+import dev.chaichai.mobile.platform.danmaku.DanmakuEndpointTester
 import dev.chaichai.mobile.platform.danmaku.OkHttpDanmakuEndpointClient
 import dev.chaichai.mobile.platform.danmaku.SharedPreferencesDanmakuConfigStore
+import dev.chaichai.mobile.platform.proxy.KeystoreProxyCredentialVault
 import dev.chaichai.mobile.platform.playback.Media3ServicePlaybackEngine
 import dev.chaichai.mobile.platform.playback.PlaybackCoordinatorImpl
 import dev.chaichai.mobile.platform.playback.androidPlaybackCapabilities
@@ -132,6 +135,33 @@ object ProductionBoundariesModule {
             WorkManagerProgressRetryScheduler(context),
             applicationScope,
         )
+        // Danmaku endpoint routing (#31): the endpoint client, controller and management boundary all
+        // share ONE config store so a routing change made in Settings is seen by live matching. The
+        // per-endpoint proxy credential vault is a SEPARATE Keystore namespace from the Emby server
+        // proxy vault, so danmaku secrets and Emby secrets never mix. This danmaku path builds its own
+        // clients via DanmakuEndpointHttpClients and NEVER touches the Emby AuthorityScopedHttpClients
+        // or its Certificate Bypass — a Server Address's Certificate Bypass cannot reach a danmaku
+        // endpoint. Changing an endpoint's route reloads only that endpoint's danmaku; playback is
+        // never interrupted.
+        val danmakuConfigStore = SharedPreferencesDanmakuConfigStore(context)
+        val danmakuCredentialVault = KeystoreProxyCredentialVault(
+            context,
+            preferencesName = "danmaku_proxy_credentials",
+            keyAlias = "chai_chai_danmaku_proxy_key",
+            entryPrefix = "danmaku_proxy_",
+        )
+        val danmakuClients = DanmakuEndpointHttpClients(danmakuCredentialVault)
+        val danmakuController = DanmakuControllerImpl(
+            applicationScope,
+            OkHttpDanmakuEndpointClient(danmakuClients),
+            danmakuConfigStore,
+        )
+        val danmakuEndpointManager = DanmakuEndpointManager(
+            configStore = danmakuConfigStore,
+            vault = danmakuCredentialVault,
+            tester = DanmakuEndpointTester(danmakuClients),
+            onConfigChanged = danmakuController::onEndpointsChanged,
+        )
         val privateDataCleaner = ServerPrivateDataCleaner(homeCache, movieCache, seriesCache, searchCache)
         val serverDirectory = ServerDirectoryManager(
             scope = applicationScope,
@@ -177,16 +207,13 @@ object ProductionBoundariesModule {
                 privateDataCleaner,
                 serverSetup::signedOut,
             ),
-            danmaku = DanmakuControllerImpl(
-                applicationScope,
-                OkHttpDanmakuEndpointClient(),
-                SharedPreferencesDanmakuConfigStore(context),
-            ),
+            danmaku = danmakuController,
             serverDirectory = serverDirectory,
             serverProxy = ServerProxyManager(
                 proxyStore,
                 ProxyConnectionTester(vault, proxyStore, httpClients),
             ),
+            danmakuEndpoints = danmakuEndpointManager,
         )
     }
 }
