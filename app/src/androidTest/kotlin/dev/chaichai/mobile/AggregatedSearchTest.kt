@@ -6,11 +6,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertLeftPositionInRootIsEqualTo
 import androidx.compose.ui.test.assertWidthIsEqualTo
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -22,6 +24,7 @@ import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.unit.Density
@@ -83,7 +86,7 @@ class AggregatedSearchTest {
         enterQuery("ar")
 
         listOf("Movies", "Series", "Seasons", "Episodes").forEach {
-            composeRule.onNodeWithText(it).performScrollTo().assertIsDisplayed()
+            scrolledResult(it).assertIsDisplayed()
         }
         listOf(
             "Movies" to 0f,
@@ -95,10 +98,10 @@ class AggregatedSearchTest {
             "Episodes" to 3_000f,
             "Dulcinea" to 3_001f,
         ).forEach { (text, index) ->
-            composeRule.onNodeWithText(text).performScrollTo()
+            scrolledResult(text)
                 .assert(SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, index))
         }
-        composeRule.onNodeWithText("Arrival").performScrollTo()
+        scrolledResult("Arrival")
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 1f))
             .assertHasClickAction()
             .performClick()
@@ -111,7 +114,7 @@ class AggregatedSearchTest {
         showApp(gateway)
         composeRule.onNodeWithText("Search").performClick()
         enterQuery("ar")
-        composeRule.onNodeWithText("The Expanse").performClick()
+        scrolledResult("The Expanse").performClick()
         composeRule.onNodeWithTag("series-details").assertIsDisplayed()
     }
 
@@ -121,7 +124,7 @@ class AggregatedSearchTest {
         showApp(gateway)
         composeRule.onNodeWithText("Search").performClick()
         enterQuery("ar")
-        composeRule.onNodeWithText("Season 1").performClick()
+        scrolledResult("Season 1").performClick()
         composeRule.onNodeWithText("S1 E1  Dulcinea").assertIsDisplayed()
     }
 
@@ -131,7 +134,7 @@ class AggregatedSearchTest {
         showApp(gateway)
         composeRule.onNodeWithText("Search").performClick()
         enterQuery("ar")
-        composeRule.onNodeWithText("Dulcinea").performScrollTo()
+        scrolledResult("Dulcinea")
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 3001f))
             .performClick()
         composeRule.onNodeWithTag("episode-details").assertIsDisplayed()
@@ -227,6 +230,15 @@ class AggregatedSearchTest {
         composeRule.setContent {
             ChaiChaiTheme(reducedMotion = false) { MobileApp(boundaries(gateway), null) }
         }
+    }
+
+    // Result rows live in the "search-results" LazyColumn, which only composes on-screen
+    // items. A deep target (e.g. the last "Dulcinea" episode) may not exist in the semantics
+    // tree yet, so `onNodeWithText(...).performScrollTo()` intermittently can't find it on the
+    // slow large-window emulator. Scroll the list itself, which composes-and-scrolls to it.
+    private fun scrolledResult(text: String): SemanticsNodeInteraction {
+        composeRule.onNodeWithTag("search-results").performScrollToNode(hasText(text))
+        return composeRule.onNodeWithText(text)
     }
 
     private fun enterQuery(query: String) {
