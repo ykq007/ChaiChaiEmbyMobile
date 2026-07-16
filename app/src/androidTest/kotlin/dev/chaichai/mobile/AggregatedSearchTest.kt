@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import dev.chaichai.mobile.core.contracts.AppBoundaries
 import dev.chaichai.mobile.core.contracts.AppClock
+import dev.chaichai.mobile.core.contracts.ConfiguredServer
 import dev.chaichai.mobile.core.contracts.ConnectivityMonitor
 import dev.chaichai.mobile.core.contracts.EmbyGateway
 import dev.chaichai.mobile.core.contracts.EpisodeDetails
@@ -49,10 +50,16 @@ import dev.chaichai.mobile.core.contracts.SeasonEpisodesState
 import dev.chaichai.mobile.core.contracts.SeasonSummary
 import dev.chaichai.mobile.core.contracts.SeriesDetails
 import dev.chaichai.mobile.core.contracts.SeriesDetailsState
+import dev.chaichai.mobile.core.contracts.ServerDirectory
+import dev.chaichai.mobile.core.contracts.ServerDirectoryState
+import dev.chaichai.mobile.core.contracts.ServerRemovalState
+import dev.chaichai.mobile.core.contracts.ServerSearchOutcome
+import dev.chaichai.mobile.core.contracts.ServerSearchStatus
 import dev.chaichai.mobile.design.system.ChaiChaiTheme
 import java.time.Instant
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -260,7 +267,7 @@ class AggregatedSearchTest {
         composeRule.waitForIdle()
     }
 
-    private fun boundaries(gateway: EmbyGateway) = AppBoundaries(
+    private fun boundaries(gateway: EmbyGateway, serverDirectory: ServerDirectory? = null) = AppBoundaries(
         gateway,
         object : NoOpPlaybackCoordinator() {
             override val isPlaying = MutableStateFlow(false)
@@ -268,7 +275,89 @@ class AggregatedSearchTest {
         },
         AppClock { Instant.EPOCH },
         object : ConnectivityMonitor { override val isOnline = MutableStateFlow(true) },
+        serverDirectory = serverDirectory,
     )
+
+    @Test
+    fun results_are_labeled_by_server_only_when_more_than_one_server_was_queried() {
+        val gateway = FakeSearchGateway { query ->
+            SearchState.Results(
+                scope,
+                query,
+                listOf(SearchResultGroup(SearchMediaType.Movie, listOf(SearchResult(scope, MediaIdentity("server", "movie"), SearchMediaType.Movie, "Arrival", 2016)))),
+                serverStatuses = listOf(
+                    ServerSearchStatus("server", "Living Room", ServerSearchOutcome.Ok),
+                    ServerSearchStatus("server-two", "Bedroom", ServerSearchOutcome.Ok),
+                ),
+            )
+        }
+        showApp(gateway)
+        composeRule.onNodeWithText("Search").performClick()
+        enterQuery("ar")
+
+        scrolledResult("Arrival")
+        composeRule.onNodeWithText("Living Room").assertIsDisplayed()
+    }
+
+    @Test
+    fun single_server_results_carry_no_provenance_label() {
+        // A single configured server keeps its pre-#29 shape: no serverStatuses, no label.
+        val gateway = FakeSearchGateway()
+        showApp(gateway)
+        composeRule.onNodeWithText("Search").performClick()
+        enterQuery("ar")
+
+        scrolledResult("Arrival")
+        composeRule.onNodeWithTag("search-result-server").assertDoesNotExist()
+        composeRule.onNodeWithTag("search-partial-failure").assertDoesNotExist()
+    }
+
+    @Test
+    fun a_failed_server_stays_visible_alongside_results_from_reachable_servers() {
+        val gateway = FakeSearchGateway { query ->
+            SearchState.Results(
+                scope,
+                query,
+                listOf(SearchResultGroup(SearchMediaType.Movie, listOf(SearchResult(scope, MediaIdentity("server", "movie"), SearchMediaType.Movie, "Arrival", 2016)))),
+                serverStatuses = listOf(
+                    ServerSearchStatus("server", "Living Room", ServerSearchOutcome.Ok),
+                    ServerSearchStatus("server-two", "Bedroom", ServerSearchOutcome.Failed),
+                ),
+            )
+        }
+        showApp(gateway)
+        composeRule.onNodeWithText("Search").performClick()
+        enterQuery("ar")
+
+        // Reachable server's result is still shown...
+        scrolledResult("Arrival").assertIsDisplayed()
+        // ...alongside a visible, textual (non-color-only) indicator naming the failed server.
+        composeRule.onNodeWithTag("search-partial-failure").assertIsDisplayed()
+        composeRule.onNodeWithText("Bedroom", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun selecting_a_result_activates_its_server_before_opening_details_so_identical_item_ids_never_collide() {
+        val serverOneScope = HomeScope("server-one", "user")
+        val serverTwoScope = HomeScope("server-two", "user")
+        val gateway = FakeCollisionGateway(serverOneScope, serverTwoScope)
+        val directory = FakeMultiServerDirectory(
+            listOf(serverOneScope to "One", serverTwoScope to "Two"),
+            activeScope = serverOneScope,
+        )
+        composeRule.setContent {
+            ChaiChaiTheme(reducedMotion = false) { MobileApp(boundaries(gateway, directory), null) }
+        }
+        composeRule.onNodeWithText("Search").performClick()
+        enterQuery("ar")
+
+        // Same itemId ("shared-id") exists on both servers with a distinguishable title;
+        // selecting the Server Two result must activate Server Two before details load.
+        scrolledResult("Arrival (Two)").performClick()
+
+        composeRule.runOnIdle { assertTrue(directory.activatedScopes.contains(serverTwoScope)) }
+        composeRule.onNodeWithText("From Server Two").performScrollTo().assertExists()
+    }
 
     private class FakeSearchGateway(
         private val result: (String) -> SearchState = { query -> SearchState.Results(scope, query, groups()) },
@@ -318,6 +407,88 @@ class AggregatedSearchTest {
                     scope = scope,
                 ),
             )
+    }
+
+    /**
+     * Two servers share the itemId "shared-id" for their movie. Movie details are resolved purely
+     * by [MediaIdentity.serverId] (as the real gateway does), so opening the wrong server's details
+     * would surface the wrong overview — proving selection routing avoids the collision.
+     */
+    private class FakeCollisionGateway(
+        private val serverOneScope: HomeScope,
+        private val serverTwoScope: HomeScope,
+    ) : EmbyGateway {
+        override val connectionState = MutableStateFlow(GatewayConnectionState.Connected)
+        override val searchState = MutableStateFlow<SearchState>(SearchState.Initial)
+
+        override suspend fun search(query: String) {
+            searchState.value = SearchState.Results(
+                serverOneScope,
+                query,
+                listOf(
+                    SearchResultGroup(
+                        SearchMediaType.Movie,
+                        listOf(
+                            SearchResult(serverOneScope, MediaIdentity(serverOneScope.serverId, "shared-id"), SearchMediaType.Movie, "Arrival (One)"),
+                            SearchResult(serverTwoScope, MediaIdentity(serverTwoScope.serverId, "shared-id"), SearchMediaType.Movie, "Arrival (Two)"),
+                        ),
+                    ),
+                ),
+                serverStatuses = listOf(
+                    ServerSearchStatus(serverOneScope.serverId, "One", ServerSearchOutcome.Ok),
+                    ServerSearchStatus(serverTwoScope.serverId, "Two", ServerSearchOutcome.Ok),
+                ),
+            )
+        }
+
+        override suspend fun loadMovieDetails(identity: MediaIdentity, authenticationReturnDestination: String?) =
+            dev.chaichai.mobile.core.contracts.MovieDetailsState.Ready(
+                dev.chaichai.mobile.core.contracts.MovieDetails(
+                    identity,
+                    if (identity.serverId == serverTwoScope.serverId) "Arrival (Two)" else "Arrival (One)",
+                    2016,
+                    overview = if (identity.serverId == serverTwoScope.serverId) "From Server Two" else "From Server One",
+                ),
+            )
+    }
+
+    /** Minimal [ServerDirectory] fake recording every scope [activateScope] was asked to switch to. */
+    private class FakeMultiServerDirectory(
+        servers: List<Pair<HomeScope, String>>,
+        activeScope: HomeScope,
+    ) : ServerDirectory {
+        private val entries = servers.mapIndexed { index, (scope, name) -> "id-$index" to (scope to name) }
+        private var activeId = entries.first { it.second.first == activeScope }.first
+        val activatedScopes = mutableListOf<HomeScope>()
+        override val state = MutableStateFlow(directoryState())
+        override val removalState = MutableStateFlow<ServerRemovalState>(ServerRemovalState.Idle)
+
+        private fun directoryState() = ServerDirectoryState(
+            entries.map { (id, pair) -> ConfiguredServer(id, "https://${pair.first.serverId}.example/emby", pair.second, isActive = id == activeId) },
+            activeId,
+        )
+
+        override fun selectServer(id: String) {
+            if (entries.none { it.first == id }) return
+            activeId = id
+            state.value = directoryState()
+        }
+
+        override fun activateScope(scope: HomeScope): Boolean {
+            val entry = entries.firstOrNull { it.second.first == scope } ?: return false
+            activatedScopes += scope
+            selectServer(entry.first)
+            return true
+        }
+
+        override fun rename(id: String, alias: String?) = Unit
+        override fun updateIcon(id: String, icon: dev.chaichai.mobile.core.contracts.ServerIcon) = Unit
+        override fun reorder(id: String, toIndex: Int) = Unit
+        override fun beginAddServer() = Unit
+        override fun editAddress(id: String, address: String) = Unit
+        override fun requestRemove(id: String) = Unit
+        override fun confirmRemove(id: String) = Unit
+        override fun cancelRemove() = Unit
     }
 
     private companion object {

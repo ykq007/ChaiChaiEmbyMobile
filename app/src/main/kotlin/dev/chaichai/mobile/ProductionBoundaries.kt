@@ -13,8 +13,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import dev.chaichai.mobile.platform.server.AggregatedSearchGateway
 import dev.chaichai.mobile.platform.server.AuthenticatedEmbyGateway
+import dev.chaichai.mobile.platform.server.AuthorityScopedHttpClients
 import dev.chaichai.mobile.platform.server.EmbyAuthenticator
+import dev.chaichai.mobile.platform.server.SingleSessionVault
 import dev.chaichai.mobile.platform.server.EmbyProbe
 import dev.chaichai.mobile.platform.server.KeystoreSessionVault
 import dev.chaichai.mobile.platform.server.ServerSetupCoordinator
@@ -65,13 +68,35 @@ object ProductionBoundariesModule {
         val movieCache = createRoomMovieCache(context)
         val seriesCache = createRoomSeriesCache(context)
         val searchCache = createRoomSearchCache(context)
+        val httpClients = AuthorityScopedHttpClients()
         val gateway = AuthenticatedEmbyGateway(
             vault,
+            clients = httpClients,
             homeCache = homeCache,
             movieCache = movieCache,
             seriesCache = seriesCache,
             searchCache = searchCache,
             deviceId = deviceId,
+        )
+        // Aggregated Search (#29): fan out search across every configured server while Home,
+        // libraries, playback and details stay bound to whichever server is active. Each
+        // per-server fetch reuses the exact single-server search path via a throwaway gateway
+        // pinned to that one stored session, so a switched/removed server can never leak into a
+        // still-running fan-out.
+        val aggregatedGateway = AggregatedSearchGateway(
+            delegate = gateway,
+            vault = vault,
+            gatewayFactory = { session ->
+                AuthenticatedEmbyGateway(
+                    SingleSessionVault(session),
+                    clients = httpClients,
+                    homeCache = homeCache,
+                    movieCache = movieCache,
+                    seriesCache = seriesCache,
+                    searchCache = searchCache,
+                    deviceId = deviceId,
+                )
+            },
         )
         val serverSetup = ServerSetupCoordinator(
             applicationScope,
@@ -117,7 +142,7 @@ object ProductionBoundariesModule {
             }
         }
         return AppBoundaries(
-            gateway = gateway,
+            gateway = aggregatedGateway,
             playback = PlaybackCoordinatorImpl(
                 applicationScope,
                 DurableProgressGateway(EmbyPlaybackGateway(vault, deviceId = deviceId), progress, clock),

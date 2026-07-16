@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.traversalIndex
@@ -46,6 +47,8 @@ import dev.chaichai.mobile.core.contracts.SearchMediaType
 import dev.chaichai.mobile.core.contracts.SearchResult
 import dev.chaichai.mobile.core.contracts.SearchResultGroup
 import dev.chaichai.mobile.core.contracts.SearchState
+import dev.chaichai.mobile.core.contracts.ServerSearchOutcome
+import dev.chaichai.mobile.core.contracts.ServerSearchStatus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -64,6 +67,10 @@ fun SearchScreen(
     modifier: Modifier = Modifier,
     hingePanes: SearchHingePanes? = null,
     listState: LazyListState = rememberLazyListState(),
+    // Called for every result selection, whether it lands inline (list-detail) or navigates
+    // (compact) — lets a caller activate the result's server context (Aggregated Search
+    // provenance, #29) before its details load. No-op default keeps existing callers compiling.
+    onResultSelected: (SearchResult) -> Unit = {},
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var selected by rememberSaveable(stateSaver = SearchResultSaver) { mutableStateOf<SearchResult?>(null) }
@@ -98,6 +105,7 @@ fun SearchScreen(
                 }
             },
             onSelect = { result ->
+                onResultSelected(result)
                 if (supportsListDetail) selected = result else onOpenDetails(result)
             },
             listState = listState,
@@ -160,10 +168,16 @@ private fun SearchCollection(
             matchingState == null -> SearchingMessage(normalizedQuery)
             matchingState is SearchState.Searching -> {
                 if (matchingState.restoredGroups.any { it.items.isNotEmpty() }) {
-                    SearchResults(matchingState.restoredGroups, onSelect, listState, true)
+                    SearchResults(matchingState.restoredGroups, emptyList(), onSelect, listState, true)
                 } else SearchingMessage(normalizedQuery)
             }
-            matchingState is SearchState.Results -> SearchResults(matchingState.groups, onSelect, listState, false)
+            matchingState is SearchState.Results -> SearchResults(
+                matchingState.groups,
+                matchingState.serverStatuses,
+                onSelect,
+                listState,
+                false,
+            )
             matchingState is SearchState.Empty -> SearchMessage(
                 "No results for “${matchingState.query}”",
                 "Try a different title or fewer words.",
@@ -177,7 +191,7 @@ private fun SearchCollection(
                     )
                     Text(matchingState.message)
                     Button({ onRetry(matchingState.query) }, Modifier.heightIn(min = 48.dp)) { Text("Retry search") }
-                    SearchResults(matchingState.restoredGroups, onSelect, listState, false)
+                    SearchResults(matchingState.restoredGroups, emptyList(), onSelect, listState, false)
                 } else SearchFailure(matchingState, onRetry)
             }
             else -> SearchingMessage(normalizedQuery)
@@ -188,10 +202,17 @@ private fun SearchCollection(
 @Composable
 private fun SearchResults(
     groups: List<SearchResultGroup>,
+    serverStatuses: List<ServerSearchStatus>,
     onSelect: (SearchResult) -> Unit,
     listState: LazyListState,
     isRefreshing: Boolean,
 ) {
+    // Provenance labels only earn their keep once more than one server was actually queried —
+    // a single configured server keeps the pre-#29 rows uncrowded.
+    val serverNames = if (serverStatuses.size > 1) serverStatuses.associate { it.serverId to it.displayName } else emptyMap()
+    val failedServers = serverStatuses.filter {
+        it.outcome == ServerSearchOutcome.Failed || it.outcome == ServerSearchOutcome.TimedOut
+    }
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().testTag("search-results"),
@@ -202,6 +223,16 @@ private fun SearchResults(
                 CircularProgressIndicator(Modifier.width(24.dp))
                 Text("Refreshing saved results")
             }
+        }
+        if (failedServers.isNotEmpty()) item("partial-failure") {
+            val message = "Couldn't search ${failedServers.joinToString { it.displayName }}. " +
+                "Showing results from the servers that responded."
+            Text(
+                message,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp).testTag("search-partial-failure")
+                    .semantics { contentDescription = message },
+            )
         }
         groups.filter { it.items.isNotEmpty() }.forEach { group ->
             val traversalBase = group.mediaType.ordinal * 1_000
@@ -219,14 +250,19 @@ private fun SearchResults(
                 group.items,
                 key = { _, result -> "${result.identity.serverId}:${result.identity.itemId}" },
             ) { index, result ->
-                SearchResultRow(result, traversalBase + index + 1, onSelect)
+                SearchResultRow(result, traversalBase + index + 1, serverNames[result.identity.serverId], onSelect)
             }
         }
     }
 }
 
 @Composable
-private fun SearchResultRow(result: SearchResult, traversalOrder: Int, onSelect: (SearchResult) -> Unit) {
+private fun SearchResultRow(
+    result: SearchResult,
+    traversalOrder: Int,
+    serverLabel: String?,
+    onSelect: (SearchResult) -> Unit,
+) {
     val subtitle = when (result.mediaType) {
         SearchMediaType.Movie, SearchMediaType.Series -> result.year?.toString()
         SearchMediaType.Season -> listOfNotNull(result.seriesName, result.seasonNumber?.let { "Season $it" }).joinToString(" • ")
@@ -243,6 +279,14 @@ private fun SearchResultRow(result: SearchResult, traversalOrder: Int, onSelect:
         Text(result.title, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
         subtitle?.takeIf { it.isNotBlank() }?.let {
             Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        serverLabel?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("search-result-server").semantics { contentDescription = "From server $it" },
+            )
         }
     }
 }

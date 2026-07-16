@@ -80,6 +80,18 @@ interface ServerDirectory {
     /** Switch the active server. Restores its authenticated session and rebinds Home/library/search. */
     fun selectServer(id: String)
 
+    /**
+     * Switch the active server addressed by its authenticated [HomeScope] rather than the
+     * directory's own id. Used by Aggregated Search (#29) to route a selected result to the
+     * correct server context — a [SearchResult] only carries [HomeScope]/[MediaIdentity]
+     * provenance, never the directory id — before the shared gateway loads that result's details,
+     * so identical item ids on different servers never collide. Returns false when no configured
+     * server matches [scope] (e.g. it was removed since the search ran); callers still get a
+     * normal per-server "not available" failure rather than a crash. No-op default (returns
+     * false) preserves existing single-scope [ServerDirectory] fakes that predate #29.
+     */
+    fun activateScope(scope: HomeScope): Boolean = false
+
     fun rename(id: String, alias: String?)
     fun updateIcon(id: String, icon: ServerIcon)
 

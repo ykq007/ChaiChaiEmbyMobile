@@ -90,6 +90,14 @@ class ServerDirectoryManager(
         onActiveRebind()
     }
 
+    override fun activateScope(scope: HomeScope): Boolean {
+        val entry = snapshot.servers.firstOrNull {
+            it.serverId == scope.serverId && it.userId == scope.userId
+        } ?: return false
+        selectServer(entry.id)
+        return true
+    }
+
     override fun rename(id: String, alias: String?) {
         updateEntry(id) { it.copy(alias = alias?.trim()?.takeIf(String::isNotEmpty)) }
     }

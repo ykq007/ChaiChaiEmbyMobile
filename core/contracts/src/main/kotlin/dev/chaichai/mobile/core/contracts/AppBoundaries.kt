@@ -115,6 +115,20 @@ data class SearchResultGroup(
     val items: List<SearchResult>,
 )
 
+/** Per-server outcome of one fanned-out Aggregated Search query (issue #29). */
+enum class ServerSearchOutcome { Ok, Empty, Failed, TimedOut }
+
+/**
+ * One configured server's contribution to an Aggregated Search query: which server, its
+ * user-facing name, and how it fared. Carried on [SearchState.Results] only when more than one
+ * server was queried, so single-server search keeps its pre-#29 shape untouched.
+ */
+data class ServerSearchStatus(
+    val serverId: String,
+    val displayName: String,
+    val outcome: ServerSearchOutcome,
+)
+
 sealed interface SearchState {
     data object Initial : SearchState
     data class Searching(
@@ -125,6 +139,13 @@ sealed interface SearchState {
         val scope: HomeScope,
         val query: String,
         val groups: List<SearchResultGroup>,
+        /**
+         * Per-server search provenance for this query. Empty for single-server search (unchanged
+         * rendering); populated with one entry per queried server when Aggregated Search (#29)
+         * fanned out across more than one configured server, so a partial failure stays visible
+         * alongside the results that did arrive.
+         */
+        val serverStatuses: List<ServerSearchStatus> = emptyList(),
     ) : SearchState
     data class Empty(val scope: HomeScope, val query: String) : SearchState
     data class Failure(

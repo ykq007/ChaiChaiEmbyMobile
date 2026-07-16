@@ -470,6 +470,12 @@ private fun AdaptiveShell(
                         gateway = boundaries.gateway,
                         supportsListDetail = layout.supportsListDetail,
                         onOpenDetails = { navController.navigate(it.detailsRoute()) },
+                        // Aggregated Search (#29): a selected result may carry a different
+                        // server's provenance than the currently active one. Activate that
+                        // result's scope first so the shared gateway's details load (and any
+                        // credential it uses) resolve against the CORRECT server — never a
+                        // collision between identical item ids on different servers.
+                        onResultSelected = { result -> boundaries.serverDirectory?.activateScope(result.scope) },
                         detailContent = { result, detailModifier ->
                             SearchResultDetails(
                                 boundaries,
