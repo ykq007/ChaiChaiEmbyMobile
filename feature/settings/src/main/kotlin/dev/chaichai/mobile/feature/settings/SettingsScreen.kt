@@ -22,6 +22,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.chaichai.mobile.core.contracts.AccountBoundary
 import dev.chaichai.mobile.core.contracts.DanmakuEndpointBoundary
+import dev.chaichai.mobile.core.contracts.PlaybackDiagnostics
 import dev.chaichai.mobile.core.contracts.ServerDirectory
 import dev.chaichai.mobile.core.contracts.ServerProxyBoundary
 import dev.chaichai.mobile.core.contracts.SignOutState
@@ -35,6 +36,7 @@ fun SettingsScreen(
     serverProxy: ServerProxyBoundary? = null,
     danmakuEndpoints: DanmakuEndpointBoundary? = null,
     subtitleProviders: SubtitleProviderBoundary? = null,
+    playbackDiagnostics: PlaybackDiagnostics? = null,
 ) {
     if (account == null) {
         SettingsPlaceholder(modifier)
@@ -56,6 +58,9 @@ fun SettingsScreen(
         }
         if (subtitleProviders != null) {
             SubtitleProvidersSection(subtitleProviders)
+        }
+        if (playbackDiagnostics != null) {
+            PlaybackDiagnosticsSection(playbackDiagnostics)
         }
         when (state) {
             SignOutState.Syncing -> CircularProgressIndicator()

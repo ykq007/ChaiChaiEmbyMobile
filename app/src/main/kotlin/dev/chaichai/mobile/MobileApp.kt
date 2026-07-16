@@ -538,6 +538,7 @@ private fun AdaptiveShell(
                         serverProxy = boundaries.serverProxy,
                         danmakuEndpoints = boundaries.danmakuEndpoints,
                         subtitleProviders = boundaries.subtitleProviders,
+                        playbackDiagnostics = boundaries.playbackDiagnostics,
                     )
                 }
                 }

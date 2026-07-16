@@ -14,6 +14,7 @@ import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
 import dev.chaichai.mobile.core.contracts.SkipTarget
 import dev.chaichai.mobile.core.contracts.SkipTargets
 import dev.chaichai.mobile.core.contracts.SubtitleAppearance
+import dev.chaichai.mobile.core.contracts.VideoScaleMode
 import dev.chaichai.mobile.platform.server.AuthoritativePlaybackPlan
 import dev.chaichai.mobile.platform.server.PlaybackCapabilities
 import dev.chaichai.mobile.platform.server.PlaybackFailure
@@ -49,6 +50,17 @@ interface PlaybackEngine {
     val subtitleDelaySupported: Boolean get() = false
     /** Whether this engine can apply subtitle appearance (size/position/color/edge/opacity) live. Gates the appearance controls. */
     val subtitleAppearanceSupported: Boolean get() = false
+    /**
+     * Whether this engine offers ANY [VideoScaleMode] control at all (Playback Polish, #35). `false`
+     * makes the scale-mode control disappear entirely rather than show and fail — capability detection
+     * over faking support.
+     */
+    val videoScaleModeSupported: Boolean get() = false
+    /**
+     * The exact [VideoScaleMode]s this engine can apply LIVE, trustworthily, on the current surface. A
+     * mode absent here is never offered, even if [videoScaleModeSupported] is true for other modes.
+     */
+    val supportedScaleModes: List<VideoScaleMode> get() = emptyList()
     suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean = false)
     suspend fun acknowledgePlayingReported()
     suspend fun playPause()
@@ -57,6 +69,8 @@ interface PlaybackEngine {
     suspend fun setSubtitleDelayMs(delayMs: Long) = Unit
     /** Apply subtitle appearance to the currently rendered captions without restarting playback. */
     suspend fun setSubtitleAppearance(appearance: SubtitleAppearance) = Unit
+    /** Apply a scale mode to the current video surface in place — no restart, no renegotiation. */
+    suspend fun setVideoScaleMode(mode: VideoScaleMode) = Unit
     /**
      * Side-load a downloaded external subtitle ([localRef]) and make it the current subtitle track,
      * preserving the current position and paused/playing state (no renegotiation, no restart from 0).
@@ -104,6 +118,7 @@ class PlaybackCoordinatorImpl(
     private var currentSpeed: Float = 1.0f
     private var currentSubtitleDelayMillis: Long = 0L
     private var currentSubtitleAppearance: SubtitleAppearance = SubtitleAppearance.Default
+    private var currentVideoScaleMode: VideoScaleMode = VideoScaleMode.Fit
     private var activeExternalSubtitle: PlaybackTrack? = null
     private var skipInFlight = false
 
@@ -338,6 +353,25 @@ class PlaybackCoordinatorImpl(
     }
 
     /**
+     * Apply a [VideoScaleMode] to the active surface LIVE — no restart, no gateway renegotiation
+     * (Playback Polish, #35), mirroring [setSubtitleAppearance]'s shape exactly. Silently ignored when
+     * the engine offers no scale-mode control at all, OR when [mode] is not one of the currently
+     * offered [PlaybackState.Active.supportedScaleModes] — an unsupported/untrustworthy mode is never
+     * applied, matching the capability-gated control staying hidden in the UI.
+     */
+    override fun setVideoScaleMode(mode: VideoScaleMode) {
+        val current = mutableState.value as? PlaybackState.Active ?: return
+        val plan = activePlan ?: return
+        if (!engine.videoScaleModeSupported || mode !in engine.supportedScaleModes) return
+        currentVideoScaleMode = mode
+        preferences.setVideoScaleMode(plan.request.scope, mode)
+        scope.launch {
+            engine.setVideoScaleMode(mode)
+            publishActive(current.title, controlsVisible = true)
+        }
+    }
+
+    /**
      * Activate a provider-downloaded External subtitle as the current subtitle track. Crucially this
      * NEVER renegotiates with the server (no gateway.negotiate) and reads the LIVE engine position and
      * paused state, so playback keeps its exact position and playing/paused state — the subtitle is
@@ -375,15 +409,19 @@ class PlaybackCoordinatorImpl(
         currentSpeed = preferences.speedFor(plan.request.scope)
         currentSubtitleDelayMillis = preferences.subtitleDelayFor(identity)
         currentSubtitleAppearance = preferences.subtitleAppearanceFor(plan.request.scope)
+        val persistedScaleMode = preferences.videoScaleModeFor(plan.request.scope)
+        currentVideoScaleMode = if (persistedScaleMode in engine.supportedScaleModes) persistedScaleMode else VideoScaleMode.Fit
         if (engine.speedControlSupported) engine.setSpeed(currentSpeed)
         if (engine.subtitleDelaySupported) engine.setSubtitleDelayMs(currentSubtitleDelayMillis)
         if (engine.subtitleAppearanceSupported) engine.setSubtitleAppearance(currentSubtitleAppearance)
+        if (engine.videoScaleModeSupported) engine.setVideoScaleMode(currentVideoScaleMode)
     }
 
     private suspend fun reapplyPreferences() {
         if (engine.speedControlSupported) engine.setSpeed(currentSpeed)
         if (engine.subtitleDelaySupported) engine.setSubtitleDelayMs(currentSubtitleDelayMillis)
         if (engine.subtitleAppearanceSupported) engine.setSubtitleAppearance(currentSubtitleAppearance)
+        if (engine.videoScaleModeSupported) engine.setVideoScaleMode(currentVideoScaleMode)
     }
 
     override fun retry() {
@@ -576,6 +614,9 @@ class PlaybackCoordinatorImpl(
             subtitleDelaySupported = engine.subtitleDelaySupported,
             subtitleAppearance = currentSubtitleAppearance,
             subtitleAppearanceSupported = engine.subtitleAppearanceSupported,
+            videoScaleMode = currentVideoScaleMode,
+            videoScaleModeSupported = engine.videoScaleModeSupported,
+            supportedScaleModes = engine.supportedScaleModes,
             scope = plan.request.scope,
             // Markers only ever ride on the CURRENTLY active plan (see AuthoritativePlaybackPlan.markers
             // doc), so this can never surface a skip target left over from a superseded/changed item;

@@ -19,6 +19,7 @@ import dev.chaichai.mobile.core.contracts.PlaybackTrackType
 import dev.chaichai.mobile.core.contracts.SubtitleAppearance
 import dev.chaichai.mobile.core.contracts.SubtitleColorPreset
 import dev.chaichai.mobile.core.contracts.SubtitlePosition
+import dev.chaichai.mobile.core.contracts.VideoScaleMode
 import dev.chaichai.mobile.platform.playback.PlaybackCoordinatorImpl
 import dev.chaichai.mobile.platform.playback.PlaybackEngine
 import dev.chaichai.mobile.platform.playback.PlaybackEngineEvent
@@ -190,6 +191,45 @@ class PlaybackActivityRecreationTest {
         }
     }
 
+    /**
+     * Playback Polish (#35 AC1/AC5): a scale mode change applies live and survives an Activity
+     * recreation with no re-negotiation and no extra `prepare` — the coordinator's in-memory state
+     * (retained outside the recreated Activity, same harness as the tests above) is what carries it
+     * through, exactly like subtitle appearance.
+     */
+    @Test
+    fun scale_mode_survives_activity_recreation_without_prepare_restart() {
+        PlaybackRecreationActivity.playbackEndedCount.set(0)
+        ActivityScenario.launch(PlaybackRecreationActivity::class.java).use { scenario ->
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                coordinator.submit(
+                    MediaPlaybackRequest.Resume(
+                        MediaIdentity("server", "movie"),
+                        600_000_000,
+                        HomeScope("server", "user"),
+                        "Arrival",
+                    ),
+                )
+            }
+            waitForActive()
+
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                coordinator.setVideoScaleMode(VideoScaleMode.Zoom)
+            }
+            waitUntil { (coordinator.state.value as? PlaybackState.Active)?.videoScaleMode == VideoScaleMode.Zoom }
+
+            val creationCount = PlaybackRecreationActivity.creationCount.get()
+            scenario.onActivity { it.recreate() }
+            waitUntil { PlaybackRecreationActivity.creationCount.get() > creationCount }
+
+            val active = coordinator.state.value as PlaybackState.Active
+            assertEquals(VideoScaleMode.Zoom, active.videoScaleMode)
+            assertTrue(active.videoScaleModeSupported)
+            assertEquals(listOf(VideoScaleMode.Fit, VideoScaleMode.Zoom), active.supportedScaleModes)
+            assertEquals(1, engine.prepareCount)
+        }
+    }
+
     private fun shell(command: String) {
         InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command).close()
     }
@@ -245,8 +285,11 @@ class PlaybackActivityRecreationTest {
         override val snapshot: PlaybackEngineSnapshot get() = PlaybackEngineSnapshot(positionTicks, isPaused)
         var prepareCount = 0
         override val subtitleAppearanceSupported: Boolean get() = true
+        override val videoScaleModeSupported: Boolean get() = true
+        override val supportedScaleModes: List<VideoScaleMode> get() = listOf(VideoScaleMode.Fit, VideoScaleMode.Zoom)
         val appliedAppearances = mutableListOf<SubtitleAppearance>()
         val appliedExternalSubtitles = mutableListOf<String>()
+        val appliedScaleModes = mutableListOf<VideoScaleMode>()
         override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean) {
             prepareCount++
             positionTicks = startPositionTicks
@@ -257,6 +300,7 @@ class PlaybackActivityRecreationTest {
         override suspend fun playPause() { isPaused = !isPaused }
         override suspend fun seekTo(positionTicks: Long) { this.positionTicks = positionTicks }
         override suspend fun setSubtitleAppearance(appearance: SubtitleAppearance) { appliedAppearances += appearance }
+        override suspend fun setVideoScaleMode(mode: VideoScaleMode) { appliedScaleModes += mode }
         override suspend fun applyExternalSubtitle(localRef: String, mimeType: String, language: String?) {
             appliedExternalSubtitles += localRef
         }

@@ -26,6 +26,7 @@ import dev.chaichai.mobile.core.contracts.SubtitleAppearance
 import dev.chaichai.mobile.core.contracts.SubtitleColorPreset
 import dev.chaichai.mobile.core.contracts.SubtitleEdgeStyle
 import dev.chaichai.mobile.core.contracts.SubtitlePositionBounds
+import dev.chaichai.mobile.core.contracts.VideoScaleMode
 import dev.chaichai.mobile.platform.server.AuthoritativePlaybackPlan
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
@@ -289,20 +290,34 @@ private fun withAlpha(argb: Long, opacity: Float): Int {
 @Composable
 fun Media3VideoSurface(modifier: Modifier = Modifier) {
     val appearance by PlaybackServiceOwner.appearance.collectAsState()
+    val scaleMode by PlaybackServiceOwner.scaleMode.collectAsState()
     AndroidView(
         factory = { context ->
             PlayerView(context).apply {
                 useController = false
                 player = PlaybackServiceOwner.serviceOrNull()?.playerForSurface()
                 applySubtitleAppearance(appearance)
+                resizeMode = scaleMode.toResizeMode()
             }
         },
         update = {
             it.player = PlaybackServiceOwner.serviceOrNull()?.playerForSurface()
             it.applySubtitleAppearance(appearance)
+            it.resizeMode = scaleMode.toResizeMode()
         },
         modifier = modifier,
     )
+}
+
+/**
+ * Maps directly onto Media3's `AspectRatioFrameLayout` resize modes, all appliable to the existing
+ * [PlayerView] in place — switching modes never restarts the player (Playback Polish, #35 AC1).
+ */
+@UnstableApi
+private fun VideoScaleMode.toResizeMode(): Int = when (this) {
+    VideoScaleMode.Fit -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+    VideoScaleMode.Fill -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
+    VideoScaleMode.Zoom -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
 }
 
 internal object PlaybackServiceOwner {
@@ -311,8 +326,10 @@ internal object PlaybackServiceOwner {
     private val mutableEvents = MutableSharedFlow<PlaybackEngineEvent>(extraBufferCapacity = 4)
     private val snapshot = AtomicReference(PlaybackEngineSnapshot(0L, true))
     private val mutableAppearance = MutableStateFlow(SubtitleAppearance.Default)
+    private val mutableScaleMode = MutableStateFlow(VideoScaleMode.Fit)
     val events: SharedFlow<PlaybackEngineEvent> = mutableEvents
     val appearance: StateFlow<SubtitleAppearance> = mutableAppearance
+    val scaleMode: StateFlow<VideoScaleMode> = mutableScaleMode
 
     fun attach(service: PlaybackSessionService) {
         current.set(service)
@@ -332,6 +349,7 @@ internal object PlaybackServiceOwner {
     }
     fun snapshot(): PlaybackEngineSnapshot = snapshot.get()
     fun updateAppearance(appearance: SubtitleAppearance) { mutableAppearance.value = appearance }
+    fun updateScaleMode(mode: VideoScaleMode) { mutableScaleMode.value = mode }
 }
 
 class Media3ServicePlaybackEngine(private val context: Context) : PlaybackEngine {
@@ -345,6 +363,11 @@ class Media3ServicePlaybackEngine(private val context: Context) : PlaybackEngine
     // Media3's PlayerView owns a SubtitleView with native CaptionStyleCompat + fractional text size +
     // bottom padding fraction support, all appliable in place without restarting the player (#33).
     override val subtitleAppearanceSupported: Boolean get() = true
+    // AspectRatioFrameLayout's resize modes (Fit/Fill/Zoom) are all natively applied to the existing
+    // PlayerView surface with no restart, so every VideoScaleMode is reliably supported (#35).
+    override val videoScaleModeSupported: Boolean get() = true
+    override val supportedScaleModes: List<VideoScaleMode> get() =
+        listOf(VideoScaleMode.Fit, VideoScaleMode.Fill, VideoScaleMode.Zoom)
 
     @UnstableApi
     override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean) {
@@ -382,6 +405,9 @@ class Media3ServicePlaybackEngine(private val context: Context) : PlaybackEngine
     }
     override suspend fun setSubtitleAppearance(appearance: SubtitleAppearance) = withContext(Dispatchers.Main.immediate) {
         PlaybackServiceOwner.updateAppearance(appearance)
+    }
+    override suspend fun setVideoScaleMode(mode: VideoScaleMode) = withContext(Dispatchers.Main.immediate) {
+        PlaybackServiceOwner.updateScaleMode(mode)
     }
     @UnstableApi
     override suspend fun applyExternalSubtitle(localRef: String, mimeType: String, language: String?) =

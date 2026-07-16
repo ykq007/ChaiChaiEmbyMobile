@@ -98,6 +98,7 @@ import dev.chaichai.mobile.core.contracts.SubtitleSearchHints
 import dev.chaichai.mobile.core.contracts.SubtitleSearchState
 import dev.chaichai.mobile.core.contracts.TrackDelivery
 import dev.chaichai.mobile.core.contracts.TrackQualifier
+import dev.chaichai.mobile.core.contracts.VideoScaleMode
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.window.Dialog
@@ -305,6 +306,7 @@ private fun PlaybackControls(
                         onSetSpeed = coordinator::setPlaybackSpeed,
                         onAdjustSubtitleDelay = coordinator::setSubtitleDelay,
                         onSetSubtitleAppearance = coordinator::setSubtitleAppearance,
+                        onSetVideoScaleMode = coordinator::setVideoScaleMode,
                         onFindSubtitlesOnline = subtitleProvider?.let {
                             {
                                 onShowTracksChanged(false)
@@ -486,6 +488,7 @@ private fun TracksSurface(
     onSetSpeed: (Float) -> Unit,
     onAdjustSubtitleDelay: (Long) -> Unit,
     onSetSubtitleAppearance: (SubtitleAppearance) -> Unit,
+    onSetVideoScaleMode: (VideoScaleMode) -> Unit,
     onFindSubtitlesOnline: (() -> Unit)? = null,
 ) {
     Dialog(
@@ -563,6 +566,13 @@ private fun TracksSurface(
                     }
                     if (state.subtitleAppearanceSupported) {
                         item { SubtitleAppearanceControls(state.subtitleAppearance, onSetSubtitleAppearance) }
+                    }
+                    if (state.videoScaleModeSupported && state.supportedScaleModes.isNotEmpty()) {
+                        item {
+                            VideoScaleModeControl(
+                                state.videoScaleMode, state.supportedScaleModes, onSetVideoScaleMode,
+                            )
+                        }
                     }
                     item { TrackSectionHeading("Audio") }
                     if (state.audioTracks.isEmpty()) {
@@ -1179,6 +1189,39 @@ private fun PlaybackSpeedControl(speed: Float, onSelect: (Float) -> Unit) {
             }
         }
     }
+}
+
+/**
+ * Aspect/resize control (Playback Polish, #35): ONLY composed above when both
+ * [PlaybackState.Active.videoScaleModeSupported] is true AND [PlaybackState.Active.supportedScaleModes]
+ * is non-empty, and only ever offers the modes IN [supportedScaleModes] — an engine that cannot apply a
+ * mode trustworthily never gets a row for it here, so there is no disabled/failing state to reach
+ * (AC2). Reuses the same accessible choice-row shape as [SubtitleAppearanceControls] (48dp targets,
+ * [Role.RadioButton], live-region value announcement) and applies the selection immediately through
+ * [onSelect] with no local draft — the coordinator republishes the applied value.
+ */
+@Composable
+private fun VideoScaleModeControl(
+    selected: VideoScaleMode,
+    supportedScaleModes: List<VideoScaleMode>,
+    onSelect: (VideoScaleMode) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp).testTag("video-scale-mode-control")) {
+        SubtitleAppearanceChoiceRow(
+            label = "Video fit",
+            options = supportedScaleModes,
+            selected = selected,
+            optionLabel = ::videoScaleModeLabel,
+            testTagPrefix = "video-scale-mode",
+            onSelect = onSelect,
+        )
+    }
+}
+
+private fun videoScaleModeLabel(mode: VideoScaleMode): String = when (mode) {
+    VideoScaleMode.Fit -> "Fit"
+    VideoScaleMode.Fill -> "Fill"
+    VideoScaleMode.Zoom -> "Zoom"
 }
 
 @Composable

@@ -55,6 +55,7 @@ import dev.chaichai.mobile.platform.proxy.KeystoreProxyCredentialVault
 import java.io.File
 import dev.chaichai.mobile.platform.playback.Media3ServicePlaybackEngine
 import dev.chaichai.mobile.platform.playback.PlaybackCoordinatorImpl
+import dev.chaichai.mobile.platform.playback.PlaybackDiagnosticsImpl
 import dev.chaichai.mobile.platform.playback.androidPlaybackCapabilities
 import dev.chaichai.mobile.platform.server.createRoomHomeCache
 import dev.chaichai.mobile.platform.server.createRoomMovieCache
@@ -170,6 +171,9 @@ object ProductionBoundariesModule {
             tester = DanmakuEndpointTester(danmakuClients),
             onConfigChanged = danmakuController::onEndpointsChanged,
         )
+        val playbackEngine = Media3ServicePlaybackEngine(context)
+        val playbackCapabilities = androidPlaybackCapabilities()
+        val playbackPreferences = SharedPreferencesPlaybackPreferences(context)
         val playbackCoordinator = PlaybackCoordinatorImpl(
             applicationScope,
             DurableProgressGateway(
@@ -177,9 +181,22 @@ object ProductionBoundariesModule {
                 progress,
                 clock,
             ),
-            Media3ServicePlaybackEngine(context),
-            androidPlaybackCapabilities(),
-            preferences = SharedPreferencesPlaybackPreferences(context),
+            playbackEngine,
+            playbackCapabilities,
+            preferences = playbackPreferences,
+        )
+        // Playback Polish diagnostics (#35): reads the SAME capabilities/engine/preferences the
+        // coordinator negotiated and applied with — no separate probing path that could drift from
+        // what's actually active — and observes the coordinator's own state to remember the most
+        // recent failure KIND. See PlaybackDiagnosticsImpl's doc comment for exactly what is/isn't
+        // included; assembly here never touches the gateway, so no server token or media URL is ever
+        // in scope.
+        val playbackDiagnostics = PlaybackDiagnosticsImpl(
+            applicationScope,
+            playbackCoordinator.state,
+            playbackCapabilities,
+            playbackEngine,
+            playbackPreferences,
         )
         // Subtitle Expansion (#32): a completely separate provider path that reuses platform:proxy for
         // routing and a subtitle-namespaced Keystore vault for BOTH provider account credentials and
@@ -252,6 +269,7 @@ object ProductionBoundariesModule {
             danmakuEndpoints = danmakuEndpointManager,
             subtitleProvider = subtitleController,
             subtitleProviders = subtitleManager,
+            playbackDiagnostics = playbackDiagnostics,
         )
     }
 }

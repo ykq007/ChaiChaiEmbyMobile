@@ -423,6 +423,38 @@ class PlaybackFlowTest {
     }
 
     @Test
+    fun scale_mode_control_offers_only_the_engines_supported_modes_and_applies_live() {
+        val playback = FakePlayback().apply {
+            mutableState.value = activeWithTracks().copy(
+                videoScaleModeSupported = true,
+                supportedScaleModes = listOf(
+                    dev.chaichai.mobile.core.contracts.VideoScaleMode.Fit,
+                    dev.chaichai.mobile.core.contracts.VideoScaleMode.Zoom,
+                ),
+                videoScaleMode = dev.chaichai.mobile.core.contracts.VideoScaleMode.Fit,
+            )
+        }
+        compose.setContent { ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback) } }
+
+        compose.onNodeWithContentDescription("Tracks").performClick()
+        compose.onNodeWithText("Video fit").assertIsDisplayed()
+        // Fill was never reported as supported by the engine, so it never appears as an option at all.
+        compose.onNodeWithTag("video-scale-mode-Fill").assertDoesNotExist()
+        compose.onNodeWithTag("video-scale-mode-Zoom").performClick()
+
+        assertEquals(listOf(dev.chaichai.mobile.core.contracts.VideoScaleMode.Zoom), playback.scaleModeCalls)
+    }
+
+    @Test
+    fun scale_mode_control_is_hidden_when_the_engine_offers_no_supported_mode() {
+        val playback = FakePlayback().apply { mutableState.value = activeWithTracks() }
+        compose.setContent { ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback) } }
+
+        compose.onNodeWithContentDescription("Tracks").performClick()
+        compose.onNodeWithText("Video fit").assertDoesNotExist()
+    }
+
+    @Test
     fun subtitle_appearance_controls_stay_reachable_and_talkback_labeled_at_large_font_scale() {
         val playback = FakePlayback().apply {
             mutableState.value = activeWithTracks().copy(subtitleAppearanceSupported = true)
@@ -488,6 +520,7 @@ class PlaybackFlowTest {
         val speedCalls = mutableListOf<Float>()
         val subtitleDelayCalls = mutableListOf<Long>()
         val appearanceCalls = mutableListOf<SubtitleAppearance>()
+        val scaleModeCalls = mutableListOf<dev.chaichai.mobile.core.contracts.VideoScaleMode>()
         override fun submit(request: MediaPlaybackRequest) = Unit
         override fun seekBy(deltaTicks: Long) { seekDelta += deltaTicks }
         override fun playPause() { playPauseCount++ }
@@ -496,6 +529,7 @@ class PlaybackFlowTest {
         override fun setPlaybackSpeed(speed: Float) { speedCalls += speed }
         override fun setSubtitleDelay(deltaMillis: Long) { subtitleDelayCalls += deltaMillis }
         override fun setSubtitleAppearance(appearance: SubtitleAppearance) { appearanceCalls += appearance }
+        override fun setVideoScaleMode(mode: dev.chaichai.mobile.core.contracts.VideoScaleMode) { scaleModeCalls += mode }
         override fun toggleControls() {
             toggleControlsCount++
             mutableState.value = (mutableState.value as PlaybackState.Active).copy(

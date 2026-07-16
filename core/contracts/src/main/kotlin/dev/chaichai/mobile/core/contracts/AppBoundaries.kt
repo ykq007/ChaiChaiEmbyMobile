@@ -79,10 +79,33 @@ interface PlaybackCoordinator {
      * for capability gating.
      */
     fun setSubtitleAppearance(appearance: SubtitleAppearance) = Unit
+    /**
+     * Apply a [VideoScaleMode] LIVE — no restart, no gateway renegotiation, position/pause preserved
+     * (Playback Polish, #35). Only ever meaningful when the active engine offers it: see
+     * [PlaybackState.Active.videoScaleModeSupported]/[PlaybackState.Active.supportedScaleModes] for the
+     * capability gate, and [PlaybackPreferences] for the documented persistence scope. The default
+     * no-op keeps existing constructions (fakes, tests) compiling.
+     */
+    fun setVideoScaleMode(mode: VideoScaleMode) = Unit
     fun retry()
     fun retryProgressSync() = Unit
     fun exit()
 }
+
+/**
+ * How the video frame is scaled to fill its surface (Playback Polish, #35). Every case maps directly
+ * onto a Media3 `AspectRatioFrameLayout`/`PlayerView` resize mode that can be applied to the existing
+ * surface in place, so switching modes never restarts playback:
+ * - [Fit] — `RESIZE_MODE_FIT`: the whole frame is visible, letterboxed/pillarboxed as needed.
+ * - [Fill] — `RESIZE_MODE_FILL`: stretches to fill the surface, distorting the aspect ratio.
+ * - [Zoom] — `RESIZE_MODE_ZOOM`: crops to fill the surface with no distortion.
+ *
+ * A mode is only ever OFFERED when the active engine's capability detection reports it as reliably
+ * supported (see `PlaybackEngine.supportedScaleModes` in platform:playback) — an engine that cannot
+ * apply a mode trustworthily simply never lists it, rather than offering a control that could fail or
+ * mislead after selection.
+ */
+enum class VideoScaleMode { Fit, Fill, Zoom }
 
 /**
  * Server-user scoped playback speed and media-scoped subtitle delay preferences.
@@ -103,6 +126,20 @@ interface PlaybackPreferences {
     fun setSubtitleDelay(identity: MediaIdentity, delayMillis: Long) = Unit
     fun subtitleAppearanceFor(scope: HomeScope): SubtitleAppearance = SubtitleAppearance.Default
     fun setSubtitleAppearance(scope: HomeScope, appearance: SubtitleAppearance) = Unit
+    /**
+     * DOCUMENTED SCOPE (#35): the video scale mode is a USER preference, persisted per [HomeScope]
+     * (server+user) exactly like playback speed and subtitle appearance — it reflects how someone likes
+     * video framed on their device generally, not a fact about one media item. A pre-#35 install has no
+     * persisted record for a scope, so this returns [VideoScaleMode.Fit] with no data loss.
+     */
+    fun videoScaleModeFor(scope: HomeScope): VideoScaleMode = VideoScaleMode.Fit
+    fun setVideoScaleMode(scope: HomeScope, mode: VideoScaleMode) = Unit
+    /**
+     * Playback diagnostics opt-in (#35): OFF by default, device-wide (not server/user-scoped) since it
+     * is a privacy decision about this installation, not an account preference.
+     */
+    fun diagnosticsEnabled(): Boolean = false
+    fun setDiagnosticsEnabled(enabled: Boolean) = Unit
 }
 fun interface AppClock { fun now(): Instant }
 interface ConnectivityMonitor { val isOnline: StateFlow<Boolean> }
@@ -420,6 +457,12 @@ sealed interface PlaybackState {
         val subtitleDelaySupported: Boolean = false,
         val subtitleAppearance: SubtitleAppearance = SubtitleAppearance.Default,
         val subtitleAppearanceSupported: Boolean = false,
+        /** Currently-applied scale mode (#35); see [videoScaleModeSupported]/[supportedScaleModes] for the capability gate. */
+        val videoScaleMode: VideoScaleMode = VideoScaleMode.Fit,
+        /** Whether the active engine offers ANY scale mode control at all — gates the control's visibility. */
+        val videoScaleModeSupported: Boolean = false,
+        /** The exact modes the active engine can apply trustworthily right now; only these are ever offered. */
+        val supportedScaleModes: List<VideoScaleMode> = emptyList(),
         val scope: HomeScope? = null,
         val seriesIdentity: MediaIdentity? = null,
         val seasonNumber: Int? = null,
@@ -524,4 +567,5 @@ data class AppBoundaries(
     val danmakuEndpoints: DanmakuEndpointBoundary? = null,
     val subtitleProvider: SubtitleProviderController? = null,
     val subtitleProviders: SubtitleProviderBoundary? = null,
+    val playbackDiagnostics: PlaybackDiagnostics? = null,
 )

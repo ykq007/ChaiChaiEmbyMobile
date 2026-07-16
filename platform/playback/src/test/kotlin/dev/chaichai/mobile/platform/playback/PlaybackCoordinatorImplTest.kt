@@ -12,6 +12,7 @@ import dev.chaichai.mobile.core.contracts.PlaybackTrackType
 import dev.chaichai.mobile.core.contracts.SubtitleAppearance
 import dev.chaichai.mobile.core.contracts.SubtitleColorPreset
 import dev.chaichai.mobile.core.contracts.SubtitlePosition
+import dev.chaichai.mobile.core.contracts.VideoScaleMode
 import dev.chaichai.mobile.platform.server.AuthoritativePlaybackPlan
 import dev.chaichai.mobile.platform.server.DirectPlayCapability
 import dev.chaichai.mobile.platform.server.PlaybackCapabilities
@@ -745,6 +746,138 @@ class PlaybackCoordinatorImplTest {
     }
 
     @Test
+    fun `setting a supported scale mode applies live without renegotiation and persists per scope`() = runTest {
+        val gateway = FakeGateway()
+        val engine = FakeEngine().apply {
+            scaleModeSupportedFlag = true
+            supportedScaleModesList = listOf(VideoScaleMode.Fit, VideoScaleMode.Fill, VideoScaleMode.Zoom)
+        }
+        val preferences = FakePreferences()
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false, preferences)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+        val positionBefore = (coordinator.state.value as PlaybackState.Active).positionTicks
+        val pausedBefore = (coordinator.state.value as PlaybackState.Active).isPaused
+
+        coordinator.setVideoScaleMode(VideoScaleMode.Zoom)
+        advanceUntilIdle()
+
+        val state = coordinator.state.value as PlaybackState.Active
+        assertEquals(VideoScaleMode.Zoom, state.videoScaleMode)
+        assertEquals(VideoScaleMode.Zoom, preferences.videoScaleModeFor(HomeScope("server", "user")))
+        // No renegotiation: exactly the one initial negotiate() call, position/pause unchanged.
+        assertEquals(1, gateway.requests.size)
+        assertEquals(positionBefore, state.positionTicks)
+        assertEquals(pausedBefore, state.isPaused)
+        assertEquals(listOf(VideoScaleMode.Fit, VideoScaleMode.Zoom), engine.appliedScaleModes)
+        coordinator.close()
+    }
+
+    @Test
+    fun `only the engine reported supported scale modes are ever offered and unsupported engines hide the control`() = runTest {
+        val engine = FakeEngine() // scaleModeSupportedFlag defaults to false
+        val coordinator = PlaybackCoordinatorImpl(this, FakeGateway(), engine, capabilities(), false, FakePreferences())
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+
+        val stateBefore = coordinator.state.value as PlaybackState.Active
+        assertFalse(stateBefore.videoScaleModeSupported)
+        assertTrue(stateBefore.supportedScaleModes.isEmpty())
+
+        coordinator.setVideoScaleMode(VideoScaleMode.Zoom)
+        advanceUntilIdle()
+
+        val state = coordinator.state.value as PlaybackState.Active
+        assertEquals(VideoScaleMode.Fit, state.videoScaleMode)
+        assertTrue(engine.appliedScaleModes.isEmpty())
+        coordinator.close()
+    }
+
+    @Test
+    fun `requesting a mode outside the engine's currently supported list is ignored`() = runTest {
+        val engine = FakeEngine().apply {
+            scaleModeSupportedFlag = true
+            supportedScaleModesList = listOf(VideoScaleMode.Fit) // Fill/Zoom NOT trustworthy on this engine
+        }
+        val coordinator = PlaybackCoordinatorImpl(this, FakeGateway(), engine, capabilities(), false, FakePreferences())
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+        engine.appliedScaleModes.clear()
+
+        coordinator.setVideoScaleMode(VideoScaleMode.Zoom)
+        advanceUntilIdle()
+
+        val state = coordinator.state.value as PlaybackState.Active
+        assertEquals(VideoScaleMode.Fit, state.videoScaleMode)
+        assertEquals(listOf(VideoScaleMode.Fit), state.supportedScaleModes)
+        assertTrue(engine.appliedScaleModes.isEmpty())
+        coordinator.close()
+    }
+
+    @Test
+    fun `persisted scale mode applies across media for the same server user without restart`() = runTest {
+        val preferences = FakePreferences()
+        val engine = FakeEngine().apply {
+            scaleModeSupportedFlag = true
+            supportedScaleModesList = listOf(VideoScaleMode.Fit, VideoScaleMode.Fill, VideoScaleMode.Zoom)
+        }
+        val coordinator = PlaybackCoordinatorImpl(this, FakeGateway(), engine, capabilities(), false, preferences)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+        coordinator.setVideoScaleMode(VideoScaleMode.Fill)
+        advanceUntilIdle()
+        coordinator.exit()
+        advanceUntilIdle()
+
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "other"), HomeScope("server", "user")))
+        advanceUntilIdle()
+
+        assertEquals(VideoScaleMode.Fill, (coordinator.state.value as PlaybackState.Active).videoScaleMode)
+        coordinator.close()
+    }
+
+    @Test
+    fun `a pre-#35 install with no persisted scale mode migrates to Fit with no loss`() = runTest {
+        val engine = FakeEngine().apply {
+            scaleModeSupportedFlag = true
+            supportedScaleModesList = listOf(VideoScaleMode.Fit, VideoScaleMode.Fill, VideoScaleMode.Zoom)
+        }
+        // FakePreferences.videoScaleModeFor already defaults an absent scope to Fit, mirroring the
+        // SharedPreferences-backed implementation's absent-key migration behavior.
+        val coordinator = PlaybackCoordinatorImpl(this, FakeGateway(), engine, capabilities(), false, FakePreferences())
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+
+        val state = coordinator.state.value as PlaybackState.Active
+        assertEquals(VideoScaleMode.Fit, state.videoScaleMode)
+        assertEquals(listOf(VideoScaleMode.Fit), engine.appliedScaleModes)
+        coordinator.close()
+    }
+
+    @Test
+    fun `scale mode survives a track change and is republished`() = runTest {
+        val gateway = FakeGateway()
+        val engine = FakeEngine().apply {
+            scaleModeSupportedFlag = true
+            supportedScaleModesList = listOf(VideoScaleMode.Fit, VideoScaleMode.Fill, VideoScaleMode.Zoom)
+        }
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false, FakePreferences())
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+        coordinator.setVideoScaleMode(VideoScaleMode.Zoom)
+        advanceUntilIdle()
+        engine.appliedScaleModes.clear()
+
+        coordinator.selectTrack(PlaybackTrackSelection(audioStreamIndex = 2))
+        advanceUntilIdle()
+
+        val state = coordinator.state.value as PlaybackState.Active
+        assertEquals(VideoScaleMode.Zoom, state.videoScaleMode)
+        assertEquals(listOf(VideoScaleMode.Zoom), engine.appliedScaleModes)
+        coordinator.close()
+    }
+
+    @Test
     fun `missing markers offer no skip target`() = runTest {
         val coordinator = PlaybackCoordinatorImpl(this, FakeGateway(), FakeEngine(), capabilities(), false)
         coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
@@ -902,6 +1035,9 @@ class PlaybackCoordinatorImplTest {
         override fun setSubtitleAppearance(scope: HomeScope, appearance: SubtitleAppearance) {
             appearances[scope] = appearance
         }
+        val scaleModes = mutableMapOf<HomeScope, VideoScaleMode>()
+        override fun videoScaleModeFor(scope: HomeScope): VideoScaleMode = scaleModes[scope] ?: VideoScaleMode.Fit
+        override fun setVideoScaleMode(scope: HomeScope, mode: VideoScaleMode) { scaleModes[scope] = mode }
     }
 
     private fun capabilities() = PlaybackCapabilities(
@@ -958,17 +1094,23 @@ class PlaybackCoordinatorImplTest {
         var speedSupported = false
         var subtitleDelaySupportedFlag = false
         var subtitleAppearanceSupportedFlag = false
+        var scaleModeSupportedFlag = false
+        var supportedScaleModesList: List<VideoScaleMode> = emptyList()
         override val speedControlSupported: Boolean get() = speedSupported
         override val subtitleDelaySupported: Boolean get() = subtitleDelaySupportedFlag
         override val subtitleAppearanceSupported: Boolean get() = subtitleAppearanceSupportedFlag
+        override val videoScaleModeSupported: Boolean get() = scaleModeSupportedFlag
+        override val supportedScaleModes: List<VideoScaleMode> get() = supportedScaleModesList
         val appliedSpeeds = mutableListOf<Float>()
         val appliedSubtitleDelays = mutableListOf<Long>()
         val appliedAppearances = mutableListOf<SubtitleAppearance>()
+        val appliedScaleModes = mutableListOf<VideoScaleMode>()
         val appliedExternalSubtitles = mutableListOf<String>()
         var externalSubtitleFailure: Exception? = null
         override suspend fun setSpeed(speed: Float) { appliedSpeeds += speed }
         override suspend fun setSubtitleDelayMs(delayMs: Long) { appliedSubtitleDelays += delayMs }
         override suspend fun setSubtitleAppearance(appearance: SubtitleAppearance) { appliedAppearances += appearance }
+        override suspend fun setVideoScaleMode(mode: VideoScaleMode) { appliedScaleModes += mode }
         override suspend fun applyExternalSubtitle(localRef: String, mimeType: String, language: String?) {
             externalSubtitleFailure?.let { throw it }
             appliedExternalSubtitles += localRef
