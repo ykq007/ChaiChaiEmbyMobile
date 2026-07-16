@@ -15,6 +15,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.MediaIdentity
+import dev.chaichai.mobile.core.contracts.MediaMarker
 import dev.chaichai.mobile.core.contracts.PlaybackTrack
 import dev.chaichai.mobile.core.contracts.PlaybackTrackType
 import dev.chaichai.mobile.core.contracts.TrackDelivery
@@ -73,6 +74,15 @@ data class AuthoritativePlaybackPlan(
     val subtitleStreamIndex: Int?,
     val audioTracks: List<PlaybackTrack> = emptyList(),
     val subtitleTracks: List<PlaybackTrack> = emptyList(),
+    /**
+     * Trustworthy intro/outro markers for this negotiated item (issue #34), if the server provided
+     * any. Rides on the plan rather than a separate lookup so it can never be mistaken for another
+     * item's markers: it only ever exists for the identity this exact plan was negotiated for, and is
+     * replaced/discarded the moment [PlaybackCoordinator] negotiates a different plan (track change,
+     * new request, exit). [PlaybackCoordinatorImpl] validates each marker against [runtimeTicks] (see
+     * `MediaMarker.isValid`) before it can ever be surfaced as a `SkipTarget`.
+     */
+    val markers: List<MediaMarker> = emptyList(),
 ) {
     val mediaSourceId: String get() = sessionReference.mediaSourceId
     val playSessionId: String get() = sessionReference.playSessionId
@@ -190,6 +200,11 @@ class EmbyPlaybackGateway(
                                 PlaybackTrackType.Subtitle,
                                 selected.source.defaultSubtitleStreamIndex,
                             ),
+                            // Real marker fetch (Emby MediaSegments) is deferred to #35: an extra
+                            // network round trip here is left for a follow-up so it can be added with
+                            // its own retry/caching story rather than one more unconditional call on
+                            // every negotiation. `markers` defaults to empty, which is non-breaking and
+                            // simply keeps the Skip control hidden until that wiring lands.
                         ),
                     )
                 }

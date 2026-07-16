@@ -55,6 +55,7 @@ import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.isTraversalGroup
@@ -85,6 +86,7 @@ import dev.chaichai.mobile.core.contracts.PlaybackProgressSync
 import dev.chaichai.mobile.core.contracts.PlaybackTrack
 import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
 import dev.chaichai.mobile.core.contracts.PlaybackTrackType
+import dev.chaichai.mobile.core.contracts.SkipTarget
 import dev.chaichai.mobile.core.contracts.SubtitleAppearance
 import dev.chaichai.mobile.core.contracts.SubtitleCandidate
 import dev.chaichai.mobile.core.contracts.SubtitleColorPreset
@@ -262,6 +264,20 @@ private fun PlaybackControls(
                     DanmakuStatusBadge(danmakuState, Modifier.padding(top = 4.dp))
                 }
             }
+            val skipTarget = state.skipTargets.firstOrNull()
+            if (skipTarget != null) {
+                // A dedicated Column slot ABOVE the transport row (issue #34 AC3): being its own
+                // sibling inside this vertically-stacked Column guarantees it can never overlap
+                // "playback-transport" below it, and it already sits inside the safe-drawing-inset
+                // Column shared by every other control here, so it stays clear of system/cutout/fold/
+                // hinge insets the same way the header and timeline do.
+                Box(
+                    Modifier.fillMaxWidth().testTag("playback-skip-row"),
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    SkipTargetButton(skipTarget, coordinator::skip)
+                }
+            }
             Box(Modifier.fillMaxWidth().testTag("playback-transport").semantics { traversalIndex = 1f }) {
                 PrimaryTransport(state, coordinator)
             }
@@ -348,6 +364,31 @@ private fun BoxScope.ProgressSyncFailure(message: String, onRetry: () -> Unit) {
                 maxLines = 2,
             )
             Button(onClick = onRetry) { Text("Retry") }
+        }
+    }
+}
+
+/**
+ * Skip intro/outro action (issue #34): only ever composed when [PlaybackState.Active.skipTargets]
+ * currently offers it, so it appears/disappears cleanly as playback crosses the validated marker's
+ * window. A 48dp target with an explicit [Role.Button] and [target]'s user-facing label as its
+ * accessible name/announcement, placed by its caller in its own safe-inset Column slot clear of the
+ * primary transport row.
+ */
+@Composable
+private fun SkipTargetButton(target: SkipTarget, onSkip: (SkipTarget) -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
+        modifier = Modifier.testTag("skip-${target.kind.name.lowercase(Locale.ROOT)}"),
+    ) {
+        TextButton(
+            onClick = { onSkip(target) },
+            modifier = Modifier.heightIn(min = 48.dp).semantics {
+                role = Role.Button
+                contentDescription = target.label
+            },
+        ) {
+            Text(target.label, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

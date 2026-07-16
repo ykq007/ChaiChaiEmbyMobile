@@ -744,6 +744,151 @@ class PlaybackCoordinatorImplTest {
         coordinator.close()
     }
 
+    @Test
+    fun `missing markers offer no skip target`() = runTest {
+        val coordinator = PlaybackCoordinatorImpl(this, FakeGateway(), FakeEngine(), capabilities(), false)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+
+        assertTrue((coordinator.state.value as PlaybackState.Active).skipTargets.isEmpty())
+        coordinator.close()
+    }
+
+    @Test
+    fun `skip intro is offered only within its window and disappears once passed`() = runTest {
+        val gateway = FakeGateway().apply {
+            markers = listOf(dev.chaichai.mobile.core.contracts.MediaMarker(
+                dev.chaichai.mobile.core.contracts.MarkerKind.Intro, 0, 900_000_000,
+            ))
+        }
+        val engine = FakeEngine()
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+
+        val offered = coordinator.state.value as PlaybackState.Active
+        assertEquals(1, offered.skipTargets.size)
+        assertEquals(dev.chaichai.mobile.core.contracts.MarkerKind.Intro, offered.skipTargets.single().kind)
+
+        engine.eventsFlow.emit(PlaybackEngineEvent.Progress(
+            dev.chaichai.mobile.platform.server.PlaybackProgressEvent.TimeUpdate, 1_000_000_000, false,
+        ))
+        advanceUntilIdle()
+
+        assertTrue((coordinator.state.value as PlaybackState.Active).skipTargets.isEmpty())
+        coordinator.close()
+    }
+
+    @Test
+    fun `activating skip intro seeks to the boundary and preserves pause tracks and session`() = runTest {
+        val gateway = FakeGateway().apply {
+            markers = listOf(dev.chaichai.mobile.core.contracts.MediaMarker(
+                dev.chaichai.mobile.core.contracts.MarkerKind.Intro, 0, 900_000_000,
+            ))
+        }
+        val engine = FakeEngine()
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
+            MediaIdentity("server", "movie"), HomeScope("server", "user"), "Arrival",
+        ))
+        advanceUntilIdle()
+        coordinator.playPause() // pause it before skipping
+        advanceUntilIdle()
+        val negotiationsBefore = gateway.requests.size
+        val before = coordinator.state.value as PlaybackState.Active
+        val target = before.skipTargets.single()
+
+        coordinator.skip(target)
+        advanceUntilIdle()
+
+        val after = coordinator.state.value as PlaybackState.Active
+        assertEquals(900_000_000L, after.positionTicks)
+        assertTrue(after.isPaused) // paused state preserved, not restarted
+        assertEquals(negotiationsBefore, gateway.requests.size) // no renegotiation
+        assertEquals(before.audioTracks, after.audioTracks)
+        assertTrue(after.skipTargets.isEmpty()) // already past the intro window
+        // Progress reporting flows through the same seek path used elsewhere.
+        assertTrue(gateway.reports.any {
+            it.kind == PlaybackReportKind.Progress &&
+                it.event == dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek &&
+                it.positionTicks == 900_000_000L
+        })
+        coordinator.close()
+    }
+
+    @Test
+    fun `activating skip a second time after it already fired is a no-op`() = runTest {
+        val gateway = FakeGateway().apply {
+            markers = listOf(dev.chaichai.mobile.core.contracts.MediaMarker(
+                dev.chaichai.mobile.core.contracts.MarkerKind.Intro, 0, 900_000_000,
+            ))
+        }
+        val engine = FakeEngine()
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+        val target = (coordinator.state.value as PlaybackState.Active).skipTargets.single()
+
+        coordinator.skip(target)
+        advanceUntilIdle()
+        val positionAfterFirst = (coordinator.state.value as PlaybackState.Active).positionTicks
+        coordinator.skip(target) // stale: no longer in skipTargets, must be ignored
+        advanceUntilIdle()
+
+        assertEquals(positionAfterFirst, (coordinator.state.value as PlaybackState.Active).positionTicks)
+        coordinator.close()
+    }
+
+    @Test
+    fun `two synchronous skip activations before the seek settles only seek once`() = runTest {
+        val gateway = FakeGateway().apply {
+            markers = listOf(dev.chaichai.mobile.core.contracts.MediaMarker(
+                dev.chaichai.mobile.core.contracts.MarkerKind.Intro, 0, 900_000_000,
+            ))
+        }
+        val engine = FakeEngine()
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+        val target = (coordinator.state.value as PlaybackState.Active).skipTargets.single()
+        val seeksBefore = gateway.reports.count {
+            it.event == dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek
+        }
+
+        coordinator.skip(target)
+        coordinator.skip(target) // fired before the first has published a new state: must be ignored
+        advanceUntilIdle()
+
+        val seeksAfter = gateway.reports.count {
+            it.event == dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek
+        }
+        assertEquals(1, seeksAfter - seeksBefore)
+        coordinator.close()
+    }
+
+    @Test
+    fun `markers from a superseded media never leak into the replacement plan`() = runTest {
+        val gateway = FakeGateway().apply {
+            markers = listOf(dev.chaichai.mobile.core.contracts.MediaMarker(
+                dev.chaichai.mobile.core.contracts.MarkerKind.Intro, 0, 900_000_000,
+            ))
+        }
+        val engine = FakeEngine()
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "old"), HomeScope("server", "user"), "Old"))
+        advanceUntilIdle()
+        assertEquals(1, (coordinator.state.value as PlaybackState.Active).skipTargets.size)
+
+        gateway.markers = emptyList()
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "new"), HomeScope("server", "user"), "New"))
+        advanceUntilIdle()
+
+        val replacement = coordinator.state.value as PlaybackState.Active
+        assertEquals("New", replacement.title)
+        assertTrue(replacement.skipTargets.isEmpty())
+        coordinator.close()
+    }
+
     private class FakePreferences : PlaybackPreferences {
         val speeds = mutableMapOf<HomeScope, Float>()
         val delays = mutableMapOf<MediaIdentity, Long>()
@@ -772,6 +917,7 @@ class PlaybackCoordinatorImplTest {
         val reports = mutableListOf<PlaybackReport>()
         var onReport: (PlaybackReport) -> Unit = {}
         var failTrackChanges = false
+        var markers: List<dev.chaichai.mobile.core.contracts.MediaMarker> = emptyList()
         override suspend fun negotiate(request: ScopedPlaybackRequest, capabilities: PlaybackCapabilities): PlaybackNegotiationResult {
             this.request = request
             requests += request
@@ -788,6 +934,7 @@ class PlaybackCoordinatorImplTest {
                     audioTracks = listOf(1, 2).map { index ->
                         PlaybackTrack(index, PlaybackTrackType.Audio, isCurrent = index == audioIndex)
                     },
+                    markers = markers,
                 ),
             )
         }

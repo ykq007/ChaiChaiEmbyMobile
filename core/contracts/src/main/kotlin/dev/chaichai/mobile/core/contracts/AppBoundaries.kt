@@ -54,6 +54,14 @@ interface PlaybackCoordinator {
     fun playPause()
     fun seekBy(deltaTicks: Long)
     fun seekTo(positionTicks: Long)
+    /**
+     * Activate a currently-offered [SkipTarget] (Skip intro/outro, #34): reuses the existing internal
+     * seek path to the validated boundary — no renegotiation, session/tracks/subtitles untouched,
+     * progress reported and Danmaku resynced exactly like any other seek. A [target] that is no longer
+     * present in the active state's `skipTargets` (already skipped, superseded media, expired) is
+     * silently ignored. Default no-op keeps existing constructions (fakes, tests) compiling.
+     */
+    fun skip(target: SkipTarget) = Unit
     fun selectTrack(selection: PlaybackTrackSelection) = Unit
     /**
      * Activate a provider-downloaded External subtitle as the current subtitle track WITHOUT
@@ -416,6 +424,12 @@ sealed interface PlaybackState {
         val seriesIdentity: MediaIdentity? = null,
         val seasonNumber: Int? = null,
         val episodeNumber: Int? = null,
+        /**
+         * Currently-offered Skip intro/outro actions (issue #34), already validated for THIS identity,
+         * within `[0, runtimeTicks]`, and recomputed against [positionTicks] every time it changes.
+         * Empty whenever no marker is valid/current — the skip control disappears cleanly.
+         */
+        val skipTargets: List<SkipTarget> = emptyList(),
     ) : PlaybackState
     data class Failed(val reason: PlaybackFailureKind) : PlaybackState
     data class Exited(val identity: MediaIdentity) : PlaybackState

@@ -11,6 +11,8 @@ import dev.chaichai.mobile.core.contracts.PlaybackPreferences
 import dev.chaichai.mobile.core.contracts.PlaybackState
 import dev.chaichai.mobile.core.contracts.PlaybackProgressSync
 import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
+import dev.chaichai.mobile.core.contracts.SkipTarget
+import dev.chaichai.mobile.core.contracts.SkipTargets
 import dev.chaichai.mobile.core.contracts.SubtitleAppearance
 import dev.chaichai.mobile.platform.server.AuthoritativePlaybackPlan
 import dev.chaichai.mobile.platform.server.PlaybackCapabilities
@@ -103,6 +105,7 @@ class PlaybackCoordinatorImpl(
     private var currentSubtitleDelayMillis: Long = 0L
     private var currentSubtitleAppearance: SubtitleAppearance = SubtitleAppearance.Default
     private var activeExternalSubtitle: PlaybackTrack? = null
+    private var skipInFlight = false
 
     private val engineEventJob = scope.launch {
             engine.events.collect { event ->
@@ -214,10 +217,37 @@ class PlaybackCoordinatorImpl(
     override fun seekTo(positionTicks: Long) {
         val current = mutableState.value as? PlaybackState.Active ?: return
         val plan = activePlan ?: return
+        scope.launch { performSeek(current.title, positionTicks, plan) }
+    }
+
+    /**
+     * Activate Skip intro/outro (#34). Reuses [performSeek] — the exact same internal seek path as
+     * [seekTo] — so session/tracks/subtitles are untouched and Danmaku resyncs via the republished
+     * [PlaybackState.Active.positionTicks] exactly like any other seek; no gateway renegotiation.
+     * Guarded twice against duplicate/stale activation: [target] must still be present in the
+     * currently-offered `current.skipTargets` (a marker that already scrolled out of its window, or
+     * belongs to a plan that has since been replaced by a track change/new request, will not be there),
+     * and [skipInFlight] blocks a second synchronous tap from double-seeking before the first one's
+     * state republish lands.
+     */
+    override fun skip(target: SkipTarget) {
+        val current = mutableState.value as? PlaybackState.Active ?: return
+        val plan = activePlan ?: return
+        if (target !in current.skipTargets) return
+        if (skipInFlight) return
+        skipInFlight = true
         scope.launch {
-            engine.seekTo(positionTicks.coerceIn(0, plan.runtimeTicks))
-            publishActive(current.title, controlsVisible = true)
+            try {
+                performSeek(current.title, target.seekToTicks, plan)
+            } finally {
+                skipInFlight = false
+            }
         }
+    }
+
+    private suspend fun performSeek(title: String, positionTicks: Long, plan: AuthoritativePlaybackPlan) {
+        engine.seekTo(positionTicks.coerceIn(0, plan.runtimeTicks))
+        publishActive(title, controlsVisible = true)
     }
 
     override fun selectTrack(selection: PlaybackTrackSelection) {
@@ -392,12 +422,16 @@ class PlaybackCoordinatorImpl(
         val current = mutableState.value as? PlaybackState.Active
         if (current != null && !current.isChangingTrack) {
             mutableIsPlaying.value = !event.isPaused
+            val positionTicks = event.positionTicks.coerceIn(0, plan.runtimeTicks)
             mutableState.value = current.copy(
-                positionTicks = event.positionTicks.coerceIn(0, plan.runtimeTicks),
+                positionTicks = positionTicks,
                 isPaused = event.isPaused,
                 controlsVisible = if (
                     event.event == dev.chaichai.mobile.platform.server.PlaybackProgressEvent.TimeUpdate
                 ) current.controlsVisible else true,
+                // Recomputed every progress tick so a skip target appears/disappears cleanly as
+                // playback crosses its window, not just on the once-a-second timeline republish.
+                skipTargets = SkipTargets.current(plan.markers, plan.runtimeTicks, positionTicks),
             )
         }
         scope.launch {
@@ -543,6 +577,10 @@ class PlaybackCoordinatorImpl(
             subtitleAppearance = currentSubtitleAppearance,
             subtitleAppearanceSupported = engine.subtitleAppearanceSupported,
             scope = plan.request.scope,
+            // Markers only ever ride on the CURRENTLY active plan (see AuthoritativePlaybackPlan.markers
+            // doc), so this can never surface a skip target left over from a superseded/changed item;
+            // recomputed every publish against the live position so it appears/disappears cleanly.
+            skipTargets = SkipTargets.current(plan.markers, plan.runtimeTicks, snapshot.positionTicks),
         )
     }
 
@@ -553,6 +591,7 @@ class PlaybackCoordinatorImpl(
             isPaused = engine.isPaused,
             controlsVisible = true,
             isChangingTrack = false,
+            skipTargets = SkipTargets.current(plan.markers, plan.runtimeTicks, engine.positionTicks),
             trackChangeError = "That track couldn't be applied. The previous track is still playing.",
         )
     }
