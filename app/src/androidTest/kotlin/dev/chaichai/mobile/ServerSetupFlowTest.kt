@@ -89,7 +89,10 @@ class ServerSetupFlowTest {
             waitForText("Sign in to Cinema")
             composeRule.onNodeWithText("Password").performTextInput("replacement-password")
             composeRule.onNodeWithText("Sign in", useUnmergedTree = true).performClick()
-            composeRule.waitUntil(5_000) {
+            // Re-auth drives a real MockWebServer round trip on Dispatchers.Default; on the slow
+            // large-window CI emulator the whole flow can take ~2x longer, so give the terminal
+            // Home-heading assertion a generous budget rather than the tight default.
+            composeRule.waitUntil(15_000) {
                 composeRule.onAllNodes(hasText("Search") and isHeading()).fetchSemanticsNodes().isNotEmpty()
             }
 
@@ -98,7 +101,7 @@ class ServerSetupFlowTest {
                 scope, EmbyProbe(), EmbyAuthenticator(), vault, "binding-device", restoredGateway,
             )
             assertTrue(runBlocking {
-                withTimeout(5_000) { restored.state.first { it !is ServerSetupState.Restoring } }
+                withTimeout(15_000) { restored.state.first { it !is ServerSetupState.Restoring } }
             } is ServerSetupState.Authenticated)
         }
         vault.clear()
@@ -106,7 +109,7 @@ class ServerSetupFlowTest {
     }
 
     private fun waitForText(text: String) {
-        composeRule.waitUntil(5_000) {
+        composeRule.waitUntil(10_000) {
             composeRule.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
         }
     }
