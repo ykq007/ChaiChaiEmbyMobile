@@ -71,6 +71,19 @@ class DanmakuCommentTrackTest {
     }
 
     @Test
+    fun lane_scale_shrinks_the_effective_budget_but_never_below_one() {
+        // 100 comments at the same instant: a small laneScale (tuning's screenFraction) still caps
+        // density, just to a smaller budget, and never drops below a single lane/comment.
+        val comments = (0 until 100).map { DanmakuComment(0, "c$it") }
+        val track = DanmakuCommentTrack(comments)
+        val shrunk = track.snapshotAt(0, isPaused = false, speed = 1.0f, laneScale = 0.3f)
+        assertTrue(shrunk.visible.size in 1..DanmakuCommentTrack.MAX_LANES)
+        assertTrue(shrunk.visible.size < track.snapshotAt(0, isPaused = false, speed = 1.0f).visible.size)
+        val tiny = track.snapshotAt(0, isPaused = false, speed = 1.0f, laneScale = 0f)
+        assertEquals(1, tiny.visible.size)
+    }
+
+    @Test
     fun pinned_comments_are_placed_without_horizontal_lanes() {
         val track = DanmakuCommentTrack(
             listOf(DanmakuComment(0, "top", position = DanmakuPosition.Top)),

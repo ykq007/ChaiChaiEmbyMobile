@@ -3,6 +3,7 @@ apply(from = rootProject.file("gradle/feature-module.gradle"))
 dependencies {
     add("implementation", project(":core:contracts"))
     add("implementation", project(":platform:adaptive"))
+    add("implementation", project(":design:system"))
     add("implementation", "androidx.compose.foundation:foundation")
     add("implementation", "androidx.compose.material3:material3")
     add("implementation", "androidx.compose.material:material-icons-extended")

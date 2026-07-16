@@ -36,7 +36,9 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import dev.chaichai.mobile.core.contracts.DanmakuPosition
 import dev.chaichai.mobile.core.contracts.DanmakuState
+import dev.chaichai.mobile.core.contracts.DanmakuTuning
 import dev.chaichai.mobile.core.contracts.DanmakuVisibleComment
+import dev.chaichai.mobile.design.system.LocalReducedMotion
 
 /** Wall-clock seconds a scroll comment takes to cross; mirrors the platform track's default. */
 private const val SCROLL_WINDOW_SECONDS = 8.0
@@ -54,6 +56,8 @@ private val LANE_HEIGHT = 30.dp
 internal fun DanmakuOverlay(state: DanmakuState, modifier: Modifier = Modifier) {
     val active = state as? DanmakuState.Active ?: return
     val snapshot = active.overlay
+    val tuning = active.tuning
+    val reducedMotion = LocalReducedMotion.current
     BoxWithConstraints(
         modifier
             .fillMaxSize()
@@ -63,18 +67,24 @@ internal fun DanmakuOverlay(state: DanmakuState, modifier: Modifier = Modifier) 
         val density = LocalDensity.current
         val widthPx = with(density) { maxWidth.toPx() }
         val laneHeightPx = with(density) { LANE_HEIGHT.toPx() }
-        val bottomPx = with(density) { maxHeight.toPx() }
+        val usableHeightPx = with(density) { maxHeight.toPx() } * tuning.screenFraction.coerceIn(0.1f, 1f)
         val scrollWindowTicks = (SCROLL_WINDOW_SECONDS * snapshot.speed * TICKS_PER_SECOND).toLong().coerceAtLeast(1L)
 
+        // Reduced motion: freeze on the position-derived snapshot instead of interpolating frames.
         var frameNanos by remember(snapshot) { mutableStateOf(0L) }
         val baseNanos = remember(snapshot) { System.nanoTime() }
-        LaunchedEffect(snapshot) {
+        LaunchedEffect(snapshot, reducedMotion) {
+            if (reducedMotion) return@LaunchedEffect
             while (true) {
                 frameNanos = withFrameNanos { it }
                 if (snapshot.isPaused) break
             }
         }
-        val elapsedSeconds = if (snapshot.isPaused) 0.0 else ((frameNanos - baseNanos).coerceAtLeast(0L)) / 1_000_000_000.0
+        val elapsedSeconds = if (snapshot.isPaused || reducedMotion) {
+            0.0
+        } else {
+            ((frameNanos - baseNanos).coerceAtLeast(0L)) / 1_000_000_000.0
+        }
         val livePositionTicks = snapshot.positionTicks + (elapsedSeconds * snapshot.speed * TICKS_PER_SECOND).toLong()
 
         // Reserve a band away from the very top (header) and very bottom (timeline) controls.
@@ -87,9 +97,9 @@ internal fun DanmakuOverlay(state: DanmakuState, modifier: Modifier = Modifier) 
                 DanmakuPosition.Scroll, DanmakuPosition.Top ->
                     (topBandPx + visible.lane * laneHeightPx).toInt()
                 DanmakuPosition.Bottom ->
-                    (bottomPx - laneHeightPx * 2 - visible.lane * laneHeightPx).coerceAtLeast(topBandPx).toInt()
+                    (usableHeightPx - laneHeightPx * 2 - visible.lane * laneHeightPx).coerceAtLeast(topBandPx).toInt()
             }
-            DanmakuCommentLabel(visible, Modifier.offset { IntOffset(x, y) })
+            DanmakuCommentLabel(visible, tuning, Modifier.offset { IntOffset(x, y) })
         }
     }
 }
@@ -110,11 +120,14 @@ private fun liveXFraction(
 }
 
 @Composable
-private fun DanmakuCommentLabel(visible: DanmakuVisibleComment, modifier: Modifier) {
+private fun DanmakuCommentLabel(visible: DanmakuVisibleComment, tuning: DanmakuTuning, modifier: Modifier) {
+    val baseColor = Color(visible.comment.colorArgb)
     Text(
         text = visible.comment.text,
-        color = Color(visible.comment.colorArgb),
-        style = MaterialTheme.typography.bodyMedium,
+        color = baseColor.copy(alpha = (baseColor.alpha * tuning.opacity.coerceIn(0f, 1f))),
+        style = MaterialTheme.typography.bodyMedium.copy(
+            fontSize = MaterialTheme.typography.bodyMedium.fontSize * tuning.textScale.coerceIn(0.5f, 2f),
+        ),
         maxLines = 1,
         overflow = TextOverflow.Clip,
         modifier = modifier,
@@ -122,17 +135,17 @@ private fun DanmakuCommentLabel(visible: DanmakuVisibleComment, modifier: Modifi
 }
 
 /**
- * The single minimal danmaku entry affordance for the controls (full configuration is a later
- * capability). Toggles danmaku on/off and exposes a stable [testTag].
+ * The single labeled Danmaku entry point for the controls: opens the danmaku panel (enable,
+ * status, match correction, tuning) rather than crowding the transport row with per-feature toggles.
  */
 @Composable
-internal fun DanmakuToggleButton(state: DanmakuState, onSetEnabled: (Boolean) -> Unit) {
+internal fun DanmakuEntryButton(state: DanmakuState, onOpenPanel: () -> Unit) {
     val enabled = state !is DanmakuState.Disabled
     IconButton(
-        onClick = { onSetEnabled(!enabled) },
+        onClick = onOpenPanel,
         modifier = Modifier
-            .testTag("danmaku-toggle")
-            .semantics { contentDescription = if (enabled) "Turn danmaku off" else "Turn danmaku on" },
+            .testTag("danmaku-entry")
+            .semantics { contentDescription = "Danmaku" },
     ) {
         Icon(
             imageVector = if (enabled) Icons.Default.Comment else Icons.Default.CommentsDisabled,

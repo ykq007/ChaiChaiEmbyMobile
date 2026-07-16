@@ -32,13 +32,17 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -69,7 +73,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.DisposableEffect
 import dev.chaichai.mobile.core.contracts.DanmakuController
+import dev.chaichai.mobile.core.contracts.DanmakuMatchOption
+import dev.chaichai.mobile.core.contracts.DanmakuMatchOptions
+import dev.chaichai.mobile.core.contracts.DanmakuMediaKey
+import dev.chaichai.mobile.core.contracts.DanmakuPosition
 import dev.chaichai.mobile.core.contracts.DanmakuState
+import dev.chaichai.mobile.core.contracts.DanmakuTuning
 import dev.chaichai.mobile.core.contracts.PlaybackCoordinator
 import dev.chaichai.mobile.core.contracts.PlaybackState
 import dev.chaichai.mobile.core.contracts.PlaybackProgressSync
@@ -108,12 +117,17 @@ fun PlaybackHost(
     }
     val playbackKey = (state as? PlaybackState.Active)?.identity?.let { "${it.serverId}:${it.itemId}" } ?: "none"
     var showTracks by rememberSaveable(playbackKey) { mutableStateOf(false) }
+    var showDanmakuPanel by rememberSaveable(playbackKey) { mutableStateOf(false) }
     LaunchedEffect(state) {
         if (state is PlaybackState.Exited || state is PlaybackState.Failed) onPlaybackEnded()
     }
     PredictiveBackHandler(enabled = state !is PlaybackState.Idle && state !is PlaybackState.Exited) { progress ->
         progress.collect { }
-        if (showTracks) showTracks = false else coordinator.exit()
+        when {
+            showDanmakuPanel -> showDanmakuPanel = false
+            showTracks -> showTracks = false
+            else -> coordinator.exit()
+        }
     }
     when (val snapshot = state) {
         PlaybackState.Idle, is PlaybackState.Exited -> Unit
@@ -122,7 +136,8 @@ fun PlaybackHost(
         )
         is PlaybackState.Active -> PlaybackControls(
             snapshot, coordinator, onToggleOrientation, onToggleFullscreen,
-            windowLayout, keepControlsVisible, showTracks, { showTracks = it }, danmaku, modifier,
+            windowLayout, keepControlsVisible, showTracks, { showTracks = it },
+            showDanmakuPanel, { showDanmakuPanel = it }, danmaku, modifier,
         )
         is PlaybackState.Failed -> PlaybackFailure(snapshot, coordinator, modifier)
     }
@@ -155,9 +170,17 @@ private fun DanmakuPlaybackBridge(danmaku: DanmakuController, state: PlaybackSta
     val active = state as? PlaybackState.Active
     val identity = active?.identity
     val scope = active?.scope
-    LaunchedEffect(danmaku, identity, scope) {
+    val seriesIdentity = active?.seriesIdentity
+    val seasonNumber = active?.seasonNumber
+    val episodeNumber = active?.episodeNumber
+    LaunchedEffect(danmaku, identity, scope, seriesIdentity, seasonNumber, episodeNumber) {
         if (active != null && identity != null && scope != null) {
-            danmaku.attach(identity, scope, active.title, active.runtimeTicks)
+            val mediaKey = if (seriesIdentity != null && seasonNumber != null && episodeNumber != null) {
+                DanmakuMediaKey.Episode(identity.serverId, seriesIdentity.itemId, seasonNumber, episodeNumber)
+            } else {
+                null
+            }
+            danmaku.attach(identity, scope, active.title, active.runtimeTicks, mediaKey)
         }
     }
     LaunchedEffect(danmaku, active?.positionTicks, active?.isPaused, active?.playbackSpeed) {
@@ -176,6 +199,8 @@ private fun PlaybackControls(
     keepControlsVisible: Boolean,
     showTracks: Boolean,
     onShowTracksChanged: (Boolean) -> Unit,
+    showDanmakuPanel: Boolean,
+    onShowDanmakuPanelChanged: (Boolean) -> Unit,
     danmaku: DanmakuController?,
     modifier: Modifier,
 ) {
@@ -215,9 +240,9 @@ private fun PlaybackControls(
                     onToggleFullscreen,
                     onTracks = { onShowTracksChanged(true) },
                     danmakuState = danmakuState,
-                    onSetDanmakuEnabled = danmaku?.let { { enabled: Boolean -> it.setEnabled(enabled) } },
+                    onOpenDanmakuPanel = danmaku?.let { { onShowDanmakuPanelChanged(true) } },
                 )
-                if (danmakuState != null) {
+                if (danmakuState != null && !showDanmakuPanel) {
                     DanmakuStatusBadge(danmakuState, Modifier.padding(top = 4.dp))
                 }
             }
@@ -247,6 +272,20 @@ private fun PlaybackControls(
                         onSelect = coordinator::selectTrack,
                         onSetSpeed = coordinator::setPlaybackSpeed,
                         onAdjustSubtitleDelay = coordinator::setSubtitleDelay,
+                    )
+                }
+                if (showDanmakuPanel && danmaku != null && danmakuState != null) {
+                    DanmakuSurface(
+                        danmakuState = danmakuState,
+                        matchOptions = danmaku.matchOptions.collectAsState().value,
+                        tuning = danmaku.tuning.collectAsState().value,
+                        layout = windowLayout,
+                        onDismiss = { onShowDanmakuPanelChanged(false) },
+                        onSetEnabled = danmaku::setEnabled,
+                        onSearch = danmaku::searchMatches,
+                        onSelectMatch = danmaku::selectMatch,
+                        onClearMatch = danmaku::clearMatch,
+                        onUpdateTuning = danmaku::updateTuning,
                     )
                 }
             }
@@ -318,7 +357,7 @@ private fun PlaybackHeader(
     onToggleFullscreen: () -> Unit,
     onTracks: () -> Unit,
     danmakuState: DanmakuState? = null,
-    onSetDanmakuEnabled: ((Boolean) -> Unit)? = null,
+    onOpenDanmakuPanel: (() -> Unit)? = null,
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val titleContent: @Composable (Modifier) -> Unit = { titleModifier ->
@@ -331,8 +370,8 @@ private fun PlaybackHeader(
             )
         }
         val secondaryControls: @Composable () -> Unit = {
-            if (danmakuState != null && onSetDanmakuEnabled != null) {
-                DanmakuToggleButton(danmakuState, onSetDanmakuEnabled)
+            if (danmakuState != null && onOpenDanmakuPanel != null) {
+                DanmakuEntryButton(danmakuState, onOpenDanmakuPanel)
             }
             IconButton(onClick = onToggleOrientation, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.Default.ScreenRotation, "Change orientation", tint = MaterialTheme.colorScheme.onSurface)
@@ -485,6 +524,294 @@ private fun TracksSurface(
     }
     }
     }
+}
+
+/**
+ * The single Danmaku entry surface: enable, current match status, manual search + selection, and
+ * tuning — mirroring [TracksSurface]'s adaptive bottom/side sheet presentation so it never crowds
+ * the essential transport controls.
+ */
+@Composable
+private fun DanmakuSurface(
+    danmakuState: DanmakuState,
+    matchOptions: DanmakuMatchOptions,
+    tuning: DanmakuTuning,
+    layout: PlaybackWindowLayout,
+    onDismiss: () -> Unit,
+    onSetEnabled: (Boolean) -> Unit,
+    onSearch: (String) -> Unit,
+    onSelectMatch: (String) -> Unit,
+    onClearMatch: () -> Unit,
+    onUpdateTuning: (DanmakuTuning) -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    ) {
+    Box(Modifier.fillMaxSize()) {
+    BoxWithConstraints(
+        safePane(layout.safePane)
+            .testTag(
+                if (layout.tracksPresentation == PlaybackTracksPresentation.AnchoredSide) {
+                    "danmaku-side-sheet"
+                } else {
+                    "danmaku-bottom-sheet"
+                },
+            ),
+    ) {
+        Box(
+            Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.68f)).clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClickLabel = "Close Danmaku",
+                role = Role.Button,
+                onClick = onDismiss,
+            ),
+        )
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+            modifier = if (layout.tracksPresentation == PlaybackTracksPresentation.AnchoredSide) {
+                Modifier.align(Alignment.CenterEnd).width(400.dp).fillMaxHeight()
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .testTag("danmaku-panel")
+            } else {
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().heightIn(max = maxHeight * 0.86f)
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .testTag("danmaku-panel")
+            },
+        ) {
+            LazyColumn(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+                item {
+                    Text(
+                        "Danmaku",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.semantics { heading() },
+                    )
+                }
+                item { DanmakuEnableRow(danmakuState !is DanmakuState.Disabled, onSetEnabled) }
+                item { DanmakuStatusBadge(danmakuState, Modifier.padding(top = 8.dp)) }
+                if (danmakuState !is DanmakuState.Disabled) {
+                    item { DanmakuMatchSearch(matchOptions, onSearch, onSelectMatch, onClearMatch) }
+                    item { DanmakuTuningControls(tuning, onUpdateTuning) }
+                }
+            }
+        }
+    }
+    }
+    }
+}
+
+@Composable
+private fun DanmakuEnableRow(enabled: Boolean, onSetEnabled: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(top = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Enable danmaku", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyLarge)
+        Switch(
+            checked = enabled,
+            onCheckedChange = onSetEnabled,
+            modifier = Modifier.testTag("danmaku-enable-switch").semantics {
+                contentDescription = if (enabled) "Turn danmaku off" else "Turn danmaku on"
+            },
+        )
+    }
+}
+
+@Composable
+private fun DanmakuMatchSearch(
+    matchOptions: DanmakuMatchOptions,
+    onSearch: (String) -> Unit,
+    onSelectMatch: (String) -> Unit,
+    onClearMatch: () -> Unit,
+) {
+    var query by rememberSaveable { mutableStateOf(matchOptions.query) }
+    Column(Modifier.fillMaxWidth().padding(top = 16.dp)) {
+        Text(
+            "Wrong match? Search",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.semantics { heading() },
+        )
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                singleLine = true,
+                modifier = Modifier.weight(1f).testTag("danmaku-search-field"),
+                label = { Text("Title") },
+            )
+            Button(
+                onClick = { onSearch(query) },
+                modifier = Modifier.padding(start = 8.dp).heightIn(min = 48.dp).testTag("danmaku-search-button"),
+            ) { Text("Search") }
+        }
+        if (matchOptions.isSearching) {
+            Row(
+                Modifier.fillMaxWidth().padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                Text(
+                    "Searching…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+            }
+        }
+        val searchError = matchOptions.error
+        if (searchError != null) {
+            Text(
+                searchError,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 8.dp).semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
+        matchOptions.results.forEach { option ->
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("danmaku-match-${option.candidateId}").clickable(
+                    onClickLabel = "Use this match",
+                    role = Role.Button,
+                    onClick = { onSelectMatch(option.candidateId) },
+                ).padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    matchOptionLabel(option),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+        TextButton(
+            onClick = onClearMatch,
+            modifier = Modifier.heightIn(min = 48.dp).testTag("danmaku-clear-match"),
+        ) { Text("Clear remembered match") }
+    }
+}
+
+private fun matchOptionLabel(option: DanmakuMatchOption): String = buildList {
+    add(option.title)
+    option.season?.let { add("S$it") }
+    option.episode?.let { add("E$it") }
+}.joinToString(" · ")
+
+@Composable
+private fun DanmakuTuningControls(
+    tuning: DanmakuTuning,
+    onUpdateTuning: (DanmakuTuning) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(top = 16.dp).testTag("danmaku-tuning")) {
+        Text(
+            "Tuning",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.semantics { heading() },
+        )
+        DanmakuTuningSlider(
+            label = "Timing offset",
+            valueText = "${tuning.timingOffsetMillis} ms",
+            value = tuning.timingOffsetMillis.toFloat(),
+            range = -10_000f..10_000f,
+            testTag = "danmaku-tuning-offset",
+            onValueChange = { onUpdateTuning(tuning.copy(timingOffsetMillis = it.toLong())) },
+        )
+        DanmakuTuningSlider(
+            label = "Comment speed",
+            valueText = formatMultiplier(tuning.speed),
+            value = tuning.speed,
+            range = 0.5f..2f,
+            testTag = "danmaku-tuning-speed",
+            onValueChange = { onUpdateTuning(tuning.copy(speed = it)) },
+        )
+        DanmakuTuningSlider(
+            label = "Text size",
+            valueText = formatMultiplier(tuning.textScale),
+            value = tuning.textScale,
+            range = 0.75f..1.5f,
+            testTag = "danmaku-tuning-size",
+            onValueChange = { onUpdateTuning(tuning.copy(textScale = it)) },
+        )
+        DanmakuTuningSlider(
+            label = "Opacity",
+            valueText = "${(tuning.opacity * 100).toInt()}%",
+            value = tuning.opacity,
+            range = 0.3f..1f,
+            testTag = "danmaku-tuning-opacity",
+            onValueChange = { onUpdateTuning(tuning.copy(opacity = it)) },
+        )
+        DanmakuTuningSlider(
+            label = "Screen area",
+            valueText = "${(tuning.screenFraction * 100).toInt()}%",
+            value = tuning.screenFraction,
+            range = 0.3f..1f,
+            testTag = "danmaku-tuning-fraction",
+            onValueChange = { onUpdateTuning(tuning.copy(screenFraction = it)) },
+        )
+        Text(
+            "Comment positions",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(top = 12.dp),
+        )
+        DanmakuPosition.entries.forEach { position ->
+            val checked = position in tuning.allowedPositions
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(
+                    onClickLabel = if (checked) "Hide $position comments" else "Show $position comments",
+                    role = Role.Checkbox,
+                    onClick = {
+                        val updated = if (checked) tuning.allowedPositions - position else tuning.allowedPositions + position
+                        onUpdateTuning(tuning.copy(allowedPositions = updated))
+                    },
+                ),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(checked = checked, onCheckedChange = null)
+                Text(position.name, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(start = 4.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun DanmakuTuningSlider(
+    label: String,
+    valueText: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    testTag: String,
+    onValueChange: (Float) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                valueText,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = range,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(testTag).semantics {
+                contentDescription = "$label $valueText"
+            },
+        )
+    }
+}
+
+private fun formatMultiplier(value: Float): String {
+    val rounded = kotlin.math.round(value * 100) / 100.0
+    return "${rounded}×"
 }
 
 private fun BoxScope.safePane(pane: PlaybackSafePane): Modifier = when (pane) {

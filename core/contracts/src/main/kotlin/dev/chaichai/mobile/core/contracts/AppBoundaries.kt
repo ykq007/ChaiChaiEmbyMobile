@@ -368,6 +368,9 @@ sealed interface PlaybackState {
         val speedControlSupported: Boolean = false,
         val subtitleDelaySupported: Boolean = false,
         val scope: HomeScope? = null,
+        val seriesIdentity: MediaIdentity? = null,
+        val seasonNumber: Int? = null,
+        val episodeNumber: Int? = null,
     ) : PlaybackState
     data class Failed(val reason: PlaybackFailureKind) : PlaybackState
     data class Exited(val identity: MediaIdentity) : PlaybackState
