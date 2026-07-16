@@ -57,6 +57,7 @@ dependencies {
     implementation(project(":platform:adaptive"))
     implementation(project(":platform:server"))
     implementation(project(":platform:playback"))
+    implementation(project(":platform:danmaku"))
     implementation(project(":feature:home"))
     implementation(project(":feature:libraries"))
     implementation(project(":feature:search"))

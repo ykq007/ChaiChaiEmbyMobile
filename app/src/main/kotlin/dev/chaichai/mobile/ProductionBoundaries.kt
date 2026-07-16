@@ -27,6 +27,9 @@ import dev.chaichai.mobile.platform.server.createRoomProgressOutbox
 import dev.chaichai.mobile.platform.server.AccountManager
 import dev.chaichai.mobile.platform.server.ServerPrivateDataCleaner
 import dev.chaichai.mobile.platform.server.SharedPreferencesPlaybackPreferences
+import dev.chaichai.mobile.platform.danmaku.DanmakuControllerImpl
+import dev.chaichai.mobile.platform.danmaku.OkHttpDanmakuEndpointClient
+import dev.chaichai.mobile.platform.danmaku.SharedPreferencesDanmakuConfigStore
 import dev.chaichai.mobile.platform.playback.Media3ServicePlaybackEngine
 import dev.chaichai.mobile.platform.playback.PlaybackCoordinatorImpl
 import dev.chaichai.mobile.platform.playback.androidPlaybackCapabilities
@@ -105,6 +108,11 @@ object ProductionBoundariesModule {
                 applicationScope, vault, progress,
                 ServerPrivateDataCleaner(homeCache, movieCache, seriesCache, searchCache),
                 serverSetup::signedOut,
+            ),
+            danmaku = DanmakuControllerImpl(
+                applicationScope,
+                OkHttpDanmakuEndpointClient(),
+                SharedPreferencesDanmakuConfigStore(context),
             ),
         )
     }

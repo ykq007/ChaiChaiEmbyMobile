@@ -367,6 +367,7 @@ sealed interface PlaybackState {
         val subtitleDelayMillis: Long = 0L,
         val speedControlSupported: Boolean = false,
         val subtitleDelaySupported: Boolean = false,
+        val scope: HomeScope? = null,
     ) : PlaybackState
     data class Failed(val reason: PlaybackFailureKind) : PlaybackState
     data class Exited(val identity: MediaIdentity) : PlaybackState
@@ -455,4 +456,5 @@ data class AppBoundaries(
     val serverSetup: ServerSetupBoundary? = null,
     val homeMediaActions: HomeMediaActionBoundary = HomeMediaActionBoundary {},
     val account: AccountBoundary? = null,
+    val danmaku: DanmakuController? = null,
 )

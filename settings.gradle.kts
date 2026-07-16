@@ -23,6 +23,7 @@ include(
     ":platform:adaptive",
     ":platform:server",
     ":platform:playback",
+    ":platform:danmaku",
     ":feature:playback",
     ":feature:home",
     ":feature:libraries",

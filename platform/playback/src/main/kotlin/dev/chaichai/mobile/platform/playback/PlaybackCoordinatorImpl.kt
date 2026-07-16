@@ -459,6 +459,7 @@ class PlaybackCoordinatorImpl(
             subtitleDelayMillis = currentSubtitleDelayMillis,
             speedControlSupported = engine.speedControlSupported,
             subtitleDelaySupported = engine.subtitleDelaySupported,
+            scope = plan.request.scope,
         )
     }
 

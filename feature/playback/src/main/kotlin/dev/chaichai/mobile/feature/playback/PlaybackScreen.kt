@@ -67,6 +67,9 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.height
+import androidx.compose.runtime.DisposableEffect
+import dev.chaichai.mobile.core.contracts.DanmakuController
+import dev.chaichai.mobile.core.contracts.DanmakuState
 import dev.chaichai.mobile.core.contracts.PlaybackCoordinator
 import dev.chaichai.mobile.core.contracts.PlaybackState
 import dev.chaichai.mobile.core.contracts.PlaybackProgressSync
@@ -97,8 +100,12 @@ fun PlaybackHost(
         PlaybackSystemBars.Visible,
     ),
     keepControlsVisible: Boolean = false,
+    danmaku: DanmakuController? = null,
 ) {
     val state by coordinator.state.collectAsState()
+    if (danmaku != null) {
+        DanmakuPlaybackBridge(danmaku, state)
+    }
     val playbackKey = (state as? PlaybackState.Active)?.identity?.let { "${it.serverId}:${it.itemId}" } ?: "none"
     var showTracks by rememberSaveable(playbackKey) { mutableStateOf(false) }
     LaunchedEffect(state) {
@@ -115,7 +122,7 @@ fun PlaybackHost(
         )
         is PlaybackState.Active -> PlaybackControls(
             snapshot, coordinator, onToggleOrientation, onToggleFullscreen,
-            windowLayout, keepControlsVisible, showTracks, { showTracks = it }, modifier,
+            windowLayout, keepControlsVisible, showTracks, { showTracks = it }, danmaku, modifier,
         )
         is PlaybackState.Failed -> PlaybackFailure(snapshot, coordinator, modifier)
     }
@@ -139,6 +146,26 @@ private fun PlaybackLoading(
     }
 }
 
+/**
+ * Drives the [DanmakuController] from the playback state. Danmaku stays independent of media: this
+ * only forwards lifecycle/position events; the controller contains any failure internally.
+ */
+@Composable
+private fun DanmakuPlaybackBridge(danmaku: DanmakuController, state: PlaybackState) {
+    val active = state as? PlaybackState.Active
+    val identity = active?.identity
+    val scope = active?.scope
+    LaunchedEffect(danmaku, identity, scope) {
+        if (active != null && identity != null && scope != null) {
+            danmaku.attach(identity, scope, active.title, active.runtimeTicks)
+        }
+    }
+    LaunchedEffect(danmaku, active?.positionTicks, active?.isPaused, active?.playbackSpeed) {
+        if (active != null) danmaku.onPlayback(active.positionTicks, active.isPaused, active.playbackSpeed)
+    }
+    DisposableEffect(danmaku) { onDispose { danmaku.detach() } }
+}
+
 @Composable
 private fun PlaybackControls(
     state: PlaybackState.Active,
@@ -149,12 +176,17 @@ private fun PlaybackControls(
     keepControlsVisible: Boolean,
     showTracks: Boolean,
     onShowTracksChanged: (Boolean) -> Unit,
+    danmaku: DanmakuController?,
     modifier: Modifier,
 ) {
     LaunchedEffect(keepControlsVisible, state.controlsVisible) {
         if (keepControlsVisible && !state.controlsVisible) coordinator.toggleControls()
     }
+    val danmakuState = danmaku?.state?.collectAsState()?.value
     Box(modifier.fillMaxSize()) {
+        if (danmakuState != null && !showTracks) {
+            DanmakuOverlay(danmakuState, safePane(windowLayout.safePane))
+        }
         Box(
             Modifier.fillMaxSize().then(
                 if (showTracks || keepControlsVisible) Modifier else Modifier.clickable(
@@ -175,14 +207,19 @@ private fun PlaybackControls(
             ),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            Box(Modifier.fillMaxWidth().testTag("playback-header").semantics { traversalIndex = 0f }) {
+            Column(Modifier.fillMaxWidth().testTag("playback-header").semantics { traversalIndex = 0f }) {
                 PlaybackHeader(
                     state.title,
                     coordinator::exit,
                     onToggleOrientation,
                     onToggleFullscreen,
                     onTracks = { onShowTracksChanged(true) },
+                    danmakuState = danmakuState,
+                    onSetDanmakuEnabled = danmaku?.let { { enabled: Boolean -> it.setEnabled(enabled) } },
                 )
+                if (danmakuState != null) {
+                    DanmakuStatusBadge(danmakuState, Modifier.padding(top = 4.dp))
+                }
             }
             Box(Modifier.fillMaxWidth().testTag("playback-transport").semantics { traversalIndex = 1f }) {
                 PrimaryTransport(state, coordinator)
@@ -280,6 +317,8 @@ private fun PlaybackHeader(
     onToggleOrientation: () -> Unit,
     onToggleFullscreen: () -> Unit,
     onTracks: () -> Unit,
+    danmakuState: DanmakuState? = null,
+    onSetDanmakuEnabled: ((Boolean) -> Unit)? = null,
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val titleContent: @Composable (Modifier) -> Unit = { titleModifier ->
@@ -292,6 +331,9 @@ private fun PlaybackHeader(
             )
         }
         val secondaryControls: @Composable () -> Unit = {
+            if (danmakuState != null && onSetDanmakuEnabled != null) {
+                DanmakuToggleButton(danmakuState, onSetDanmakuEnabled)
+            }
             IconButton(onClick = onToggleOrientation, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.Default.ScreenRotation, "Change orientation", tint = MaterialTheme.colorScheme.onSurface)
             }

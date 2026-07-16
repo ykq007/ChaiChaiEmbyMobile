@@ -349,6 +349,7 @@ fun MobileApp(
             onPlaybackEnded,
             windowLayout = playbackWindowLayout,
             keepControlsVisible = keepPlaybackControlsVisible,
+            danmaku = boundaries.danmaku,
         )
         }
 }
