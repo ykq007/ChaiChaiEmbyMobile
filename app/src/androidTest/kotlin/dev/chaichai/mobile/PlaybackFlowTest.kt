@@ -238,6 +238,7 @@ class PlaybackFlowTest {
     }
 
     @Test
+    @RequiresLargeTestWindow
     fun hinge_keeps_all_essential_controls_together_on_the_safe_pane() {
         val playback = FakePlayback()
         compose.setContent {

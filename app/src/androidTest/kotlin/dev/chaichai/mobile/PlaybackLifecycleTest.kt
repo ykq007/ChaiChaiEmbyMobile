@@ -43,6 +43,7 @@ class PlaybackLifecycleTest {
     @get:Rule val compose = createComposeRule()
 
     @Test
+    @RequiresLargeTestWindow
     fun active_playback_survives_recreation_rotation_resize_split_screen_and_fold_changes() {
         val restoration = StateRestorationTester(compose)
         val playback = RecordingPlayback(active())

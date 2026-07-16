@@ -66,6 +66,11 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+    constraints {
+        androidTestImplementation("org.jsoup:jsoup:1.14.2") {
+            because("CVE-2021-37714 affects the version pulled by the accessibility test framework")
+        }
+    }
     androidTestImplementation("com.google.dagger:hilt-android-testing:2.59.2")
     kspAndroidTest("com.google.dagger:hilt-compiler:2.59.2")
     androidTestImplementation("com.squareup.okhttp3:mockwebserver3:5.3.2")

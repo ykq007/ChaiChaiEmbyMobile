@@ -82,7 +82,7 @@ class AggregatedSearchTest {
         enterQuery("ar")
 
         listOf("Movies", "Series", "Seasons", "Episodes").forEach {
-            composeRule.onNodeWithText(it).assertIsDisplayed()
+            composeRule.onNodeWithText(it).performScrollTo().assertIsDisplayed()
         }
         listOf(
             "Movies" to 0f,
@@ -94,10 +94,10 @@ class AggregatedSearchTest {
             "Episodes" to 3_000f,
             "Dulcinea" to 3_001f,
         ).forEach { (text, index) ->
-            composeRule.onNodeWithText(text)
+            composeRule.onNodeWithText(text).performScrollTo()
                 .assert(SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, index))
         }
-        composeRule.onNodeWithText("Arrival")
+        composeRule.onNodeWithText("Arrival").performScrollTo()
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 1f))
             .assertHasClickAction()
             .performClick()
@@ -130,13 +130,14 @@ class AggregatedSearchTest {
         showApp(gateway)
         composeRule.onNodeWithText("Search").performClick()
         enterQuery("ar")
-        composeRule.onNodeWithText("Dulcinea")
+        composeRule.onNodeWithText("Dulcinea").performScrollTo()
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 3001f))
             .performClick()
         composeRule.onNodeWithTag("episode-details").assertIsDisplayed()
     }
 
     @Test
+    @RequiresLargeTestWindow
     fun qualifying_hinge_panes_keep_results_and_details_clear_of_the_hinge() {
         val gateway = FakeSearchGateway()
         composeRule.setContent {

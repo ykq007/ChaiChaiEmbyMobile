@@ -139,6 +139,7 @@ class SeriesLibraryTest {
 
     @OptIn(ExperimentalTestApi::class)
     @Test
+    @RequiresLargeTestWindow
     fun folding_preserves_the_selected_series_journey() {
         val hinge = androidx.compose.runtime.mutableStateOf<SeparatingHinge?>(null)
         val gateway = FakeSeriesGateway()

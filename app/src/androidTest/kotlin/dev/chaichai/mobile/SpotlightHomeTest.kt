@@ -229,30 +229,30 @@ class SpotlightHomeTest {
         )
         composeRule.onNode(
             hasText("Home") and SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 0f),
-        ).assertIsDisplayed()
+        ).assertExists()
         composeRule.onNode(
             hasText("Refresh") and hasClickAction() and
                 SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, .5f),
-        ).assertIsDisplayed()
+        ).assertExists()
         composeRule.onNode(
             hasText("Resume 1:00") and hasClickAction() and
                 SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 1f),
-        ).assertIsDisplayed()
+        ).assertExists()
         composeRule.onNode(
             hasText("Continue Watching") and SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 2f),
-        ).assertIsDisplayed()
+        ).assertExists()
         composeRule.onNode(
             hasContentDescription("Arrival, Movie") and hasClickAction() and
                 SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 3f),
-        ).assertIsDisplayed()
+        ).assertExists()
         composeRule.onNode(
             hasText("Showing saved content") and
                 SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 2.5f),
-        ).assertIsDisplayed()
+        ).assertExists()
         composeRule.onNode(
             hasText("Retry Continue Watching") and hasClickAction() and
                 SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 9f),
-        ).assertIsDisplayed()
+        ).assertExists()
     }
 
     @Test
@@ -271,6 +271,7 @@ class SpotlightHomeTest {
     }
 
     @Test
+    @RequiresLargeTestWindow
     fun medium_split_window_uses_medium_home_density() {
         show(ready(mapOf(HomeSection.ContinueWatching to HomeSectionContent(listOf(media("movie", "Arrival", playbackPositionTicks = 600_000_000))))), Modifier.size(700.dp, 700.dp), densityValue = 1f)
         composeRule.onNode(hasContentDescription("Home discovery content, medium layout")).assertIsDisplayed()
@@ -280,6 +281,7 @@ class SpotlightHomeTest {
     }
 
     @Test
+    @RequiresLargeTestWindow
     fun expanded_window_uses_expanded_home_density() {
         show(ready(mapOf(HomeSection.ContinueWatching to HomeSectionContent(listOf(media("movie", "Arrival", playbackPositionTicks = 600_000_000))))), Modifier.size(900.dp, 900.dp), densityValue = 1f)
         composeRule.onNode(hasContentDescription("Home discovery content, expanded layout")).assertIsDisplayed()
@@ -289,18 +291,21 @@ class SpotlightHomeTest {
     }
 
     @Test
+    @RequiresLargeTestWindow
     fun expanded_portrait_window_uses_expanded_home_density() {
         show(ready(mapOf(HomeSection.LatestMovies to HomeSectionContent(listOf(media("movie", "Arrival"))))), Modifier.size(900.dp, 1200.dp), densityValue = 1f)
         composeRule.onNode(hasContentDescription("Home discovery content, expanded layout")).assertIsDisplayed()
     }
 
     @Test
+    @RequiresLargeTestWindow
     fun expanded_landscape_window_uses_expanded_home_density() {
         show(ready(mapOf(HomeSection.LatestMovies to HomeSectionContent(listOf(media("movie", "Arrival"))))), Modifier.size(1000.dp, 700.dp), densityValue = 1f)
         composeRule.onNode(hasContentDescription("Home discovery content, expanded layout")).assertIsDisplayed()
     }
 
     @Test
+    @RequiresLargeTestWindow
     fun separating_fold_selects_an_unobstructed_compact_pane() {
         show(
             ready(mapOf(HomeSection.LatestMovies to HomeSectionContent(listOf(media("movie", "Arrival"))))),

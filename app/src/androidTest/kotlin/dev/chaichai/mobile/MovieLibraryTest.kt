@@ -114,6 +114,7 @@ class MovieLibraryTest {
     }
 
     @Test
+    @RequiresLargeTestWindow
     fun hinge_separated_panes_keep_collection_and_restored_details_clear_of_the_hinge() {
         val restoration = StateRestorationTester(composeRule)
         val gateway = FakeMovieGateway(ready())
@@ -142,6 +143,7 @@ class MovieLibraryTest {
     }
 
     @Test
+    @RequiresLargeTestWindow
     fun live_hinge_transition_keeps_the_selected_movie_journey() {
         val gateway = FakeMovieGateway(ready())
         val hinge = androidx.compose.runtime.mutableStateOf<SeparatingHinge?>(null)
@@ -280,6 +282,7 @@ class MovieLibraryTest {
     }
 
     @Test
+    @RequiresLargeTestWindow
     fun inline_selection_survives_the_real_signed_out_and_reauthenticated_ui_transition() {
         val gateway = FakeMovieGateway(ready())
         val setup = RestoredServerSetup()

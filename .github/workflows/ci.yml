@@ -34,8 +34,12 @@ jobs:
         include:
           - api-level: '26'
             target: google_apis
+            profile: pixel_2
+            script: ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.notAnnotation=dev.chaichai.mobile.RequiresLargeTestWindow
           - api-level: '37.0'
-            target: google_apis_ps16k
+            target: google_apis
+            profile: pixel_c
+            script: ./gradlew connectedDebugAndroidTest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -53,20 +57,21 @@ jobs:
           api-level: ${{ matrix.api-level }}
           target: ${{ matrix.target }}
           arch: x86_64
+          profile: ${{ matrix.profile }}
           disable-animations: true
-          script: ./gradlew connectedDebugAndroidTest
+          script: ${{ matrix.script }}
       - name: Collect UI smoke failure diagnostics
         if: failure()
         run: |
-          mkdir -p .ci-diagnostics
-          adb devices -l > .ci-diagnostics/adb-devices.txt 2>&1 || true
-          timeout 10s adb logcat -d > .ci-diagnostics/logcat.txt 2>&1 || true
-          timeout 10s adb shell getprop > .ci-diagnostics/device-properties.txt 2>&1 || true
-          emulator -accel-check > .ci-diagnostics/emulator-acceleration.txt 2>&1 || true
-          ls -la /dev/kvm > .ci-diagnostics/kvm-device.txt 2>&1 || true
-          ps aux > .ci-diagnostics/processes.txt 2>&1 || true
-          df -h > .ci-diagnostics/disk.txt 2>&1 || true
-          free -h > .ci-diagnostics/memory.txt 2>&1 || true
+          mkdir -p ci-diagnostics
+          adb devices -l > ci-diagnostics/adb-devices.txt 2>&1 || true
+          timeout 10s adb logcat -d > ci-diagnostics/logcat.txt 2>&1 || true
+          timeout 10s adb shell getprop > ci-diagnostics/device-properties.txt 2>&1 || true
+          emulator -accel-check > ci-diagnostics/emulator-acceleration.txt 2>&1 || true
+          ls -la /dev/kvm > ci-diagnostics/kvm-device.txt 2>&1 || true
+          ps aux > ci-diagnostics/processes.txt 2>&1 || true
+          df -h > ci-diagnostics/disk.txt 2>&1 || true
+          free -h > ci-diagnostics/memory.txt 2>&1 || true
       - name: Retain UI smoke failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -76,7 +81,7 @@ jobs:
             **/build/reports/androidTests/**
             **/build/outputs/androidTest-results/**
             /tmp/android-runner/**
-            .ci-diagnostics/**
+            ci-diagnostics/**
           if-no-files-found: warn
           retention-days: 7
 
@@ -94,6 +99,7 @@ jobs:
           ignore-unfixed: false
           exit-code: '1'
       - name: Scan repository history for secrets
+        if: always()
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
