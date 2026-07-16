@@ -20,14 +20,24 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.ui.CaptionStyleCompat
+import androidx.media3.ui.SubtitleView
+import dev.chaichai.mobile.core.contracts.SubtitleAppearance
+import dev.chaichai.mobile.core.contracts.SubtitleColorPreset
+import dev.chaichai.mobile.core.contracts.SubtitleEdgeStyle
+import dev.chaichai.mobile.core.contracts.SubtitlePositionBounds
 import dev.chaichai.mobile.platform.server.AuthoritativePlaybackPlan
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.ui.PlayerView
@@ -239,17 +249,58 @@ internal fun playbackHttpClient(): OkHttpClient = OkHttpClient.Builder()
     .followSslRedirects(false)
     .build()
 
+/**
+ * Applies [appearance] to this [PlayerView]'s built-in `SubtitleView` LIVE (size, color/edge/opacity
+ * via [CaptionStyleCompat], and vertical position via a bottom-padding fraction bounded by
+ * [SubtitlePositionBounds] so it can never land text on an unsafe inset) — no player restart.
+ */
+@UnstableApi
+private fun PlayerView.applySubtitleAppearance(appearance: SubtitleAppearance) {
+    subtitleView?.apply {
+        setStyle(appearance.toCaptionStyle())
+        setFractionalTextSize(SubtitleView.DEFAULT_TEXT_SIZE_FRACTION * appearance.textScale)
+        setBottomPaddingFraction(SubtitlePositionBounds.bottomPaddingFraction(appearance.position))
+    }
+}
+
+@UnstableApi
+private fun SubtitleAppearance.toCaptionStyle(): CaptionStyleCompat {
+    val edgeType = when (edgeStyle) {
+        SubtitleEdgeStyle.None -> CaptionStyleCompat.EDGE_TYPE_NONE
+        SubtitleEdgeStyle.Outline -> CaptionStyleCompat.EDGE_TYPE_OUTLINE
+        SubtitleEdgeStyle.DropShadow -> CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW
+    }
+    return CaptionStyleCompat(
+        colorPreset.foregroundArgb.toInt(),
+        withAlpha(colorPreset.backgroundArgb, windowOpacity),
+        android.graphics.Color.TRANSPARENT,
+        edgeType,
+        android.graphics.Color.BLACK,
+        null,
+    )
+}
+
+private fun withAlpha(argb: Long, opacity: Float): Int {
+    val alpha = (opacity.coerceIn(0f, 1f) * 255).toInt().coerceIn(0, 255)
+    return (alpha shl 24) or (argb.toInt() and 0x00FFFFFF)
+}
+
 @UnstableApi
 @Composable
 fun Media3VideoSurface(modifier: Modifier = Modifier) {
+    val appearance by PlaybackServiceOwner.appearance.collectAsState()
     AndroidView(
         factory = { context ->
             PlayerView(context).apply {
                 useController = false
                 player = PlaybackServiceOwner.serviceOrNull()?.playerForSurface()
+                applySubtitleAppearance(appearance)
             }
         },
-        update = { it.player = PlaybackServiceOwner.serviceOrNull()?.playerForSurface() },
+        update = {
+            it.player = PlaybackServiceOwner.serviceOrNull()?.playerForSurface()
+            it.applySubtitleAppearance(appearance)
+        },
         modifier = modifier,
     )
 }
@@ -259,7 +310,9 @@ internal object PlaybackServiceOwner {
     @Volatile private var ready = CompletableDeferred<PlaybackSessionService>()
     private val mutableEvents = MutableSharedFlow<PlaybackEngineEvent>(extraBufferCapacity = 4)
     private val snapshot = AtomicReference(PlaybackEngineSnapshot(0L, true))
+    private val mutableAppearance = MutableStateFlow(SubtitleAppearance.Default)
     val events: SharedFlow<PlaybackEngineEvent> = mutableEvents
+    val appearance: StateFlow<SubtitleAppearance> = mutableAppearance
 
     fun attach(service: PlaybackSessionService) {
         current.set(service)
@@ -278,6 +331,7 @@ internal object PlaybackServiceOwner {
         snapshot.set(PlaybackEngineSnapshot(positionTicks, paused))
     }
     fun snapshot(): PlaybackEngineSnapshot = snapshot.get()
+    fun updateAppearance(appearance: SubtitleAppearance) { mutableAppearance.value = appearance }
 }
 
 class Media3ServicePlaybackEngine(private val context: Context) : PlaybackEngine {
@@ -288,6 +342,9 @@ class Media3ServicePlaybackEngine(private val context: Context) : PlaybackEngine
     // Media3 has no native per-track subtitle timing offset API; faking support would violate
     // AC1/AC4's "correctness over faking support" guidance, so the control stays hidden instead.
     override val subtitleDelaySupported: Boolean get() = false
+    // Media3's PlayerView owns a SubtitleView with native CaptionStyleCompat + fractional text size +
+    // bottom padding fraction support, all appliable in place without restarting the player (#33).
+    override val subtitleAppearanceSupported: Boolean get() = true
 
     @UnstableApi
     override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean) {
@@ -322,6 +379,9 @@ class Media3ServicePlaybackEngine(private val context: Context) : PlaybackEngine
     override suspend fun setSpeed(speed: Float) = withContext(Dispatchers.Main.immediate) {
         PlaybackServiceOwner.serviceOrNull()?.setSpeed(speed)
         Unit
+    }
+    override suspend fun setSubtitleAppearance(appearance: SubtitleAppearance) = withContext(Dispatchers.Main.immediate) {
+        PlaybackServiceOwner.updateAppearance(appearance)
     }
     @UnstableApi
     override suspend fun applyExternalSubtitle(localRef: String, mimeType: String, language: String?) =

@@ -11,6 +11,7 @@ import dev.chaichai.mobile.core.contracts.PlaybackPreferences
 import dev.chaichai.mobile.core.contracts.PlaybackState
 import dev.chaichai.mobile.core.contracts.PlaybackProgressSync
 import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
+import dev.chaichai.mobile.core.contracts.SubtitleAppearance
 import dev.chaichai.mobile.platform.server.AuthoritativePlaybackPlan
 import dev.chaichai.mobile.platform.server.PlaybackCapabilities
 import dev.chaichai.mobile.platform.server.PlaybackFailure
@@ -44,12 +45,16 @@ interface PlaybackEngine {
     val speedControlSupported: Boolean get() = false
     /** Whether this engine can apply a subtitle timing offset without a restart. Gates the subtitle-delay control. */
     val subtitleDelaySupported: Boolean get() = false
+    /** Whether this engine can apply subtitle appearance (size/position/color/edge/opacity) live. Gates the appearance controls. */
+    val subtitleAppearanceSupported: Boolean get() = false
     suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean = false)
     suspend fun acknowledgePlayingReported()
     suspend fun playPause()
     suspend fun seekTo(positionTicks: Long)
     suspend fun setSpeed(speed: Float) = Unit
     suspend fun setSubtitleDelayMs(delayMs: Long) = Unit
+    /** Apply subtitle appearance to the currently rendered captions without restarting playback. */
+    suspend fun setSubtitleAppearance(appearance: SubtitleAppearance) = Unit
     /**
      * Side-load a downloaded external subtitle ([localRef]) and make it the current subtitle track,
      * preserving the current position and paused/playing state (no renegotiation, no restart from 0).
@@ -96,6 +101,7 @@ class PlaybackCoordinatorImpl(
     private var progressStatusJob: Job? = null
     private var currentSpeed: Float = 1.0f
     private var currentSubtitleDelayMillis: Long = 0L
+    private var currentSubtitleAppearance: SubtitleAppearance = SubtitleAppearance.Default
     private var activeExternalSubtitle: PlaybackTrack? = null
 
     private val engineEventJob = scope.launch {
@@ -289,6 +295,18 @@ class PlaybackCoordinatorImpl(
         }
     }
 
+    override fun setSubtitleAppearance(appearance: SubtitleAppearance) {
+        val current = mutableState.value as? PlaybackState.Active ?: return
+        val plan = activePlan ?: return
+        if (!engine.subtitleAppearanceSupported) return
+        currentSubtitleAppearance = appearance
+        preferences.setSubtitleAppearance(plan.request.scope, appearance)
+        scope.launch {
+            engine.setSubtitleAppearance(appearance)
+            publishActive(current.title, controlsVisible = true)
+        }
+    }
+
     /**
      * Activate a provider-downloaded External subtitle as the current subtitle track. Crucially this
      * NEVER renegotiates with the server (no gateway.negotiate) and reads the LIVE engine position and
@@ -326,13 +344,16 @@ class PlaybackCoordinatorImpl(
         val identity = MediaIdentity(plan.request.serverId, plan.request.itemId)
         currentSpeed = preferences.speedFor(plan.request.scope)
         currentSubtitleDelayMillis = preferences.subtitleDelayFor(identity)
+        currentSubtitleAppearance = preferences.subtitleAppearanceFor(plan.request.scope)
         if (engine.speedControlSupported) engine.setSpeed(currentSpeed)
         if (engine.subtitleDelaySupported) engine.setSubtitleDelayMs(currentSubtitleDelayMillis)
+        if (engine.subtitleAppearanceSupported) engine.setSubtitleAppearance(currentSubtitleAppearance)
     }
 
     private suspend fun reapplyPreferences() {
         if (engine.speedControlSupported) engine.setSpeed(currentSpeed)
         if (engine.subtitleDelaySupported) engine.setSubtitleDelayMs(currentSubtitleDelayMillis)
+        if (engine.subtitleAppearanceSupported) engine.setSubtitleAppearance(currentSubtitleAppearance)
     }
 
     override fun retry() {
@@ -519,6 +540,8 @@ class PlaybackCoordinatorImpl(
             subtitleDelayMillis = currentSubtitleDelayMillis,
             speedControlSupported = engine.speedControlSupported,
             subtitleDelaySupported = engine.subtitleDelaySupported,
+            subtitleAppearance = currentSubtitleAppearance,
+            subtitleAppearanceSupported = engine.subtitleAppearanceSupported,
             scope = plan.request.scope,
         )
     }

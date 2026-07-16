@@ -9,6 +9,9 @@ import dev.chaichai.mobile.core.contracts.PlaybackState
 import dev.chaichai.mobile.core.contracts.PlaybackTrack
 import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
 import dev.chaichai.mobile.core.contracts.PlaybackTrackType
+import dev.chaichai.mobile.core.contracts.SubtitleAppearance
+import dev.chaichai.mobile.core.contracts.SubtitleColorPreset
+import dev.chaichai.mobile.core.contracts.SubtitlePosition
 import dev.chaichai.mobile.platform.server.AuthoritativePlaybackPlan
 import dev.chaichai.mobile.platform.server.DirectPlayCapability
 import dev.chaichai.mobile.platform.server.PlaybackCapabilities
@@ -655,13 +658,105 @@ class PlaybackCoordinatorImplTest {
         coordinator.close()
     }
 
+    @Test
+    fun `setting subtitle appearance persists per server user scope and applies without renegotiation`() = runTest {
+        val gateway = FakeGateway()
+        val engine = FakeEngine().apply { subtitleAppearanceSupportedFlag = true }
+        val preferences = FakePreferences()
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false, preferences)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+        val positionBefore = (coordinator.state.value as PlaybackState.Active).positionTicks
+        val pausedBefore = (coordinator.state.value as PlaybackState.Active).isPaused
+
+        val appearance = SubtitleAppearance(
+            textScale = 1.5f,
+            position = SubtitlePosition.Upper,
+            colorPreset = SubtitleColorPreset.YellowOnBlack,
+        )
+        coordinator.setSubtitleAppearance(appearance)
+        advanceUntilIdle()
+
+        val state = coordinator.state.value as PlaybackState.Active
+        assertEquals(appearance, state.subtitleAppearance)
+        assertEquals(appearance, preferences.subtitleAppearanceFor(HomeScope("server", "user")))
+        // No renegotiation: exactly the one initial negotiate() call, position/pause unchanged.
+        assertEquals(1, gateway.requests.size)
+        assertEquals(positionBefore, state.positionTicks)
+        assertEquals(pausedBefore, state.isPaused)
+        assertEquals(listOf(SubtitleAppearance.Default, appearance), engine.appliedAppearances)
+        coordinator.close()
+    }
+
+    @Test
+    fun `persisted subtitle appearance loads on prepare and appears in the default no-op state`() = runTest {
+        val preferences = FakePreferences().apply {
+            appearances[HomeScope("server", "user")] = SubtitleAppearance(textScale = 1.75f)
+        }
+        val engine = FakeEngine().apply { subtitleAppearanceSupportedFlag = true }
+        val coordinator = PlaybackCoordinatorImpl(this, FakeGateway(), engine, capabilities(), false, preferences)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+
+        val state = coordinator.state.value as PlaybackState.Active
+        assertEquals(1.75f, state.subtitleAppearance.textScale)
+        assertEquals(listOf(SubtitleAppearance(textScale = 1.75f)), engine.appliedAppearances)
+        coordinator.close()
+    }
+
+    @Test
+    fun `subtitle appearance survives a track change and is republished`() = runTest {
+        val gateway = FakeGateway()
+        val engine = FakeEngine().apply { subtitleAppearanceSupportedFlag = true }
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false, FakePreferences())
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+        val appearance = SubtitleAppearance(textScale = 1.25f, colorPreset = SubtitleColorPreset.BlackOnWhite)
+        coordinator.setSubtitleAppearance(appearance)
+        advanceUntilIdle()
+        engine.appliedAppearances.clear()
+
+        coordinator.selectTrack(PlaybackTrackSelection(audioStreamIndex = 2))
+        advanceUntilIdle()
+
+        val state = coordinator.state.value as PlaybackState.Active
+        assertEquals(appearance, state.subtitleAppearance)
+        assertEquals(listOf(appearance), engine.appliedAppearances)
+        coordinator.close()
+    }
+
+    @Test
+    fun `unsupported subtitle appearance capability hides state and disables the control`() = runTest {
+        val engine = FakeEngine()
+        val coordinator = PlaybackCoordinatorImpl(this, FakeGateway(), engine, capabilities(), false, FakePreferences())
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(MediaIdentity("server", "movie"), HomeScope("server", "user")))
+        advanceUntilIdle()
+
+        val stateBefore = coordinator.state.value as PlaybackState.Active
+        assertFalse(stateBefore.subtitleAppearanceSupported)
+
+        coordinator.setSubtitleAppearance(SubtitleAppearance(textScale = 1.8f))
+        advanceUntilIdle()
+
+        val state = coordinator.state.value as PlaybackState.Active
+        assertEquals(SubtitleAppearance.Default, state.subtitleAppearance)
+        assertTrue(engine.appliedAppearances.isEmpty())
+        coordinator.close()
+    }
+
     private class FakePreferences : PlaybackPreferences {
         val speeds = mutableMapOf<HomeScope, Float>()
         val delays = mutableMapOf<MediaIdentity, Long>()
+        val appearances = mutableMapOf<HomeScope, SubtitleAppearance>()
         override fun speedFor(scope: HomeScope): Float = speeds[scope] ?: 1.0f
         override fun setSpeed(scope: HomeScope, speed: Float) { speeds[scope] = speed }
         override fun subtitleDelayFor(identity: MediaIdentity): Long = delays[identity] ?: 0L
         override fun setSubtitleDelay(identity: MediaIdentity, delayMillis: Long) { delays[identity] = delayMillis }
+        override fun subtitleAppearanceFor(scope: HomeScope): SubtitleAppearance =
+            appearances[scope] ?: SubtitleAppearance.Default
+        override fun setSubtitleAppearance(scope: HomeScope, appearance: SubtitleAppearance) {
+            appearances[scope] = appearance
+        }
     }
 
     private fun capabilities() = PlaybackCapabilities(
@@ -715,14 +810,18 @@ class PlaybackCoordinatorImplTest {
         val preparePauseStates = mutableListOf<Boolean>()
         var speedSupported = false
         var subtitleDelaySupportedFlag = false
+        var subtitleAppearanceSupportedFlag = false
         override val speedControlSupported: Boolean get() = speedSupported
         override val subtitleDelaySupported: Boolean get() = subtitleDelaySupportedFlag
+        override val subtitleAppearanceSupported: Boolean get() = subtitleAppearanceSupportedFlag
         val appliedSpeeds = mutableListOf<Float>()
         val appliedSubtitleDelays = mutableListOf<Long>()
+        val appliedAppearances = mutableListOf<SubtitleAppearance>()
         val appliedExternalSubtitles = mutableListOf<String>()
         var externalSubtitleFailure: Exception? = null
         override suspend fun setSpeed(speed: Float) { appliedSpeeds += speed }
         override suspend fun setSubtitleDelayMs(delayMs: Long) { appliedSubtitleDelays += delayMs }
+        override suspend fun setSubtitleAppearance(appearance: SubtitleAppearance) { appliedAppearances += appearance }
         override suspend fun applyExternalSubtitle(localRef: String, mimeType: String, language: String?) {
             externalSubtitleFailure?.let { throw it }
             appliedExternalSubtitles += localRef

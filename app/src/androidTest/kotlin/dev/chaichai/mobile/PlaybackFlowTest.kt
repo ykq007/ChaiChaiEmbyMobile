@@ -31,6 +31,8 @@ import dev.chaichai.mobile.core.contracts.PlaybackState
 import dev.chaichai.mobile.core.contracts.PlaybackTrack
 import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
 import dev.chaichai.mobile.core.contracts.PlaybackTrackType
+import dev.chaichai.mobile.core.contracts.SubtitleAppearance
+import dev.chaichai.mobile.core.contracts.SubtitleColorPreset
 import dev.chaichai.mobile.core.contracts.TrackDelivery
 import dev.chaichai.mobile.core.contracts.TrackQualifier
 import dev.chaichai.mobile.design.system.ChaiChaiTheme
@@ -390,6 +392,58 @@ class PlaybackFlowTest {
     }
 
     @Test
+    fun subtitle_appearance_controls_appear_and_adjust_when_supported() {
+        val playback = FakePlayback().apply {
+            mutableState.value = activeWithTracks().copy(subtitleAppearanceSupported = true)
+        }
+        compose.setContent { ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback) } }
+
+        compose.onNodeWithContentDescription("Tracks").performClick()
+        compose.onNodeWithText("Subtitle appearance").assertIsDisplayed()
+        compose.onNodeWithTag("subtitle-position-Upper").performClick()
+        compose.onNodeWithTag("subtitle-color-YellowOnBlack").performClick()
+        compose.onNodeWithTag("subtitle-edge-DropShadow").performClick()
+
+        assertEquals(3, playback.appearanceCalls.size)
+        assertEquals(dev.chaichai.mobile.core.contracts.SubtitlePosition.Upper, playback.appearanceCalls[0].position)
+        assertEquals(SubtitleColorPreset.YellowOnBlack, playback.appearanceCalls[1].colorPreset)
+        assertEquals(
+            dev.chaichai.mobile.core.contracts.SubtitleEdgeStyle.DropShadow,
+            playback.appearanceCalls[2].edgeStyle,
+        )
+    }
+
+    @Test
+    fun subtitle_appearance_controls_are_hidden_when_unsupported() {
+        val playback = FakePlayback().apply { mutableState.value = activeWithTracks() }
+        compose.setContent { ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback) } }
+
+        compose.onNodeWithContentDescription("Tracks").performClick()
+        compose.onNodeWithText("Subtitle appearance").assertDoesNotExist()
+    }
+
+    @Test
+    fun subtitle_appearance_controls_stay_reachable_and_talkback_labeled_at_large_font_scale() {
+        val playback = FakePlayback().apply {
+            mutableState.value = activeWithTracks().copy(subtitleAppearanceSupported = true)
+        }
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
+                ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback) }
+            }
+        }
+
+        compose.onNodeWithContentDescription("Tracks").performClick()
+        // TalkBack exposes the position choice as a radio button, still reachable at 2x font scale.
+        compose.onNodeWithTag("subtitle-position-Lower")
+            .assertIsDisplayed()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, androidx.compose.ui.semantics.Role.RadioButton))
+            .performClick()
+
+        assertEquals(dev.chaichai.mobile.core.contracts.SubtitlePosition.Lower, playback.appearanceCalls.single().position)
+    }
+
+    @Test
     fun back_dismisses_tracks_before_exiting_playback() {
         val playback = FakePlayback()
         compose.setContent { ChaiChaiTheme(reducedMotion = true) { PlaybackHost(playback) } }
@@ -433,6 +487,7 @@ class PlaybackFlowTest {
         var selection: PlaybackTrackSelection? = null
         val speedCalls = mutableListOf<Float>()
         val subtitleDelayCalls = mutableListOf<Long>()
+        val appearanceCalls = mutableListOf<SubtitleAppearance>()
         override fun submit(request: MediaPlaybackRequest) = Unit
         override fun seekBy(deltaTicks: Long) { seekDelta += deltaTicks }
         override fun playPause() { playPauseCount++ }
@@ -440,6 +495,7 @@ class PlaybackFlowTest {
         override fun retry() { retryCount++ }
         override fun setPlaybackSpeed(speed: Float) { speedCalls += speed }
         override fun setSubtitleDelay(deltaMillis: Long) { subtitleDelayCalls += deltaMillis }
+        override fun setSubtitleAppearance(appearance: SubtitleAppearance) { appearanceCalls += appearance }
         override fun toggleControls() {
             toggleControlsCount++
             mutableState.value = (mutableState.value as PlaybackState.Active).copy(

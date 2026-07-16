@@ -85,7 +85,11 @@ import dev.chaichai.mobile.core.contracts.PlaybackProgressSync
 import dev.chaichai.mobile.core.contracts.PlaybackTrack
 import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
 import dev.chaichai.mobile.core.contracts.PlaybackTrackType
+import dev.chaichai.mobile.core.contracts.SubtitleAppearance
 import dev.chaichai.mobile.core.contracts.SubtitleCandidate
+import dev.chaichai.mobile.core.contracts.SubtitleColorPreset
+import dev.chaichai.mobile.core.contracts.SubtitleEdgeStyle
+import dev.chaichai.mobile.core.contracts.SubtitlePosition
 import dev.chaichai.mobile.core.contracts.SubtitleProviderController
 import dev.chaichai.mobile.core.contracts.SubtitleProviderOutcome
 import dev.chaichai.mobile.core.contracts.SubtitleSearchHints
@@ -284,6 +288,7 @@ private fun PlaybackControls(
                         onSelect = coordinator::selectTrack,
                         onSetSpeed = coordinator::setPlaybackSpeed,
                         onAdjustSubtitleDelay = coordinator::setSubtitleDelay,
+                        onSetSubtitleAppearance = coordinator::setSubtitleAppearance,
                         onFindSubtitlesOnline = subtitleProvider?.let {
                             {
                                 onShowTracksChanged(false)
@@ -439,6 +444,7 @@ private fun TracksSurface(
     onSelect: (PlaybackTrackSelection) -> Unit,
     onSetSpeed: (Float) -> Unit,
     onAdjustSubtitleDelay: (Long) -> Unit,
+    onSetSubtitleAppearance: (SubtitleAppearance) -> Unit,
     onFindSubtitlesOnline: (() -> Unit)? = null,
 ) {
     Dialog(
@@ -513,6 +519,9 @@ private fun TracksSurface(
                     }
                     if (state.subtitleDelaySupported) {
                         item { SubtitleDelayControl(state.subtitleDelayMillis, onAdjustSubtitleDelay) }
+                    }
+                    if (state.subtitleAppearanceSupported) {
+                        item { SubtitleAppearanceControls(state.subtitleAppearance, onSetSubtitleAppearance) }
                     }
                     item { TrackSectionHeading("Audio") }
                     if (state.audioTracks.isEmpty()) {
@@ -1161,6 +1170,148 @@ private fun SubtitleDelayControl(delayMillis: Long, onAdjust: (Long) -> Unit) {
             }
         }
     }
+}
+
+/**
+ * Present provider subtitles accessibly (#33): live-applied size/position/color-style/opacity controls.
+ * Every control reads directly from and writes directly through [appearance]/[onSet] — the coordinator
+ * publishes the applied value back on [PlaybackState.Active.subtitleAppearance] (persisted per the
+ * documented server+user scope), so there is no separate local draft state to lose on recreation.
+ * Only shown when [PlaybackState.Active.subtitleAppearanceSupported] gates it (AC1/AC2); each row keeps
+ * a 48dp target, a [Role], and a polite live region announcing the new value (AC5 TalkBack/large-text).
+ */
+@Composable
+private fun SubtitleAppearanceControls(appearance: SubtitleAppearance, onSet: (SubtitleAppearance) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp).testTag("subtitle-appearance-controls")) {
+        Text(
+            "Subtitle appearance",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.semantics { heading() },
+        )
+        SubtitleAppearanceSlider(
+            label = "Text size",
+            valueText = "${(appearance.textScale * 100).toInt()}%",
+            value = appearance.textScale,
+            range = SubtitleAppearance.MinTextScale..SubtitleAppearance.MaxTextScale,
+            testTag = "subtitle-text-size-slider",
+            onValueChange = { onSet(appearance.copy(textScale = it)) },
+        )
+        SubtitleAppearanceChoiceRow(
+            label = "Position",
+            options = SubtitlePosition.entries,
+            selected = appearance.position,
+            optionLabel = ::subtitlePositionLabel,
+            testTagPrefix = "subtitle-position",
+            onSelect = { onSet(appearance.copy(position = it)) },
+        )
+        SubtitleAppearanceChoiceRow(
+            label = "Color",
+            options = SubtitleColorPreset.entries,
+            selected = appearance.colorPreset,
+            optionLabel = ::subtitleColorPresetLabel,
+            testTagPrefix = "subtitle-color",
+            onSelect = { onSet(appearance.copy(colorPreset = it)) },
+        )
+        SubtitleAppearanceChoiceRow(
+            label = "Edge style",
+            options = SubtitleEdgeStyle.entries,
+            selected = appearance.edgeStyle,
+            optionLabel = ::subtitleEdgeStyleLabel,
+            testTagPrefix = "subtitle-edge",
+            onSelect = { onSet(appearance.copy(edgeStyle = it)) },
+        )
+        SubtitleAppearanceSlider(
+            label = "Background opacity",
+            valueText = "${(appearance.windowOpacity * 100).toInt()}%",
+            value = appearance.windowOpacity,
+            range = 0.3f..1f,
+            testTag = "subtitle-opacity-slider",
+            onValueChange = { onSet(appearance.copy(windowOpacity = it)) },
+        )
+    }
+}
+
+@Composable
+private fun SubtitleAppearanceSlider(
+    label: String,
+    valueText: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    testTag: String,
+    onValueChange: (Float) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                valueText,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = range,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(testTag).semantics {
+                contentDescription = "$label $valueText"
+            },
+        )
+    }
+}
+
+@Composable
+private fun <T> SubtitleAppearanceChoiceRow(
+    label: String,
+    options: List<T>,
+    selected: T,
+    optionLabel: (T) -> String,
+    testTagPrefix: String,
+    onSelect: (T) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+        Text(label, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyLarge)
+        Row(Modifier.fillMaxWidth()) {
+            options.forEach { option ->
+                val isSelected = option == selected
+                Row(
+                    Modifier.weight(1f).heightIn(min = 48.dp).selectable(
+                        selected = isSelected,
+                        role = Role.RadioButton,
+                        onClick = { onSelect(option) },
+                    ).testTag("$testTagPrefix-$option").padding(4.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        optionLabel(option),
+                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun subtitlePositionLabel(position: SubtitlePosition): String = when (position) {
+    SubtitlePosition.BottomDefault -> "Bottom"
+    SubtitlePosition.Lower -> "Lower"
+    SubtitlePosition.Upper -> "Upper"
+}
+
+private fun subtitleColorPresetLabel(preset: SubtitleColorPreset): String = when (preset) {
+    SubtitleColorPreset.WhiteOnBlack -> "White"
+    SubtitleColorPreset.YellowOnBlack -> "Yellow"
+    SubtitleColorPreset.BlackOnWhite -> "Black on white"
+}
+
+private fun subtitleEdgeStyleLabel(style: SubtitleEdgeStyle): String = when (style) {
+    SubtitleEdgeStyle.None -> "None"
+    SubtitleEdgeStyle.Outline -> "Outline"
+    SubtitleEdgeStyle.DropShadow -> "Drop shadow"
 }
 
 private fun formatSpeed(speed: Float): String {

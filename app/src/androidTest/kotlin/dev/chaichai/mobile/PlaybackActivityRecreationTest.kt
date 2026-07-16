@@ -8,11 +8,17 @@ import dev.chaichai.mobile.core.contracts.AppBoundaries
 import dev.chaichai.mobile.core.contracts.AppClock
 import dev.chaichai.mobile.core.contracts.ConnectivityMonitor
 import dev.chaichai.mobile.core.contracts.EmbyGateway
+import dev.chaichai.mobile.core.contracts.ExternalSubtitleActivation
 import dev.chaichai.mobile.core.contracts.GatewayConnectionState
 import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.MediaPlaybackRequest
 import dev.chaichai.mobile.core.contracts.PlaybackState
+import dev.chaichai.mobile.core.contracts.PlaybackTrack
+import dev.chaichai.mobile.core.contracts.PlaybackTrackType
+import dev.chaichai.mobile.core.contracts.SubtitleAppearance
+import dev.chaichai.mobile.core.contracts.SubtitleColorPreset
+import dev.chaichai.mobile.core.contracts.SubtitlePosition
 import dev.chaichai.mobile.platform.playback.PlaybackCoordinatorImpl
 import dev.chaichai.mobile.platform.playback.PlaybackEngine
 import dev.chaichai.mobile.platform.playback.PlaybackEngineEvent
@@ -37,6 +43,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -124,6 +131,65 @@ class PlaybackActivityRecreationTest {
         }
     }
 
+    /**
+     * Subtitle Expansion (#33 AC3): both the subtitle appearance AND the selected provider subtitle
+     * (#32) survive an Activity recreation (rotation/fold/backgrounding proxy, same harness as the
+     * authoritative-session test above) without a re-negotiation or extra prepare — the coordinator
+     * itself is retained outside the recreated Activity, exactly like the authoritative playback plan.
+     */
+    @Test
+    fun subtitle_appearance_and_provider_subtitle_survive_activity_recreation() {
+        PlaybackRecreationActivity.playbackEndedCount.set(0)
+        ActivityScenario.launch(PlaybackRecreationActivity::class.java).use { scenario ->
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                coordinator.submit(
+                    MediaPlaybackRequest.Resume(
+                        MediaIdentity("server", "movie"),
+                        600_000_000,
+                        HomeScope("server", "user"),
+                        "Arrival",
+                    ),
+                )
+            }
+            waitForActive()
+
+            val appearance = SubtitleAppearance(
+                textScale = 1.5f,
+                position = SubtitlePosition.Upper,
+                colorPreset = SubtitleColorPreset.YellowOnBlack,
+            )
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                coordinator.setSubtitleAppearance(appearance)
+                coordinator.addExternalSubtitle(
+                    ExternalSubtitleActivation(
+                        track = PlaybackTrack(index = 4, type = PlaybackTrackType.Subtitle, language = "eng"),
+                        localRef = "file:///cache/subtitles/arrival-en.srt",
+                        mimeType = "application/x-subrip",
+                    ),
+                )
+            }
+            waitUntil {
+                (coordinator.state.value as? PlaybackState.Active)?.subtitleTracks?.any {
+                    it.delivery == dev.chaichai.mobile.core.contracts.TrackDelivery.External && it.isCurrent
+                } == true
+            }
+
+            val creationCount = PlaybackRecreationActivity.creationCount.get()
+            scenario.onActivity { it.recreate() }
+            waitUntil { PlaybackRecreationActivity.creationCount.get() > creationCount }
+
+            val active = coordinator.state.value as PlaybackState.Active
+            assertEquals(appearance, active.subtitleAppearance)
+            assertTrue(active.subtitleAppearanceSupported)
+            assertTrue(
+                active.subtitleTracks.any {
+                    it.delivery == dev.chaichai.mobile.core.contracts.TrackDelivery.External && it.isCurrent
+                },
+            )
+            assertEquals(1, engine.prepareCount)
+        }
+    }
+
     private fun shell(command: String) {
         InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command).close()
     }
@@ -178,6 +244,9 @@ class PlaybackActivityRecreationTest {
         override var isPaused = true
         override val snapshot: PlaybackEngineSnapshot get() = PlaybackEngineSnapshot(positionTicks, isPaused)
         var prepareCount = 0
+        override val subtitleAppearanceSupported: Boolean get() = true
+        val appliedAppearances = mutableListOf<SubtitleAppearance>()
+        val appliedExternalSubtitles = mutableListOf<String>()
         override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean) {
             prepareCount++
             positionTicks = startPositionTicks
@@ -187,6 +256,10 @@ class PlaybackActivityRecreationTest {
         override suspend fun acknowledgePlayingReported() = Unit
         override suspend fun playPause() { isPaused = !isPaused }
         override suspend fun seekTo(positionTicks: Long) { this.positionTicks = positionTicks }
+        override suspend fun setSubtitleAppearance(appearance: SubtitleAppearance) { appliedAppearances += appearance }
+        override suspend fun applyExternalSubtitle(localRef: String, mimeType: String, language: String?) {
+            appliedExternalSubtitles += localRef
+        }
         override suspend fun stop() { mutableEvents.emit(PlaybackEngineEvent.Stopped(positionTicks, isPaused)) }
     }
 }

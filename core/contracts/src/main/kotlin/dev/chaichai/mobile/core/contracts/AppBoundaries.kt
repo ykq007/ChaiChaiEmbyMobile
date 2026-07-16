@@ -63,6 +63,14 @@ interface PlaybackCoordinator {
     fun addExternalSubtitle(activation: ExternalSubtitleActivation) = Unit
     fun setPlaybackSpeed(speed: Float) = Unit
     fun setSubtitleDelay(deltaMillis: Long) = Unit
+    /**
+     * Apply an accessible subtitle presentation (size/position/color/edge/opacity) LIVE — no restart,
+     * no gateway renegotiation, position/pause preserved (Subtitle Expansion, #33). Persisted per the
+     * documented scope in [SubtitleAppearance] and republished on [PlaybackState.Active]. The default
+     * no-op keeps existing constructions (fakes, tests) compiling; see [PlaybackState.Active.subtitleAppearanceSupported]
+     * for capability gating.
+     */
+    fun setSubtitleAppearance(appearance: SubtitleAppearance) = Unit
     fun retry()
     fun retryProgressSync() = Unit
     fun exit()
@@ -73,12 +81,20 @@ interface PlaybackCoordinator {
  * Speed persists per [HomeScope] (applies across media for that user/server); subtitle delay
  * persists per [MediaIdentity] only (never globally). Default no-op bodies keep existing
  * constructions (fakes, tests) compiling without a real persistence implementation.
+ *
+ * [subtitleAppearanceFor]/[setSubtitleAppearance] (#33) are ALSO [HomeScope]-scoped (server+user) — see
+ * the doc comment on [SubtitleAppearance] for why appearance is a user preference rather than
+ * media-scoped, and `SharedPreferencesPlaybackPreferences` in `platform:server` for the persisted
+ * representation, including migration: an absent record returns [SubtitleAppearance.Default] with no
+ * data loss for pre-#33 installs.
  */
 interface PlaybackPreferences {
     fun speedFor(scope: HomeScope): Float = 1.0f
     fun setSpeed(scope: HomeScope, speed: Float) = Unit
     fun subtitleDelayFor(identity: MediaIdentity): Long = 0L
     fun setSubtitleDelay(identity: MediaIdentity, delayMillis: Long) = Unit
+    fun subtitleAppearanceFor(scope: HomeScope): SubtitleAppearance = SubtitleAppearance.Default
+    fun setSubtitleAppearance(scope: HomeScope, appearance: SubtitleAppearance) = Unit
 }
 fun interface AppClock { fun now(): Instant }
 interface ConnectivityMonitor { val isOnline: StateFlow<Boolean> }
@@ -394,6 +410,8 @@ sealed interface PlaybackState {
         val subtitleDelayMillis: Long = 0L,
         val speedControlSupported: Boolean = false,
         val subtitleDelaySupported: Boolean = false,
+        val subtitleAppearance: SubtitleAppearance = SubtitleAppearance.Default,
+        val subtitleAppearanceSupported: Boolean = false,
         val scope: HomeScope? = null,
         val seriesIdentity: MediaIdentity? = null,
         val seasonNumber: Int? = null,
