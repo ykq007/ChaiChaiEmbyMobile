@@ -350,6 +350,7 @@ fun MobileApp(
             windowLayout = playbackWindowLayout,
             keepControlsVisible = keepPlaybackControlsVisible,
             danmaku = boundaries.danmaku,
+            subtitleProvider = boundaries.subtitleProvider,
         )
         }
 }
@@ -536,6 +537,7 @@ private fun AdaptiveShell(
                         serverDirectory = boundaries.serverDirectory,
                         serverProxy = boundaries.serverProxy,
                         danmakuEndpoints = boundaries.danmakuEndpoints,
+                        subtitleProviders = boundaries.subtitleProviders,
                     )
                 }
                 }

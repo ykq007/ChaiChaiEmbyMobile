@@ -300,6 +300,76 @@ class PlaybackCoordinatorImplTest {
     }
 
     @Test
+    fun `adding a provider subtitle activates it without renegotiating or losing position and pause`() = runTest {
+        val gateway = FakeGateway()
+        val engine = FakeEngine()
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
+        coordinator.submit(MediaPlaybackRequest.Resume(
+            MediaIdentity("server", "movie"), 500_000_000, HomeScope("server", "user"), "Arrival",
+        ))
+        advanceUntilIdle()
+        coordinator.playPause() // pause it
+        advanceUntilIdle()
+        val negotiationsBefore = gateway.requests.size
+        val paused = (coordinator.state.value as PlaybackState.Active).isPaused
+        assertTrue(paused)
+
+        coordinator.addExternalSubtitle(
+            dev.chaichai.mobile.core.contracts.ExternalSubtitleActivation(
+                track = dev.chaichai.mobile.core.contracts.PlaybackTrack(
+                    index = dev.chaichai.mobile.core.contracts.ExternalSubtitleActivation.SubtitleStreamIndex,
+                    type = PlaybackTrackType.Subtitle,
+                    language = "en",
+                    delivery = dev.chaichai.mobile.core.contracts.TrackDelivery.External,
+                ),
+                localRef = "memory://a1.srt",
+                mimeType = "application/x-subrip",
+            ),
+        )
+        advanceUntilIdle()
+
+        val state = coordinator.state.value as PlaybackState.Active
+        // No new negotiation happened (position was not reset by renegotiating from scratch).
+        assertEquals(negotiationsBefore, gateway.requests.size)
+        assertEquals(500_000_000, state.positionTicks)
+        assertTrue(state.isPaused)
+        // The external subtitle is now the current subtitle track, delivered as External.
+        val current = state.subtitleTracks.single { it.isCurrent }
+        assertEquals(dev.chaichai.mobile.core.contracts.TrackDelivery.External, current.delivery)
+        assertEquals(listOf("memory://a1.srt"), engine.appliedExternalSubtitles)
+        coordinator.close()
+    }
+
+    @Test
+    fun `an incompatible external subtitle rolls back leaving the prior subtitle current`() = runTest {
+        val gateway = FakeGateway()
+        val engine = FakeEngine().apply { externalSubtitleFailure = IllegalStateException("bad subtitle") }
+        val coordinator = PlaybackCoordinatorImpl(this, gateway, engine, capabilities(), false)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(
+            MediaIdentity("server", "movie"), HomeScope("server", "user"), "Arrival",
+        ))
+        advanceUntilIdle()
+
+        coordinator.addExternalSubtitle(
+            dev.chaichai.mobile.core.contracts.ExternalSubtitleActivation(
+                track = dev.chaichai.mobile.core.contracts.PlaybackTrack(
+                    index = dev.chaichai.mobile.core.contracts.ExternalSubtitleActivation.SubtitleStreamIndex,
+                    type = PlaybackTrackType.Subtitle,
+                    delivery = dev.chaichai.mobile.core.contracts.TrackDelivery.External,
+                ),
+                localRef = "memory://broken.srt",
+                mimeType = "application/x-subrip",
+            ),
+        )
+        advanceUntilIdle()
+
+        // Playback is undisturbed and no provider subtitle is current after the rollback.
+        val state = coordinator.state.value as PlaybackState.Active
+        assertTrue(state.subtitleTracks.none { it.isCurrent && it.delivery == dev.chaichai.mobile.core.contracts.TrackDelivery.External })
+        coordinator.close()
+    }
+
+    @Test
     fun `mismatched request scope is rejected before negotiation`() = runTest {
         val gateway = FakeGateway()
         val coordinator = PlaybackCoordinatorImpl(this, gateway, FakeEngine(), capabilities(), false)
@@ -649,8 +719,14 @@ class PlaybackCoordinatorImplTest {
         override val subtitleDelaySupported: Boolean get() = subtitleDelaySupportedFlag
         val appliedSpeeds = mutableListOf<Float>()
         val appliedSubtitleDelays = mutableListOf<Long>()
+        val appliedExternalSubtitles = mutableListOf<String>()
+        var externalSubtitleFailure: Exception? = null
         override suspend fun setSpeed(speed: Float) { appliedSpeeds += speed }
         override suspend fun setSubtitleDelayMs(delayMs: Long) { appliedSubtitleDelays += delayMs }
+        override suspend fun applyExternalSubtitle(localRef: String, mimeType: String, language: String?) {
+            externalSubtitleFailure?.let { throw it }
+            appliedExternalSubtitles += localRef
+        }
         override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean) {
             prepareFailure?.let { throw it }
             positionTicks = startPositionTicks

@@ -55,6 +55,12 @@ interface PlaybackCoordinator {
     fun seekBy(deltaTicks: Long)
     fun seekTo(positionTicks: Long)
     fun selectTrack(selection: PlaybackTrackSelection) = Unit
+    /**
+     * Activate a provider-downloaded External subtitle as the current subtitle track WITHOUT
+     * restarting playback or losing position/paused state (Subtitle Expansion, #32). The default
+     * no-op keeps existing constructions (fakes, tests) compiling. See [ExternalSubtitleActivation].
+     */
+    fun addExternalSubtitle(activation: ExternalSubtitleActivation) = Unit
     fun setPlaybackSpeed(speed: Float) = Unit
     fun setSubtitleDelay(deltaMillis: Long) = Unit
     fun retry()
@@ -484,4 +490,6 @@ data class AppBoundaries(
     val serverDirectory: ServerDirectory? = null,
     val serverProxy: ServerProxyBoundary? = null,
     val danmakuEndpoints: DanmakuEndpointBoundary? = null,
+    val subtitleProvider: SubtitleProviderController? = null,
+    val subtitleProviders: SubtitleProviderBoundary? = null,
 )

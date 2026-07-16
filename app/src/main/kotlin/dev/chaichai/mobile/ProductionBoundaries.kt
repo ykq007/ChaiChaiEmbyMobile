@@ -44,7 +44,15 @@ import dev.chaichai.mobile.platform.danmaku.DanmakuEndpointManager
 import dev.chaichai.mobile.platform.danmaku.DanmakuEndpointTester
 import dev.chaichai.mobile.platform.danmaku.OkHttpDanmakuEndpointClient
 import dev.chaichai.mobile.platform.danmaku.SharedPreferencesDanmakuConfigStore
+import dev.chaichai.mobile.platform.subtitles.FileSubtitleDownloadStore
+import dev.chaichai.mobile.platform.subtitles.OkHttpSubtitleProviderClient
+import dev.chaichai.mobile.platform.subtitles.SharedPreferencesSubtitleProviderConfigStore
+import dev.chaichai.mobile.platform.subtitles.SubtitleProviderCoordinatorImpl
+import dev.chaichai.mobile.platform.subtitles.SubtitleProviderHttpClients
+import dev.chaichai.mobile.platform.subtitles.SubtitleProviderManager
+import dev.chaichai.mobile.platform.subtitles.SubtitleProviderTester
 import dev.chaichai.mobile.platform.proxy.KeystoreProxyCredentialVault
+import java.io.File
 import dev.chaichai.mobile.platform.playback.Media3ServicePlaybackEngine
 import dev.chaichai.mobile.platform.playback.PlaybackCoordinatorImpl
 import dev.chaichai.mobile.platform.playback.androidPlaybackCapabilities
@@ -162,6 +170,44 @@ object ProductionBoundariesModule {
             tester = DanmakuEndpointTester(danmakuClients),
             onConfigChanged = danmakuController::onEndpointsChanged,
         )
+        val playbackCoordinator = PlaybackCoordinatorImpl(
+            applicationScope,
+            DurableProgressGateway(
+                EmbyPlaybackGateway(vault, clients = httpClients, deviceId = deviceId),
+                progress,
+                clock,
+            ),
+            Media3ServicePlaybackEngine(context),
+            androidPlaybackCapabilities(),
+            preferences = SharedPreferencesPlaybackPreferences(context),
+        )
+        // Subtitle Expansion (#32): a completely separate provider path that reuses platform:proxy for
+        // routing and a subtitle-namespaced Keystore vault for BOTH provider account credentials and
+        // proxy credentials. Like the danmaku path it never touches the Emby AuthorityScopedHttpClients
+        // or its Certificate Bypass (this module does not depend on platform:server). Selecting a
+        // candidate downloads it and hands it to the SAME playback coordinator, which side-loads it as
+        // the current External subtitle without restarting playback or losing position/paused state.
+        val subtitleConfigStore = SharedPreferencesSubtitleProviderConfigStore(context)
+        val subtitleVault = KeystoreProxyCredentialVault(
+            context,
+            preferencesName = "subtitle_provider_credentials",
+            keyAlias = "chai_chai_subtitle_provider_key",
+            entryPrefix = "subtitle_provider_",
+        )
+        val subtitleClients = SubtitleProviderHttpClients(subtitleVault)
+        val subtitleController = SubtitleProviderCoordinatorImpl(
+            scope = applicationScope,
+            client = OkHttpSubtitleProviderClient(subtitleClients),
+            configStore = subtitleConfigStore,
+            downloadStore = FileSubtitleDownloadStore(File(context.cacheDir, "subtitles")),
+            playback = playbackCoordinator,
+            accountVault = subtitleVault,
+        )
+        val subtitleManager = SubtitleProviderManager(
+            configStore = subtitleConfigStore,
+            vault = subtitleVault,
+            tester = SubtitleProviderTester(subtitleClients),
+        )
         val privateDataCleaner = ServerPrivateDataCleaner(homeCache, movieCache, seriesCache, searchCache)
         val serverDirectory = ServerDirectoryManager(
             scope = applicationScope,
@@ -188,17 +234,7 @@ object ProductionBoundariesModule {
         }
         return AppBoundaries(
             gateway = aggregatedGateway,
-            playback = PlaybackCoordinatorImpl(
-                applicationScope,
-                DurableProgressGateway(
-                    EmbyPlaybackGateway(vault, clients = httpClients, deviceId = deviceId),
-                    progress,
-                    clock,
-                ),
-                Media3ServicePlaybackEngine(context),
-                androidPlaybackCapabilities(),
-                preferences = SharedPreferencesPlaybackPreferences(context),
-            ),
+            playback = playbackCoordinator,
             clock = clock,
             connectivity = connectivity,
             serverSetup = serverSetup,
@@ -214,6 +250,8 @@ object ProductionBoundariesModule {
                 ProxyConnectionTester(vault, proxyStore, httpClients),
             ),
             danmakuEndpoints = danmakuEndpointManager,
+            subtitleProvider = subtitleController,
+            subtitleProviders = subtitleManager,
         )
     }
 }

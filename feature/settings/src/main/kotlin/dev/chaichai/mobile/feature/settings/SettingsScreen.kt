@@ -25,6 +25,7 @@ import dev.chaichai.mobile.core.contracts.DanmakuEndpointBoundary
 import dev.chaichai.mobile.core.contracts.ServerDirectory
 import dev.chaichai.mobile.core.contracts.ServerProxyBoundary
 import dev.chaichai.mobile.core.contracts.SignOutState
+import dev.chaichai.mobile.core.contracts.SubtitleProviderBoundary
 
 @Composable
 fun SettingsScreen(
@@ -33,6 +34,7 @@ fun SettingsScreen(
     serverDirectory: ServerDirectory? = null,
     serverProxy: ServerProxyBoundary? = null,
     danmakuEndpoints: DanmakuEndpointBoundary? = null,
+    subtitleProviders: SubtitleProviderBoundary? = null,
 ) {
     if (account == null) {
         SettingsPlaceholder(modifier)
@@ -51,6 +53,9 @@ fun SettingsScreen(
         }
         if (danmakuEndpoints != null) {
             DanmakuEndpointsSection(danmakuEndpoints)
+        }
+        if (subtitleProviders != null) {
+            SubtitleProvidersSection(subtitleProviders)
         }
         when (state) {
             SignOutState.Syncing -> CircularProgressIndicator()

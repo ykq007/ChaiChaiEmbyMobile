@@ -85,6 +85,11 @@ import dev.chaichai.mobile.core.contracts.PlaybackProgressSync
 import dev.chaichai.mobile.core.contracts.PlaybackTrack
 import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
 import dev.chaichai.mobile.core.contracts.PlaybackTrackType
+import dev.chaichai.mobile.core.contracts.SubtitleCandidate
+import dev.chaichai.mobile.core.contracts.SubtitleProviderController
+import dev.chaichai.mobile.core.contracts.SubtitleProviderOutcome
+import dev.chaichai.mobile.core.contracts.SubtitleSearchHints
+import dev.chaichai.mobile.core.contracts.SubtitleSearchState
 import dev.chaichai.mobile.core.contracts.TrackDelivery
 import dev.chaichai.mobile.core.contracts.TrackQualifier
 import androidx.activity.compose.PredictiveBackHandler
@@ -110,6 +115,7 @@ fun PlaybackHost(
     ),
     keepControlsVisible: Boolean = false,
     danmaku: DanmakuController? = null,
+    subtitleProvider: SubtitleProviderController? = null,
 ) {
     val state by coordinator.state.collectAsState()
     if (danmaku != null) {
@@ -118,12 +124,14 @@ fun PlaybackHost(
     val playbackKey = (state as? PlaybackState.Active)?.identity?.let { "${it.serverId}:${it.itemId}" } ?: "none"
     var showTracks by rememberSaveable(playbackKey) { mutableStateOf(false) }
     var showDanmakuPanel by rememberSaveable(playbackKey) { mutableStateOf(false) }
+    var showSubtitleSearch by rememberSaveable(playbackKey) { mutableStateOf(false) }
     LaunchedEffect(state) {
         if (state is PlaybackState.Exited || state is PlaybackState.Failed) onPlaybackEnded()
     }
     PredictiveBackHandler(enabled = state !is PlaybackState.Idle && state !is PlaybackState.Exited) { progress ->
         progress.collect { }
         when {
+            showSubtitleSearch -> showSubtitleSearch = false
             showDanmakuPanel -> showDanmakuPanel = false
             showTracks -> showTracks = false
             else -> coordinator.exit()
@@ -137,7 +145,8 @@ fun PlaybackHost(
         is PlaybackState.Active -> PlaybackControls(
             snapshot, coordinator, onToggleOrientation, onToggleFullscreen,
             windowLayout, keepControlsVisible, showTracks, { showTracks = it },
-            showDanmakuPanel, { showDanmakuPanel = it }, danmaku, modifier,
+            showDanmakuPanel, { showDanmakuPanel = it }, danmaku,
+            subtitleProvider, showSubtitleSearch, { showSubtitleSearch = it }, modifier,
         )
         is PlaybackState.Failed -> PlaybackFailure(snapshot, coordinator, modifier)
     }
@@ -202,6 +211,9 @@ private fun PlaybackControls(
     showDanmakuPanel: Boolean,
     onShowDanmakuPanelChanged: (Boolean) -> Unit,
     danmaku: DanmakuController?,
+    subtitleProvider: SubtitleProviderController?,
+    showSubtitleSearch: Boolean,
+    onShowSubtitleSearchChanged: (Boolean) -> Unit,
     modifier: Modifier,
 ) {
     LaunchedEffect(keepControlsVisible, state.controlsVisible) {
@@ -272,6 +284,20 @@ private fun PlaybackControls(
                         onSelect = coordinator::selectTrack,
                         onSetSpeed = coordinator::setPlaybackSpeed,
                         onAdjustSubtitleDelay = coordinator::setSubtitleDelay,
+                        onFindSubtitlesOnline = subtitleProvider?.let {
+                            {
+                                onShowTracksChanged(false)
+                                onShowSubtitleSearchChanged(true)
+                            }
+                        },
+                    )
+                }
+                if (showSubtitleSearch && subtitleProvider != null) {
+                    SubtitleSearchSurface(
+                        state = state,
+                        controller = subtitleProvider,
+                        layout = windowLayout,
+                        onDismiss = { onShowSubtitleSearchChanged(false) },
                     )
                 }
                 if (showDanmakuPanel && danmaku != null && danmakuState != null) {
@@ -413,6 +439,7 @@ private fun TracksSurface(
     onSelect: (PlaybackTrackSelection) -> Unit,
     onSetSpeed: (Float) -> Unit,
     onAdjustSubtitleDelay: (Long) -> Unit,
+    onFindSubtitlesOnline: (() -> Unit)? = null,
 ) {
     Dialog(
         onDismissRequest = onDismiss,
@@ -518,6 +545,15 @@ private fun TracksSurface(
                     if (state.subtitleTracks.isEmpty()) {
                         item { MissingTracks("No subtitle streams available") }
                     }
+                    if (onFindSubtitlesOnline != null) {
+                        item {
+                            TextButton(
+                                onClick = onFindSubtitlesOnline,
+                                modifier = Modifier.heightIn(min = 48.dp).padding(top = 4.dp)
+                                    .testTag("find-subtitles-online"),
+                            ) { Text("Find subtitles online") }
+                        }
+                    }
                 }
             }
         }
@@ -602,6 +638,240 @@ private fun DanmakuSurface(
     }
     }
 }
+
+/**
+ * The in-player "Find subtitles online" panel (Subtitle Expansion, #32). Searches the configured
+ * providers by the current media identity and shows candidates grouped and labeled by provider, each
+ * with its language, release/match metadata and provider provenance. Selecting a candidate downloads
+ * and activates it as the current subtitle without leaving playback (spinner while activating); a
+ * provider or download failure shows a contained, actionable message in a polite live region while the
+ * prior subtitle stays active. Mirrors [TracksSurface]'s adaptive bottom/side sheet and safe insets.
+ */
+@Composable
+private fun SubtitleSearchSurface(
+    state: PlaybackState.Active,
+    controller: SubtitleProviderController,
+    layout: PlaybackWindowLayout,
+    onDismiss: () -> Unit,
+) {
+    val searchState by controller.searchState.collectAsState()
+    var query by rememberSaveable(state.identity.itemId) { mutableStateOf(state.title) }
+
+    DisposableEffect(state.identity.serverId, state.identity.itemId) {
+        controller.searchForCurrentMedia(state.identity, state.scope ?: dev.chaichai.mobile.core.contracts.HomeScope("", ""), hintsFrom(state, query))
+        onDispose { controller.cancelSearch() }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    ) {
+    Box(Modifier.fillMaxSize()) {
+    BoxWithConstraints(
+        safePane(layout.safePane).testTag(
+            if (layout.tracksPresentation == PlaybackTracksPresentation.AnchoredSide) {
+                "subtitle-search-side-sheet"
+            } else {
+                "subtitle-search-bottom-sheet"
+            },
+        ),
+    ) {
+        Box(
+            Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.68f)).clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClickLabel = "Close subtitle search",
+                role = Role.Button,
+                onClick = onDismiss,
+            ),
+        )
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+            modifier = if (layout.tracksPresentation == PlaybackTracksPresentation.AnchoredSide) {
+                Modifier.align(Alignment.CenterEnd).width(400.dp).fillMaxHeight()
+                    .windowInsetsPadding(WindowInsets.safeDrawing).testTag("subtitle-search-panel")
+            } else {
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().heightIn(max = maxHeight * 0.86f)
+                    .windowInsetsPadding(WindowInsets.safeDrawing).testTag("subtitle-search-panel")
+            },
+        ) {
+            LazyColumn(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+                item {
+                    Text(
+                        "Find subtitles online",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.semantics { heading() },
+                    )
+                }
+                item {
+                    Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = query,
+                            onValueChange = { query = it },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f).testTag("subtitle-search-field"),
+                            label = { Text("Title") },
+                        )
+                        Button(
+                            onClick = {
+                                controller.searchForCurrentMedia(
+                                    state.identity,
+                                    state.scope ?: dev.chaichai.mobile.core.contracts.HomeScope("", ""),
+                                    hintsFrom(state, query),
+                                )
+                            },
+                            modifier = Modifier.padding(start = 8.dp).heightIn(min = 48.dp).testTag("subtitle-search-button"),
+                        ) { Text("Search") }
+                    }
+                }
+                subtitleSearchBody(searchState, controller::selectCandidate)
+            }
+        }
+    }
+    }
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.subtitleSearchBody(
+    searchState: SubtitleSearchState,
+    onSelect: (String) -> Unit,
+) {
+    when (searchState) {
+        is SubtitleSearchState.Idle -> Unit
+        is SubtitleSearchState.Searching -> item {
+            Row(
+                Modifier.fillMaxWidth().padding(top = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                Text(
+                    "Searching providers…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+            }
+        }
+        is SubtitleSearchState.Failure -> item {
+            Text(
+                searchState.message,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 12.dp).testTag("subtitle-search-failure")
+                    .semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
+        is SubtitleSearchState.Results -> {
+            searchState.activationError?.let { error ->
+                item {
+                    Text(
+                        error,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(top = 12.dp).testTag("subtitle-activation-error")
+                            .semantics { liveRegion = LiveRegionMode.Polite },
+                    )
+                }
+            }
+            item { SubtitleProviderStatusRow(searchState.providerStatuses) }
+            if (searchState.candidates.isEmpty()) {
+                item { MissingTracks("No subtitles found for this title.") }
+            }
+            items(searchState.candidates, key = { it.id }) { candidate ->
+                SubtitleCandidateRow(
+                    candidate = candidate,
+                    activating = searchState.activatingCandidateId == candidate.id,
+                    activated = searchState.activatedCandidateId == candidate.id,
+                    enabled = searchState.activatingCandidateId == null,
+                    onSelect = { onSelect(candidate.id) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubtitleProviderStatusRow(statuses: List<dev.chaichai.mobile.core.contracts.SubtitleProviderStatus>) {
+    if (statuses.isEmpty()) return
+    val text = statuses.joinToString("  ·  ") { "${it.providerName}: ${outcomeLabel(it.outcome)}" }
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 12.dp).testTag("subtitle-provider-statuses")
+            .semantics { liveRegion = LiveRegionMode.Polite },
+    )
+}
+
+private fun outcomeLabel(outcome: SubtitleProviderOutcome): String = when (outcome) {
+    SubtitleProviderOutcome.Ok -> "results"
+    SubtitleProviderOutcome.Empty -> "no matches"
+    SubtitleProviderOutcome.Failed -> "unavailable"
+    SubtitleProviderOutcome.TimedOut -> "timed out"
+    SubtitleProviderOutcome.AuthFailed -> "sign-in rejected"
+}
+
+@Composable
+private fun SubtitleCandidateRow(
+    candidate: SubtitleCandidate,
+    activating: Boolean,
+    activated: Boolean,
+    enabled: Boolean,
+    onSelect: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("subtitle-candidate-${candidate.id}").clickable(
+            enabled = enabled,
+            onClickLabel = "Download and use this subtitle",
+            role = Role.Button,
+            onClick = onSelect,
+        ).padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                subtitleCandidatePrimary(candidate),
+                color = if (activated) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                subtitleCandidateSecondary(candidate),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        if (activating) {
+            CircularProgressIndicator(
+                Modifier.size(20.dp).semantics { liveRegion = LiveRegionMode.Polite },
+                strokeWidth = 2.dp,
+            )
+        } else if (activated) {
+            Text("Current", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+private fun subtitleCandidatePrimary(candidate: SubtitleCandidate): String = buildList {
+    add((candidate.languageLabel ?: displayLanguage(candidate.language)))
+    if (candidate.hearingImpaired) add("Hearing impaired")
+    add(candidate.format.uppercase(Locale.ROOT))
+}.joinToString(" · ")
+
+private fun subtitleCandidateSecondary(candidate: SubtitleCandidate): String = buildList {
+    candidate.releaseName?.let(::add)
+    candidate.matchInfo?.let(::add)
+    add("via ${candidate.providerName}")
+}.joinToString(" · ")
+
+private fun hintsFrom(state: PlaybackState.Active, title: String): SubtitleSearchHints = SubtitleSearchHints(
+    title = title.ifBlank { state.title },
+    season = state.seasonNumber,
+    episode = state.episodeNumber,
+    runtimeTicks = state.runtimeTicks.takeIf { it > 0 },
+)
 
 @Composable
 private fun DanmakuEnableRow(enabled: Boolean, onSetEnabled: (Boolean) -> Unit) {

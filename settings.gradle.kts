@@ -25,6 +25,7 @@ include(
     ":platform:server",
     ":platform:playback",
     ":platform:danmaku",
+    ":platform:subtitles",
     ":feature:playback",
     ":feature:home",
     ":feature:libraries",

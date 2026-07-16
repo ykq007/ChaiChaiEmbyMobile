@@ -1,8 +1,11 @@
 package dev.chaichai.mobile.platform.playback
 
+import dev.chaichai.mobile.core.contracts.ExternalSubtitleActivation
 import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.MediaPlaybackRequest
 import dev.chaichai.mobile.core.contracts.PlaybackCoordinator
+import dev.chaichai.mobile.core.contracts.PlaybackTrack
+import dev.chaichai.mobile.core.contracts.TrackDelivery
 import dev.chaichai.mobile.core.contracts.PlaybackFailureKind
 import dev.chaichai.mobile.core.contracts.PlaybackPreferences
 import dev.chaichai.mobile.core.contracts.PlaybackState
@@ -47,6 +50,13 @@ interface PlaybackEngine {
     suspend fun seekTo(positionTicks: Long)
     suspend fun setSpeed(speed: Float) = Unit
     suspend fun setSubtitleDelayMs(delayMs: Long) = Unit
+    /**
+     * Side-load a downloaded external subtitle ([localRef]) and make it the current subtitle track,
+     * preserving the current position and paused/playing state (no renegotiation, no restart from 0).
+     * Default no-op so JVM fakes stay simple; the Media3 engine re-prepares in place at the current
+     * position. May throw if the subtitle is incompatible, so the caller can contain the failure.
+     */
+    suspend fun applyExternalSubtitle(localRef: String, mimeType: String, language: String?) = Unit
     suspend fun stop()
 }
 data class PlaybackEngineSnapshot(val positionTicks: Long, val isPaused: Boolean)
@@ -86,6 +96,7 @@ class PlaybackCoordinatorImpl(
     private var progressStatusJob: Job? = null
     private var currentSpeed: Float = 1.0f
     private var currentSubtitleDelayMillis: Long = 0L
+    private var activeExternalSubtitle: PlaybackTrack? = null
 
     private val engineEventJob = scope.launch {
             engine.events.collect { event ->
@@ -123,6 +134,7 @@ class PlaybackCoordinatorImpl(
         }
         lastRequest = request
         exiting = false
+        activeExternalSubtitle = null
         timelineJob?.cancel()
         negotiationJob?.cancel()
         if (request.scope.userId.isBlank() || request.scope.serverId != request.identity.serverId || request.identity.itemId.isBlank()) {
@@ -206,6 +218,13 @@ class PlaybackCoordinatorImpl(
         val current = mutableState.value as? PlaybackState.Active ?: return
         val previousPlan = activePlan ?: return
         if (current.isChangingTrack) return
+        // A selection whose subtitle is the reserved external index means "keep the active provider
+        // subtitle" (the user changed audio, or re-picked the external row): renegotiate server subs
+        // off but leave the side-loaded external subtitle in place. Any other subtitle selection (a
+        // real server stream, or Off) deactivates the provider subtitle so the server choice wins.
+        val keepExternal = selection.subtitleStreamIndex == ExternalSubtitleActivation.SubtitleStreamIndex
+        val effectiveSelection = if (keepExternal) selection.copy(subtitleStreamIndex = null) else selection
+        if (!keepExternal) activeExternalSubtitle = null
         val positionTicks = engine.positionTicks.coerceIn(0, previousPlan.runtimeTicks)
         val wasPaused = engine.isPaused
         mutableState.value = current.copy(
@@ -219,7 +238,7 @@ class PlaybackCoordinatorImpl(
             )
             val request = previousPlan.request.copy(
                 start = PlaybackStart.Resume(positionTicks),
-                trackSelection = selection,
+                trackSelection = effectiveSelection,
                 sessionReference = previousPlan.sessionReference,
             )
             when (val result = gateway.negotiate(request, capabilities)) {
@@ -267,6 +286,39 @@ class PlaybackCoordinatorImpl(
         scope.launch {
             engine.setSubtitleDelayMs(updated)
             publishActive(current.title, controlsVisible = true)
+        }
+    }
+
+    /**
+     * Activate a provider-downloaded External subtitle as the current subtitle track. Crucially this
+     * NEVER renegotiates with the server (no gateway.negotiate) and reads the LIVE engine position and
+     * paused state, so playback keeps its exact position and playing/paused state — the subtitle is
+     * side-loaded in place. If the engine rejects it (incompatible), the previous external subtitle is
+     * restored so the prior track stays current and playback is undisturbed.
+     */
+    override fun addExternalSubtitle(activation: ExternalSubtitleActivation) {
+        val current = mutableState.value as? PlaybackState.Active ?: return
+        if (activePlan == null) return
+        val previousExternal = activeExternalSubtitle
+        val track = activation.track.copy(
+            index = ExternalSubtitleActivation.SubtitleStreamIndex,
+            type = dev.chaichai.mobile.core.contracts.PlaybackTrackType.Subtitle,
+            delivery = TrackDelivery.External,
+            isCurrent = true,
+        )
+        activeExternalSubtitle = track
+        publishActive(current.title, controlsVisible = true)
+        scope.launch {
+            try {
+                engine.applyExternalSubtitle(activation.localRef, activation.mimeType, activation.track.language)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Incompatible/unreadable: roll back to whatever subtitle was current before.
+                activeExternalSubtitle = previousExternal
+                (mutableState.value as? PlaybackState.Active)?.let { publishActive(it.title, it.controlsVisible) }
+                return@launch
+            }
         }
     }
 
@@ -444,6 +496,14 @@ class PlaybackCoordinatorImpl(
     private fun publishActive(title: String, controlsVisible: Boolean) {
         val plan = activePlan ?: return
         val snapshot = engine.snapshot
+        val external = activeExternalSubtitle
+        val subtitleTracks = if (external != null) {
+            // The activated provider subtitle becomes the single current subtitle; server streams
+            // stay available but no longer current.
+            plan.subtitleTracks.map { it.copy(isCurrent = false) } + external
+        } else {
+            plan.subtitleTracks
+        }
         mutableState.value = PlaybackState.Active(
             identity = dev.chaichai.mobile.core.contracts.MediaIdentity(plan.request.serverId, plan.request.itemId),
             title = title,
@@ -452,7 +512,7 @@ class PlaybackCoordinatorImpl(
             isPaused = snapshot.isPaused,
             controlsVisible = controlsVisible,
             audioTracks = plan.audioTracks,
-            subtitleTracks = plan.subtitleTracks,
+            subtitleTracks = subtitleTracks,
             progressSync = (gateway as? ProgressAwarePlaybackGateway)?.progressStatus(plan.request.scope)?.value?.toContract()
                 ?: PlaybackProgressSync.Synced,
             playbackSpeed = currentSpeed,

@@ -42,6 +42,7 @@ class PlaybackSessionService : MediaSessionService() {
     private var stoppedPublished = false
     private var reportControlEvents = false
     private var startedActivityCount = 0
+    private var currentPlan: AuthoritativePlaybackPlan? = null
     private val activityLifecycleCallbacks = object : Application.ActivityLifecycleCallbacks {
         override fun onActivityStarted(activity: Activity) { startedActivityCount++ }
         override fun onActivityStopped(activity: Activity) {
@@ -138,6 +139,7 @@ class PlaybackSessionService : MediaSessionService() {
     internal fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean) {
         stoppedPublished = false
         reportControlEvents = false
+        currentPlan = plan
         val redirectRejectingClient = playbackHttpClient()
         val dataSourceFactory = OkHttpDataSource.Factory(redirectRejectingClient)
             .setDefaultRequestProperties(plan.headers)
@@ -146,6 +148,35 @@ class PlaybackSessionService : MediaSessionService() {
         )
         player.playWhenReady = !startPaused
         player.setMediaSource(source, startPositionTicks / TICKS_PER_MILLISECOND)
+        player.prepare()
+    }
+
+    /**
+     * Side-load [localRef] as a subtitle onto the CURRENT media, preserving position and playing state.
+     * Re-prepares the same media source with the subtitle attached at the current position with the
+     * same playWhenReady, so nothing renegotiates and playback does not restart from zero.
+     */
+    @UnstableApi
+    internal fun applyExternalSubtitle(localRef: String, mimeType: String, language: String?) {
+        val plan = currentPlan ?: return
+        val resumePositionMs = player.currentPosition
+        val wasPlaying = player.playWhenReady
+        val dataSourceFactory = OkHttpDataSource.Factory(playbackHttpClient())
+            .setDefaultRequestProperties(plan.headers)
+        val subtitle = MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(localRef))
+            .setMimeType(mimeType)
+            .setLanguage(language)
+            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+            .build()
+        val source = DefaultMediaSourceFactory(dataSourceFactory).createMediaSource(
+            MediaItem.Builder()
+                .setUri(plan.url.toString())
+                .setMediaId(plan.request.itemId)
+                .setSubtitleConfigurations(listOf(subtitle))
+                .build(),
+        )
+        player.setMediaSource(source, resumePositionMs)
+        player.playWhenReady = wasPlaying
         player.prepare()
     }
 
@@ -292,6 +323,15 @@ class Media3ServicePlaybackEngine(private val context: Context) : PlaybackEngine
         PlaybackServiceOwner.serviceOrNull()?.setSpeed(speed)
         Unit
     }
+    @UnstableApi
+    override suspend fun applyExternalSubtitle(localRef: String, mimeType: String, language: String?) =
+        withContext(Dispatchers.Main.immediate) {
+            PlaybackServiceOwner.serviceOrNull()?.apply {
+                applyExternalSubtitle(localRef, mimeType, language)
+                PlaybackServiceOwner.updateSnapshot(positionTicks(), isPaused())
+            }
+            Unit
+        }
     override suspend fun stop() = withContext(Dispatchers.Main.immediate) {
         PlaybackServiceOwner.serviceOrNull()?.stopPlayback()
         PlaybackServiceOwner.updateSnapshot(positionTicks, true)
