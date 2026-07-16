@@ -101,6 +101,9 @@ class PlaybackSkipMarkersTest {
         }
 
         compose.onNodeWithContentDescription("Skip intro").performClick()
+        // The danmaku bridge forwards the new position from a LaunchedEffect keyed on
+        // positionTicks; give that recomposition+effect a chance to run before reading it.
+        compose.waitForIdle()
 
         assertEquals(900_000_000L, danmaku.onPlaybackCalls.last().first)
     }

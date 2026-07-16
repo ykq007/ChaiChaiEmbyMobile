@@ -1,6 +1,8 @@
 package dev.chaichai.mobile
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isHeading
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -140,8 +142,14 @@ class MultipleServersTest {
         composeRule.onNode(hasText("Servers") and isHeading()).assertIsDisplayed()
         composeRule.onNodeWithText("Server Two").performScrollTo().assertIsDisplayed()
         composeRule.onAllNodesWithText("Use").fetchSemanticsNodes() // both rows expose an action
-        composeRule.onNodeWithText("Server Two").performScrollTo()
-        composeRule.onAllNodesWithText("Use")[1].performClick()
+        // Each server card is now tall enough (name/address/status row, Use/Rename/Icon row,
+        // Move up/down/Remove row) that scrolling only the card's title into view does not
+        // guarantee its "Use" button — further down the SAME card — clears the LazyColumn's
+        // clipped viewport too. Scroll to the actual node being clicked, not just its card, per
+        // this repo's lazy-list convention: never act on a node that may still be clipped out.
+        composeRule.onNode(hasText("Use") and hasAnyAncestor(hasTestTag("server-id-two")))
+            .performScrollTo()
+            .performClick()
 
         // Home rebinds to the newly active server with no restart.
         composeRule.onNodeWithText("Home").performClick()
@@ -163,7 +171,7 @@ class MultipleServersTest {
 
         // Confirmation describes affected local state before anything is deleted.
         waitForText("Remove Server Two?")
-        composeRule.onNodeWithText("Home, library and search caches").assertIsDisplayed()
+        composeRule.onNodeWithText("Home, library and search caches", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("Remove server").performClick()
 
         // The removed server is gone from the list.

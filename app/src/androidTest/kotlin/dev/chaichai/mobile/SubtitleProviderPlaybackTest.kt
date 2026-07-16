@@ -3,6 +3,7 @@ package dev.chaichai.mobile
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -141,13 +142,20 @@ class SubtitleProviderPlaybackTest {
                 providerStatuses = listOf(SubtitleProviderStatus("open", "OpenSubs", SubtitleProviderOutcome.Ok)),
             )
         }
-        compose.setContent {
+        // A bare ComponentActivity (unlike MainActivity) has no onCreate of its own to re-invoke
+        // setContent, so a real ActivityScenario.recreate() would leave the recreated instance with
+        // no compose hierarchy at all (rememberSaveable also can't be reattached that late in the
+        // lifecycle). StateRestorationTester emulates the actual save/restore round trip a
+        // configuration change puts rememberSaveable through, without requiring a launchable Activity
+        // of its own.
+        val restorationTester = StateRestorationTester(compose)
+        restorationTester.setContent {
             ChaiChaiTheme(reducedMotion = true) { PlaybackHost(activePlayback(), subtitleProvider = controller) }
         }
         openSearchPanel()
         compose.onNodeWithTag("subtitle-search-panel").assertExists()
 
-        compose.activityRule.scenario.recreate()
+        restorationTester.emulateSavedInstanceStateRestore()
 
         // The panel is restored (rememberSaveable) and re-populates with candidates.
         compose.onNodeWithTag("subtitle-search-panel").assertExists()

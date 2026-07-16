@@ -244,7 +244,17 @@ class AggregatedSearchTest {
     // tree yet, so `onNodeWithText(...).performScrollTo()` intermittently can't find it on the
     // slow large-window emulator. Scroll the list itself, which composes-and-scrolls to it.
     private fun scrolledResult(text: String): SemanticsNodeInteraction {
+        // Group headers ("Episodes", etc.) sit right at a seam where row height jumps (a provenance
+        // label can make one row taller than its neighbors, #29/#31), which throws off
+        // performScrollToNode's estimate of where the target item actually lands on a single pass —
+        // most visible on wider/large windows where more of the list is laid out per frame. Settle
+        // the list and re-issue the scroll once before asserting, per this repo's lazy-list
+        // convention: scroll (and wait for content) at these seams, never assert on an item that may
+        // not have finished composing into place yet.
         composeRule.onNodeWithTag("search-results").performScrollToNode(hasText(text))
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("search-results").performScrollToNode(hasText(text))
+        composeRule.waitForIdle()
         return composeRule.onNodeWithText(text)
     }
 

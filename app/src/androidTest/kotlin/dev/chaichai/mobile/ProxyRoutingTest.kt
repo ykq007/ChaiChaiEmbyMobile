@@ -132,7 +132,7 @@ class ProxyRoutingTest {
         composeRule.waitUntil(5_000) {
             composeRule.onAllNodesWithText(ProxyTestResult.ProxyAuthenticationFailed.summary).fetchSemanticsNodes().isNotEmpty()
         }
-        composeRule.onNodeWithText(ProxyTestResult.ProxyAuthenticationFailed.summary).assertIsDisplayed()
+        composeRule.onNodeWithText(ProxyTestResult.ProxyAuthenticationFailed.summary).performScrollTo().assertIsDisplayed()
     }
 
     @Test fun each_server_shows_its_own_proxy_config() {

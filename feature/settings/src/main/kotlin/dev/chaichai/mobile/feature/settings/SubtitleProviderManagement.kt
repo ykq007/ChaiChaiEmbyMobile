@@ -134,7 +134,13 @@ private fun SubtitleProviderCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(provider.baseUrl, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                provider.baseUrl,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("subtitle-provider-summary-url-$tag"),
+            )
 
             var name by rememberSaveable(provider.id) { mutableStateOf(provider.name) }
             var url by rememberSaveable(provider.id) { mutableStateOf(provider.baseUrl) }

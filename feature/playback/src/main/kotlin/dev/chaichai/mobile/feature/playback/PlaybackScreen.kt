@@ -379,13 +379,13 @@ private fun BoxScope.ProgressSyncFailure(message: String, onRetry: () -> Unit) {
  */
 @Composable
 private fun SkipTargetButton(target: SkipTarget, onSkip: (SkipTarget) -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
-        modifier = Modifier.testTag("skip-${target.kind.name.lowercase(Locale.ROOT)}"),
-    ) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f)) {
         TextButton(
             onClick = { onSkip(target) },
-            modifier = Modifier.heightIn(min = 48.dp).semantics {
+            // The tag lives on this TextButton (the actual merge boundary/clickable node), not the
+            // wrapping Surface: a testTag on a non-merging ancestor of a merged semantics node is
+            // invisible in the MERGED semantics tree that onNodeWithTag searches by default.
+            modifier = Modifier.heightIn(min = 48.dp).testTag("skip-${target.kind.name.lowercase(Locale.ROOT)}").semantics {
                 role = Role.Button
                 contentDescription = target.label
             },
@@ -656,10 +656,11 @@ private fun DanmakuSurface(
             ),
     ) {
         Box(
-            Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.68f)).clickable(
+            Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.68f)).semantics {
+                contentDescription = "Close Danmaku"
+            }.clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-                onClickLabel = "Close Danmaku",
                 role = Role.Button,
                 onClick = onDismiss,
             ),
@@ -1125,7 +1126,7 @@ private fun DanmakuTuningSlider(
             Text(
                 valueText,
                 color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                modifier = Modifier.testTag("$testTag-value").semantics { liveRegion = LiveRegionMode.Polite },
             )
         }
         Slider(

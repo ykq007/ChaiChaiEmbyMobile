@@ -2,6 +2,7 @@ package dev.chaichai.mobile
 
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -134,7 +135,7 @@ class DanmakuOverlayTest {
         danmaku.emitActive()
 
         compose.onNodeWithTag("danmaku-tuning-speed").assertExists()
-        compose.onNodeWithText("1.0×").assertExists()
+        compose.onNodeWithTag("danmaku-tuning-speed-value").assertTextEquals("1.0×")
     }
 
     private class FakeDanmaku : DanmakuController {

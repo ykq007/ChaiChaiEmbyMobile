@@ -129,7 +129,13 @@ private fun DanmakuEndpointCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(endpoint.baseUrl, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                endpoint.baseUrl,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("danmaku-endpoint-url-$tag"),
+            )
 
             var name by rememberSaveable(endpoint.id) { mutableStateOf(endpoint.name) }
             var url by rememberSaveable(endpoint.id) { mutableStateOf(endpoint.baseUrl) }

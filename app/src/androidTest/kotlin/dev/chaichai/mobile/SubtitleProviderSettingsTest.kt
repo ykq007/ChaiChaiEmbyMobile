@@ -1,6 +1,7 @@
 package dev.chaichai.mobile
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -108,6 +109,6 @@ class SubtitleProviderSettingsTest {
         render(boundary)
 
         composeRule.onNodeWithTag("subtitle-provider-Kept").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("https://kept.example").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("subtitle-provider-summary-url-Kept").performScrollTo().assertTextEquals("https://kept.example")
     }
 }

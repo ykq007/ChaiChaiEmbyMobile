@@ -11,6 +11,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.SemanticsMatcher
@@ -249,6 +250,10 @@ class SpotlightHomeTest {
             hasText("Showing saved content") and
                 SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 2.5f),
         ).assertExists()
+        // The retry row sits below the shelf in the same vertically-scrolling list; on a short
+        // viewport it isn't composed yet (lazy) until scrolled into view. Scroll the list itself
+        // per this repo's lazy-list convention, rather than asserting on a possibly-uncomposed item.
+        composeRule.onNodeWithTag("home-feed").performScrollToNode(hasText("Retry Continue Watching"))
         composeRule.onNode(
             hasText("Retry Continue Watching") and hasClickAction() and
                 SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, 9f),

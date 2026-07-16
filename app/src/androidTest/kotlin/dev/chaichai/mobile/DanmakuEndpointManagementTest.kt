@@ -1,6 +1,7 @@
 package dev.chaichai.mobile
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -130,7 +131,7 @@ class DanmakuEndpointManagementTest {
         render(boundary)
 
         composeRule.onNodeWithTag("danmaku-endpoint-Kept").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("https://kept.example").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("danmaku-endpoint-url-Kept").performScrollTo().assertTextEquals("https://kept.example")
     }
 
     @Test fun test_endpoint_surfaces_a_distinguished_result() {

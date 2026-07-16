@@ -126,7 +126,7 @@ private fun HomeContent(
     val hero = spotlightItem(feed)
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().testTag("home-feed"),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 32.dp),
     ) {
         item("home-header") {

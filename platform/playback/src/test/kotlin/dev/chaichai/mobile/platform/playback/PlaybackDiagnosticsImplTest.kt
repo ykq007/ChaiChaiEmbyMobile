@@ -35,7 +35,7 @@ import org.junit.Test
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class PlaybackDiagnosticsImplTest {
-    private val plantedToken = "sk_live_SECRETTOKEN123"
+    private val plantedToken = "sk_live_SECRETTOKEN123" // gitleaks:allow — deliberate fake fixture proving redaction
     private val plantedUrl = "https://emby.example/videos/123/stream.mp4?ApiKey=$plantedToken"
     private val plantedSubtitleText = "Never gonna give you up, never gonna let you down"
     private val plantedLibraryTitle = "My Very Private Home Movie"
