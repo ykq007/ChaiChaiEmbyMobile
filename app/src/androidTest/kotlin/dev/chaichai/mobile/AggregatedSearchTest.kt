@@ -13,6 +13,7 @@ import androidx.compose.ui.test.assertLeftPositionInRootIsEqualTo
 import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -236,6 +237,15 @@ class AggregatedSearchTest {
         composeRule.mainClock.autoAdvance = true
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("search-field").performImeAction()
+        // Results/empty content replaces the transient "Searching for …" placeholder only
+        // once the gateway state's query catches up to the field. On slow emulators (the
+        // large-window CI lane) that recomposition lags a frame, so callers that immediately
+        // scroll to or assert on result rows would race it. Wait for the placeholder to clear.
+        composeRule.waitUntil(5_000) {
+            composeRule.onAllNodesWithText("Searching for", substring = true)
+                .fetchSemanticsNodes().isEmpty()
+        }
+        composeRule.waitForIdle()
     }
 
     private fun boundaries(gateway: EmbyGateway) = AppBoundaries(

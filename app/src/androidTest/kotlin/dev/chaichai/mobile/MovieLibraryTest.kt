@@ -81,9 +81,14 @@ class MovieLibraryTest {
         showLibrary(gateway)
 
         composeRule.onNodeWithText("Arrival").assertIsDisplayed()
+        // The page-failure message and its Retry button are a footer item at the bottom of
+        // the LazyVerticalGrid; scroll them into view so assertion/click don't race the
+        // grid composing that trailing item on slow emulators.
+        composeRule.onNodeWithTag("movie-grid").performScrollToNode(hasText("Couldn't load more movies."))
         composeRule.onNodeWithText("Couldn't load more movies.").assertIsDisplayed()
         composeRule.onNodeWithText("Retry page").performClick()
 
+        composeRule.onNodeWithTag("movie-grid").performScrollToNode(hasText("Recovered"))
         composeRule.onNodeWithText("Recovered").assertIsDisplayed()
         composeRule.onNodeWithText("Arrival").assertIsDisplayed()
     }
