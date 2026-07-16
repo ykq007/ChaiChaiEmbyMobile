@@ -1,0 +1,205 @@
+{
+  "$schema": "https://chaichai.dev/schemas/quality-gates-1.json",
+  "milestone": "First Viewing Loop",
+  "spec_issue": 24,
+  "parent_issue": 13,
+  "description": "Approved Quality Gates that a First Viewing Loop release candidate must satisfy before its GitHub Release. This file is the machine-readable source of truth consumed by scripts/quality_gate_report.py and by the release workflow.",
+  "waiver_policy": {
+    "summary": "Critical accessibility, security, privacy, data-integrity, crash-free-playback, and First Viewing Loop failures always block release and can never be waived. Only a lower-severity performance or device-specific failure may ship under a time-limited waiver.",
+    "waivable_severities": ["performance", "device-specific"],
+    "non_waivable_severities": ["critical"],
+    "waiver_requirements": ["owner", "target_milestone", "expires", "reason"],
+    "documented_in": "release notes"
+  },
+  "gates": [
+    {
+      "id": "first-viewing-loop",
+      "title": "First Viewing Loop app-level acceptance suite",
+      "category": "functional",
+      "severity": "critical",
+      "waivable": false,
+      "acceptance_criteria": ["AC1"],
+      "result_key": "first-viewing-loop",
+      "conditions": [
+        "Completes server setup, discovery through Home/library/search, details, playback, track selection, exit, restart, and server-synced resume.",
+        "Runs green on the required window matrix (compact API 26 phone lane and expanded API 36 tablet lane)."
+      ],
+      "evidence": [
+        {"type": "instrumentation", "ref": "app/src/androidTest/kotlin/dev/chaichai/mobile/DeterministicHarnessTest.kt"},
+        {"type": "instrumentation", "ref": "app/src/androidTest/kotlin/dev/chaichai/mobile/ServerSetupFlowTest.kt"},
+        {"type": "instrumentation", "ref": "app/src/androidTest/kotlin/dev/chaichai/mobile/SpotlightHomeTest.kt"},
+        {"type": "instrumentation", "ref": "app/src/androidTest/kotlin/dev/chaichai/mobile/MovieLibraryTest.kt"},
+        {"type": "instrumentation", "ref": "app/src/androidTest/kotlin/dev/chaichai/mobile/SeriesLibraryTest.kt"},
+        {"type": "instrumentation", "ref": "app/src/androidTest/kotlin/dev/chaichai/mobile/AggregatedSearchTest.kt"},
+        {"type": "instrumentation", "ref": "app/src/androidTest/kotlin/dev/chaichai/mobile/PlaybackFlowTest.kt"},
+        {"type": "instrumentation", "ref": "app/src/androidTest/kotlin/dev/chaichai/mobile/PlaybackTrackBindingTest.kt"},
+        {"type": "instrumentation", "ref": "app/src/androidTest/kotlin/dev/chaichai/mobile/ProgressRecoveryUiTest.kt"},
+        {"type": "ci-job", "ref": ".github/workflows/ci.yml#ui-smoke"}
+      ]
+    },
+    {
+      "id": "adaptive-layout",
+      "title": "Adaptive Layout journey-state preservation",
+      "category": "adaptive-layout",
+      "severity": "critical",
+      "waivable": false,
+      "acceptance_criteria": ["AC2"],
+      "result_key": "adaptive-layout",
+      "conditions": [
+        "Compact portrait/landscape, medium split-screen, expanded tablet portrait/landscape, and folded/unfolded/hinge-occluded foldable configurations preserve journey state through live transitions.",
+        "Window-characteristic policy (not device-name detection) keeps content clear of separating folds."
+      ],
+      "evidence": [
+        {"type": "unit", "ref": "platform/adaptive/src/test/kotlin/dev/chaichai/mobile/platform/adaptive/AdaptiveNavigationPolicyTest.kt"},
+        {"type": "instrumentation", "ref": "app/src/androidTest/kotlin/dev/chaichai/mobile/DeterministicHarnessTest.kt"},
+        {"type": "instrumentation", "ref": "app/src/androidTest/kotlin/dev/chaichai/mobile/TopLevelNavigationTest.kt"},
+        {"type": "ci-job", "ref": ".github/workflows/ci.yml#ui-smoke (large-window lane runs RequiresLargeTestWindow-annotated cases)"},
+        {"type": "manual", "ref": "docs/release/first-viewing-loop-acceptance.md#adaptive-layout-window-matrix"}
+      ]
+    },
+    {
+      "id": "accessibility",
+      "title": "Accessibility conformance (WCAG AA)",
+      "category": "accessibility",
+      "severity": "critical",
+      "waivable": false,
+      "acceptance_criteria": ["AC3"],
+      "result_key": "accessibility",
+      "conditions": [
+        "Automated accessibility checks pass (Espresso AccessibilityChecks + ComposeAccessibilityValidator).",
+        "48dp minimum touch targets with 8dp separation; meaning never conveyed by color alone; reduced-motion honored.",
+        "Manual phone and expanded TalkBack passes recorded at largest standard font/display scaling."
+      ],
+      "evidence": [
+        {"type": "instrumentation", "ref": "app/src/androidTest/kotlin/dev/chaichai/mobile/PlaybackFlowTest.kt"},
+        {"type": "instrumentation", "ref": "app/src/androidTest/kotlin/dev/chaichai/mobile/SpotlightHomeTest.kt"},
+        {"type": "manual", "ref": "docs/release/first-viewing-loop-acceptance.md#talkback-manual-passes"}
+      ]
+    },
+    {
+      "id": "playback-endurance",
+      "title": "Playback endurance and progress integrity",
+      "category": "playback",
+      "severity": "critical",
+      "waivable": false,
+      "acceptance_criteria": ["AC4"],
+      "result_key": "playback-endurance",
+      "conditions": [
+        "30-cycle playback endurance suite has zero crashes, ANRs, stuck sessions, or lost positions.",
+        "Resume lands within 10 seconds of the last server-acknowledged progress."
+      ],
+      "evidence": [
+        {"type": "instrumentation", "ref": "app/src/androidTest/kotlin/dev/chaichai/mobile/PlaybackLifecycleTest.kt"},
+        {"type": "instrumentation", "ref": "app/src/androidTest/kotlin/dev/chaichai/mobile/PlaybackActivityRecreationTest.kt"},
+        {"type": "unit", "ref": "platform/server/src/test/kotlin/dev/chaichai/mobile/platform/server/ProgressSyncManagerTest.kt"},
+        {"type": "ci-job", "ref": ".github/workflows/release.yml#endurance (30 iterations of the recreation + lifecycle suite)"}
+      ]
+    },
+    {
+      "id": "performance",
+      "title": "API 26 representative-hardware performance thresholds",
+      "category": "performance",
+      "severity": "performance",
+      "waivable": true,
+      "acceptance_criteria": ["AC5"],
+      "result_key": "performance",
+      "conditions": [
+        "Automated: cold-start launch time on API 26 stays within the documented threshold (client time only; the deterministic harness makes no server round-trip).",
+        "Runbook-measured on representative API 26 hardware: feedback, cached-navigation, frame-deadline, memory-growth, and artwork/playback responsiveness satisfy the documented thresholds, with server time reported separately. A miss is waivable per the release policy."
+      ],
+      "evidence": [
+        {"type": "report", "ref": "quality-gate/performance.json (produced by the release performance step)"},
+        {"type": "manual", "ref": "docs/release/first-viewing-loop-acceptance.md#performance-thresholds"}
+      ]
+    },
+    {
+      "id": "compatibility",
+      "title": "Supported Server Line contract compatibility",
+      "category": "compatibility",
+      "severity": "critical",
+      "waivable": false,
+      "acceptance_criteria": ["AC6"],
+      "result_key": "compatibility",
+      "conditions": [
+        "Contract suites pass for the latest stable and previous minor Supported Server Lines.",
+        "Cover transport, authentication, browsing, playback, tracks, progress, and version-tolerance cases."
+      ],
+      "evidence": [
+        {"type": "unit", "ref": "platform/server/src/test/kotlin/dev/chaichai/mobile/platform/server/EmbyProbeTest.kt"},
+        {"type": "unit", "ref": "platform/server/src/test/kotlin/dev/chaichai/mobile/platform/server/AuthenticatedEmbyGatewayTest.kt"},
+        {"type": "unit", "ref": "platform/server/src/test/kotlin/dev/chaichai/mobile/platform/server/EmbyPlaybackGatewayTest.kt"},
+        {"type": "unit", "ref": "platform/server/src/test/kotlin/dev/chaichai/mobile/platform/server/EmbyProgressRemoteTest.kt"},
+        {"type": "unit", "ref": "platform/server/src/test/kotlin/dev/chaichai/mobile/platform/server/ServerAddressTest.kt"},
+        {"type": "ci-job", "ref": ".github/workflows/ci.yml#build-and-test"}
+      ]
+    },
+    {
+      "id": "privacy",
+      "title": "Privacy — artifacts exclude sensitive data",
+      "category": "privacy",
+      "severity": "critical",
+      "waivable": false,
+      "acceptance_criteria": ["AC7"],
+      "result_key": "privacy",
+      "conditions": [
+        "Logs, crash reports, diagnostics, and release artifacts exclude secrets, tokens, full media URLs, subtitle contents, and personal library metadata."
+      ],
+      "evidence": [
+        {"type": "script", "ref": "scripts/scan-release-privacy.sh"},
+        {"type": "unit", "ref": "platform/server/src/test/kotlin/dev/chaichai/mobile/platform/server/ServerSetupCoordinatorTest.kt"},
+        {"type": "source", "ref": "platform/server/src/main/kotlin/dev/chaichai/mobile/platform/server/EmbyAuthenticator.kt"}
+      ]
+    },
+    {
+      "id": "install-upgrade",
+      "title": "Install and upgrade smoke",
+      "category": "release",
+      "severity": "critical",
+      "waivable": false,
+      "acceptance_criteria": ["AC8"],
+      "result_key": "install-upgrade",
+      "conditions": [
+        "The signed release APK installs cleanly on API 26 representative configuration.",
+        "It upgrades in place over a prior install of itself and launches to a stable activity without crash or ANR."
+      ],
+      "evidence": [
+        {"type": "ci-job", "ref": ".github/workflows/release.yml#install-upgrade-smoke"},
+        {"type": "script", "ref": "scripts/run-install-upgrade-smoke.sh"}
+      ]
+    },
+    {
+      "id": "supply-chain",
+      "title": "Dependency and secret scans",
+      "category": "release",
+      "severity": "critical",
+      "waivable": false,
+      "acceptance_criteria": ["AC8"],
+      "result_key": "supply-chain",
+      "conditions": [
+        "Dependency vulnerability scan (Trivy, HIGH/CRITICAL, no ignore-unfixed) reports no findings.",
+        "Secret scan (gitleaks) over the checkout reports no leaked secrets."
+      ],
+      "evidence": [
+        {"type": "ci-job", "ref": ".github/workflows/release.yml#supply-chain"},
+        {"type": "ci-job", "ref": ".github/workflows/ci.yml#security"}
+      ]
+    },
+    {
+      "id": "release-integrity",
+      "title": "Release integrity and provenance",
+      "category": "release",
+      "severity": "critical",
+      "waivable": false,
+      "acceptance_criteria": ["AC8"],
+      "result_key": "release-integrity",
+      "conditions": [
+        "A tagged clean CI run produces a signed release APK, SHA-256 checksums, build provenance attestation, SBOM, and a dependency/license report.",
+        "This machine-readable Quality Gate report is generated and no critical failure is waived."
+      ],
+      "evidence": [
+        {"type": "ci-job", "ref": ".github/workflows/release.yml#package"},
+        {"type": "script", "ref": "scripts/quality_gate_report.py"}
+      ]
+    }
+  ]
+}

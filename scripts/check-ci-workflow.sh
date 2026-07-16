@@ -3,7 +3,19 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-workflow="$repo_root/.github/workflows/ci.yml"
+
+# Default target is ci.yml; an explicit path lets the release workflow validate
+# its own pinned action references with the same resolver. The ci.yml-specific
+# job assertions below only run for the default target.
+target="${1:-ci.yml}"
+case "$target" in
+  /*) workflow="$target" ;;
+  *) workflow="$repo_root/.github/workflows/$target" ;;
+esac
+default_target=0
+[[ "$workflow" == "$repo_root/.github/workflows/ci.yml" ]] && default_target=1
+
+[[ -f "$workflow" ]] || { echo "CI workflow check failed: no workflow at $workflow" >&2; exit 1; }
 
 fail() {
   echo "CI workflow check failed: $*" >&2
@@ -23,6 +35,12 @@ while IFS= read -r action; do
     fail "action $action does not resolve to an upstream tag or branch"
   fi
 done < <(sed -nE 's/^[[:space:]]*-[[:space:]]*uses:[[:space:]]*([^[:space:]#]+).*/\1/p' "$workflow")
+
+# The remaining assertions are specific to ci.yml's job layout.
+if [[ "$default_target" -ne 1 ]]; then
+  echo "Workflow action references in $target resolve upstream."
+  exit 0
+fi
 
 ui_smoke_job="$(awk '
   /^  ui-smoke:/ { in_ui_smoke = 1 }

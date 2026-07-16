@@ -1,0 +1,8 @@
+# Personal library metadata denylist for the privacy Quality Gate (AC7).
+# One term per line. Any release artifact containing a term below fails the
+# gate. Blank lines and lines starting with '#' are ignored; terms are matched
+# literally (regex metacharacters are escaped).
+#
+# Populate per release candidate with real library / item names used in the
+# qualification run so their leakage into logs, reports, or diagnostics is
+# caught. Keep this file free of the secrets it guards against.

@@ -1,0 +1,4 @@
+{
+  "//": "Active time-limited Quality Gate waivers. Only performance/device-specific (waivable) gates may appear here; the report generator rejects any attempt to waive a critical gate. Each entry needs: gate, reason, owner, target_milestone, expires (ISO date). Waivers are echoed into the release notes.",
+  "waivers": []
+}

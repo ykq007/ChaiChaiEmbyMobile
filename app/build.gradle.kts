@@ -18,11 +18,30 @@ android {
         testInstrumentationRunner = "dev.chaichai.mobile.ChaiChaiTestRunner"
     }
 
+    // Release signing is supplied by the release workflow through environment
+    // variables so the keystore and its passwords never live in the repo. When
+    // they are absent (ordinary CI and local builds) the release build stays
+    // unsigned and assembleRelease still succeeds.
+    val releaseKeystore = System.getenv("CHAICHAI_RELEASE_KEYSTORE")
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = System.getenv("CHAICHAI_RELEASE_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("CHAICHAI_RELEASE_KEY_ALIAS")
+                keyPassword = System.getenv("CHAICHAI_RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (releaseKeystore != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
