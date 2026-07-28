@@ -9,6 +9,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Test
 import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.MediaIdentity
+import dev.chaichai.mobile.core.contracts.MarkerKind
 import dev.chaichai.mobile.core.contracts.TrackDelivery
 import dev.chaichai.mobile.core.contracts.TrackQualifier
 import dev.chaichai.mobile.core.contracts.PlaybackTrackSelection
@@ -205,6 +206,81 @@ class EmbyPlaybackGatewayTest {
         }
     }
 
+
+    @Test
+    fun `real intro and outro segments populate a validated authoritative plan`() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(playbackInfo(runtimeTicks = 1_000))
+            server.enqueue(json("""{"Items":[
+              {"Type":"Intro","StartTicks":0,"EndTicks":100},
+              {"Type":"Outro","StartTicks":900,"EndTicks":1000}
+            ]}"""))
+
+            val plan = (networkGateway(server).negotiate(beginning(), capabilities()) as PlaybackNegotiationResult.Ready).plan
+
+            assertEquals(listOf(MarkerKind.Intro, MarkerKind.Outro), plan.markers.map { it.kind })
+            assertEquals(listOf(100L, 1_000L), plan.markers.map { it.endTicks })
+            val playbackRequest = server.takeRequest()
+            val markerRequest = server.takeRequest()
+            assertEquals("/emby/Items/movie/PlaybackInfo", playbackRequest.url.encodedPath)
+            assertEquals("/emby/Items/movie/MediaSegments", markerRequest.url.encodedPath)
+            assertEquals("Intro,Outro", markerRequest.url.queryParameter("IncludeSegmentTypes"))
+        }
+    }
+
+    @Test
+    fun `absent and malformed segments are silent and invalid runtime windows are rejected`() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(playbackInfo(runtimeTicks = 1_000))
+            server.enqueue(json("""{"Items":[
+              {"Type":"Chapter","StartTicks":0,"EndTicks":50},
+              {"Type":"Intro","StartTicks":200,"EndTicks":100},
+              {"Type":"Outro","StartTicks":900,"EndTicks":1200},
+              {"Type":"Intro","StartTicks":null,"EndTicks":100}
+            ]}"""))
+
+            val plan = (networkGateway(server).negotiate(beginning(), capabilities()) as PlaybackNegotiationResult.Ready).plan
+
+            assertTrue(plan.markers.isEmpty())
+        }
+    }
+
+    @Test
+    fun `marker fetch retries once caches success and never breaks playback negotiation`() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(playbackInfo(runtimeTicks = 1_000))
+            server.enqueue(MockResponse.Builder().code(503).build())
+            server.enqueue(json("""{"Items":[{"Type":"Intro","StartTicks":0,"EndTicks":100}]}"""))
+            server.enqueue(playbackInfo(runtimeTicks = 1_000))
+            val gateway = networkGateway(server)
+
+            val first = (gateway.negotiate(beginning(), capabilities()) as PlaybackNegotiationResult.Ready).plan
+            val second = (gateway.negotiate(beginning(), capabilities()) as PlaybackNegotiationResult.Ready).plan
+
+            assertEquals(1, first.markers.size)
+            assertEquals(first.markers, second.markers)
+            assertEquals(4, server.requestCount)
+        }
+    }
+
+    @Test
+    fun `marker fetch exhaustion returns a playable plan without markers`() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(playbackInfo(runtimeTicks = 1_000))
+            server.enqueue(MockResponse.Builder().code(500).build())
+            server.enqueue(MockResponse.Builder().code(500).build())
+
+            val result = networkGateway(server).negotiate(beginning(), capabilities())
+
+            assertTrue(result is PlaybackNegotiationResult.Ready)
+            assertTrue((result as PlaybackNegotiationResult.Ready).plan.markers.isEmpty())
+        }
+    }
+
     @Test
     fun `session reports carry one authoritative identity and tick set`() = runTest {
         MockWebServer().use { server ->
@@ -233,14 +309,29 @@ class EmbyPlaybackGatewayTest {
     }
 
     private fun gateway(server: MockWebServer) = EmbyPlaybackGateway(
-        FakeVault(
-            StoredSession(
-                valid(server.url("/emby").toString()), "server", "user", "Ada",
-                AccessToken.fromRaw("token-secret"), null, "Test Emby",
-            ),
-        ),
+        vault(server),
+        deviceId = "device",
+        markerLoader = MediaSegmentLoader { _, _ -> emptyList() },
+    )
+
+    private fun networkGateway(server: MockWebServer) = EmbyPlaybackGateway(
+        vault(server),
         deviceId = "device",
     )
+
+    private fun vault(server: MockWebServer) = FakeVault(
+        StoredSession(
+            valid(server.url("/emby").toString()), "server", "user", "Ada",
+            AccessToken.fromRaw("token-secret"), null, "Test Emby",
+        ),
+    )
+
+    private fun playbackInfo(runtimeTicks: Long) = json("""{
+      "PlaySessionId":"p","MediaSources":[{
+        "Id":"source","RunTimeTicks":$runtimeTicks,"SupportsDirectPlay":true,
+        "DirectStreamUrl":"/emby/video"
+      }]
+    }""")
 
     private fun valid(value: String) = (ServerAddress.parse(value) as AddressValidation.Valid).address
     private fun beginning() = ScopedPlaybackRequest(

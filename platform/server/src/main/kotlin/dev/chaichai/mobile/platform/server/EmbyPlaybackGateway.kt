@@ -1,6 +1,8 @@
 package dev.chaichai.mobile.platform.server
 
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -16,6 +18,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import dev.chaichai.mobile.core.contracts.HomeScope
 import dev.chaichai.mobile.core.contracts.MediaIdentity
 import dev.chaichai.mobile.core.contracts.MediaMarker
+import dev.chaichai.mobile.core.contracts.MarkerKind
 import dev.chaichai.mobile.core.contracts.PlaybackTrack
 import dev.chaichai.mobile.core.contracts.PlaybackTrackType
 import dev.chaichai.mobile.core.contracts.TrackDelivery
@@ -124,8 +127,10 @@ class EmbyPlaybackGateway(
     private val clients: AuthorityScopedHttpClients = AuthorityScopedHttpClients(),
     private val deviceId: String,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    markerLoader: MediaSegmentLoader? = null,
 ) : PlaybackGateway {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val markerLoader = markerLoader ?: HttpMediaSegmentLoader(clients, json, deviceId)
 
     override suspend fun negotiate(
         request: ScopedPlaybackRequest,
@@ -200,11 +205,8 @@ class EmbyPlaybackGateway(
                                 PlaybackTrackType.Subtitle,
                                 selected.source.defaultSubtitleStreamIndex,
                             ),
-                            // Real marker fetch (Emby MediaSegments) is deferred to #35: an extra
-                            // network round trip here is left for a follow-up so it can be added with
-                            // its own retry/caching story rather than one more unconditional call on
-                            // every negotiation. `markers` defaults to empty, which is non-breaking and
-                            // simply keeps the Skip control hidden until that wiring lands.
+                            markers = markerLoader.load(session, request.itemId)
+                                .filter { it.isValid(selected.source.runtimeTicks ?: 0) },
                         ),
                     )
                 }
@@ -330,6 +332,76 @@ class EmbyPlaybackGateway(
     }
 }
 
+fun interface MediaSegmentLoader {
+    fun load(session: StoredSession, itemId: String): List<MediaMarker>
+}
+
+private class HttpMediaSegmentLoader(
+    private val clients: AuthorityScopedHttpClients,
+    private val json: Json,
+    private val deviceId: String,
+    private val nowMillis: () -> Long = System::currentTimeMillis,
+) : MediaSegmentLoader {
+    private data class CacheEntry(val expiresAtMillis: Long, val markers: List<MediaMarker>)
+    private val cache = ConcurrentHashMap<String, CacheEntry>()
+
+    override fun load(session: StoredSession, itemId: String): List<MediaMarker> {
+        val key = "${session.serverId}:${session.userId}:$itemId"
+        cache[key]?.takeIf { it.expiresAtMillis > nowMillis() }?.let { return it.markers }
+
+        val markers = fetchWithBoundedRetry(session, itemId) ?: emptyList()
+        cache[key] = CacheEntry(nowMillis() + CACHE_TTL_MILLIS, markers)
+        return markers
+    }
+
+    private fun fetchWithBoundedRetry(session: StoredSession, itemId: String): List<MediaMarker>? {
+        repeat(MAX_ATTEMPTS) {
+            fetchOnce(session, itemId)?.let { return it }
+        }
+        return null
+    }
+
+    private fun fetchOnce(session: StoredSession, itemId: String): List<MediaMarker>? = try {
+        val request = Request.Builder()
+            .url(session.address.apiUrl("Items/$itemId/MediaSegments").toString().toHttpUrl().newBuilder()
+                .addQueryParameter("IncludeSegmentTypes", "Intro,Outro")
+                .build())
+            .header("X-Emby-Token", session.accessToken.encoded())
+            .header("X-Emby-Authorization", embyAuthorization(deviceId, session.userId))
+            .get()
+            .build()
+        clients.forRequest(session.address.authority, session.certificateBypassAuthority)
+            .newBuilder()
+            .callTimeout(MARKER_CALL_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+            .build()
+            .newCall(request)
+            .execute()
+            .use { response ->
+                if (!response.isSuccessful) return null
+                json.decodeFromString<MediaSegmentsResponseDto>(response.body.string()).items.mapNotNull { it.toMarker() }
+            }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun MediaSegmentDto.toMarker(): MediaMarker? {
+        val kind = when (type?.lowercase()) {
+            "intro" -> MarkerKind.Intro
+            "outro" -> MarkerKind.Outro
+            else -> return null
+        }
+        val start = startTicks ?: return null
+        val end = endTicks ?: return null
+        return MediaMarker(kind, start, end)
+    }
+
+    private companion object {
+        const val MAX_ATTEMPTS = 2
+        const val MARKER_CALL_TIMEOUT_MILLIS = 500L
+        const val CACHE_TTL_MILLIS = 5 * 60 * 1000L
+    }
+}
+
 @Serializable
 private data class PlaybackInfoRequestDto(
     @SerialName("StartTimeTicks") val startTimeTicks: Long,
@@ -409,6 +481,18 @@ private data class PlaybackMediaStreamDto(
     @SerialName("IsHearingImpaired") val isHearingImpaired: Boolean = false,
     @SerialName("IsCommentary") val isCommentary: Boolean = false,
     @SerialName("IsVisuallyImpaired") val isVisuallyImpaired: Boolean = false,
+)
+
+@Serializable
+private data class MediaSegmentsResponseDto(
+    @SerialName("Items") val items: List<MediaSegmentDto> = emptyList(),
+)
+
+@Serializable
+private data class MediaSegmentDto(
+    @SerialName("Type") val type: String? = null,
+    @SerialName("StartTicks") val startTicks: Long? = null,
+    @SerialName("EndTicks") val endTicks: Long? = null,
 )
 
 @Serializable
