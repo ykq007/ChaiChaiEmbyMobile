@@ -120,12 +120,17 @@ class PlaybackCoordinatorImpl(
     private var currentSubtitleAppearance: SubtitleAppearance = SubtitleAppearance.Default
     private var currentVideoScaleMode: VideoScaleMode = VideoScaleMode.Fit
     private var activeExternalSubtitle: PlaybackTrack? = null
+    private var engineReady = false
     private var skipInFlight = false
 
     private val engineEventJob = scope.launch {
             engine.events.collect { event ->
                 when (event) {
-                    PlaybackEngineEvent.Ready -> confirmTrackTransition()
+                    PlaybackEngineEvent.Ready -> {
+                        engineReady = true
+                        if (pendingTrackTransition != null) confirmTrackTransition()
+                        else refreshReadySubtitleState()
+                    }
                     PlaybackEngineEvent.Completed -> exit()
                     PlaybackEngineEvent.FatalError -> recoverTrackTransitionOrFail()
                     is PlaybackEngineEvent.Progress -> reportServiceProgress(event)
@@ -190,6 +195,7 @@ class PlaybackCoordinatorImpl(
                     observeProgressStatus(result.plan.request.scope)
                     val startTicks = (start as? PlaybackStart.Resume)?.positionTicks ?: 0L
                     try {
+                        engineReady = false
                         engine.prepare(result.plan, startTicks, startPaused = false)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
@@ -204,6 +210,7 @@ class PlaybackCoordinatorImpl(
                     engine.acknowledgePlayingReported()
                     mutableIsPlaying.value = true
                     publishActive(title, controlsVisible = true)
+                    if (engineReady) refreshReadySubtitleState()
                     if (scheduleTimelineUpdates) startTimelineUpdates()
                 }
             }
@@ -301,6 +308,7 @@ class PlaybackCoordinatorImpl(
                     pendingTrackTransition = transition
                     activePlan = result.plan
                     try {
+                        engineReady = false
                         engine.prepare(result.plan, positionTicks, wasPaused)
                         reapplyPreferences()
                     } catch (cancelled: CancellationException) {
@@ -391,12 +399,14 @@ class PlaybackCoordinatorImpl(
         activeExternalSubtitle = track
         publishActive(current.title, controlsVisible = true)
         scope.launch {
+            engineReady = false
             try {
                 engine.applyExternalSubtitle(activation.localRef, activation.mimeType, activation.track.language)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
                 // Incompatible/unreadable: roll back to whatever subtitle was current before.
+                engineReady = true
                 activeExternalSubtitle = previousExternal
                 (mutableState.value as? PlaybackState.Active)?.let { publishActive(it.title, it.controlsVisible) }
                 return@launch
@@ -533,6 +543,7 @@ class PlaybackCoordinatorImpl(
         pendingTrackTransition = restoring
         activePlan = restoring.previousPlan
         try {
+            engineReady = false
             engine.prepare(restoring.previousPlan, restoring.positionTicks, restoring.wasPaused)
             reapplyPreferences()
         } catch (cancelled: CancellationException) {
@@ -549,6 +560,7 @@ class PlaybackCoordinatorImpl(
         trackChangeJob = scope.launch {
             if (transition.restoring) {
                 activePlan = transition.previousPlan
+                applyReadySubtitleDelay()
                 gateway.report(report(transition.previousPlan, PlaybackReportKind.Playing))
                 engine.acknowledgePlayingReported()
                 mutableIsPlaying.value = !engine.isPaused
@@ -556,6 +568,7 @@ class PlaybackCoordinatorImpl(
                 if (scheduleTimelineUpdates) startTimelineUpdates()
             } else {
                 activePlan = transition.replacementPlan
+                applyReadySubtitleDelay()
                 gateway.report(report(transition.replacementPlan, PlaybackReportKind.Playing))
                 engine.acknowledgePlayingReported()
                 mutableIsPlaying.value = !engine.isPaused
@@ -563,6 +576,16 @@ class PlaybackCoordinatorImpl(
                 if (scheduleTimelineUpdates) startTimelineUpdates()
             }
         }
+    }
+
+    private suspend fun refreshReadySubtitleState() {
+        val active = mutableState.value as? PlaybackState.Active ?: return
+        applyReadySubtitleDelay()
+        publishActive(active.title, active.controlsVisible)
+    }
+
+    private suspend fun applyReadySubtitleDelay() {
+        if (engine.subtitleDelaySupported) engine.setSubtitleDelayMs(currentSubtitleDelayMillis)
     }
 
     private fun finishServiceStop(event: PlaybackEngineEvent.Stopped) {

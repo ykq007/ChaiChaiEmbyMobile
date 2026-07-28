@@ -8,6 +8,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.Bundle
+import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -45,6 +46,7 @@ import androidx.media3.ui.PlayerView
 import okhttp3.OkHttpClient
 
 /** The only owner of the Media3 player and session. Feature and app code only see PlaybackCoordinator. */
+@OptIn(markerClass = [UnstableApi::class])
 class PlaybackSessionService : MediaSessionService() {
     private lateinit var player: ExoPlayer
     private lateinit var mediaSession: MediaSession
@@ -54,6 +56,8 @@ class PlaybackSessionService : MediaSessionService() {
     private var reportControlEvents = false
     private var startedActivityCount = 0
     private var currentPlan: AuthoritativePlaybackPlan? = null
+    private val subtitleDelayDecoderFactory = OffsetSubtitleDecoderFactory()
+    private var internalSubtitleDelaySeekPositionMs: Long? = null
     private val activityLifecycleCallbacks = object : Application.ActivityLifecycleCallbacks {
         override fun onActivityStarted(activity: Activity) { startedActivityCount++ }
         override fun onActivityStopped(activity: Activity) {
@@ -94,7 +98,10 @@ class PlaybackSessionService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
-        player = ExoPlayer.Builder(this).build().apply {
+        player = ExoPlayer.Builder(
+            this,
+            OffsetSubtitleRenderersFactory(this, subtitleDelayDecoderFactory),
+        ).build().apply {
             setAudioAttributes(
                 AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).setUsage(C.USAGE_MEDIA).build(),
                 true,
@@ -131,11 +138,17 @@ class PlaybackSessionService : MediaSessionService() {
                 reason: Int,
             ) {
                 if (reason == Player.DISCONTINUITY_REASON_SEEK) {
-                    publishControlProgress(
-                        dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek,
-                        newPosition.positionMs * TICKS_PER_MILLISECOND,
-                        player.isPausedForReporting(),
-                    )
+                    val internalRefreshPosition = internalSubtitleDelaySeekPositionMs
+                    internalSubtitleDelaySeekPositionMs = null
+                    val isSubtitleRefresh = internalRefreshPosition != null &&
+                        kotlin.math.abs(newPosition.positionMs - internalRefreshPosition) <= 1L
+                    if (!isSubtitleRefresh) {
+                        publishControlProgress(
+                            dev.chaichai.mobile.platform.server.PlaybackProgressEvent.Seek,
+                            newPosition.positionMs * TICKS_PER_MILLISECOND,
+                            player.isPausedForReporting(),
+                        )
+                    }
                 }
             }
         })
@@ -151,12 +164,16 @@ class PlaybackSessionService : MediaSessionService() {
         stoppedPublished = false
         reportControlEvents = false
         currentPlan = plan
+        subtitleDelayDecoderFactory.setDelayMillis(0L)
         val redirectRejectingClient = playbackHttpClient()
         val dataSourceFactory = OkHttpDataSource.Factory(redirectRejectingClient)
             .setDefaultRequestProperties(plan.headers)
-        val source = DefaultMediaSourceFactory(dataSourceFactory).createMediaSource(
-            MediaItem.Builder().setUri(plan.url.toString()).setMediaId(plan.request.itemId).build(),
-        )
+        @Suppress("DEPRECATION")
+        val source = DefaultMediaSourceFactory(dataSourceFactory)
+            .experimentalParseSubtitlesDuringExtraction(false)
+            .createMediaSource(
+                MediaItem.Builder().setUri(plan.url.toString()).setMediaId(plan.request.itemId).build(),
+            )
         player.playWhenReady = !startPaused
         player.setMediaSource(source, startPositionTicks / TICKS_PER_MILLISECOND)
         player.prepare()
@@ -179,13 +196,16 @@ class PlaybackSessionService : MediaSessionService() {
             .setLanguage(language)
             .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
             .build()
-        val source = DefaultMediaSourceFactory(dataSourceFactory).createMediaSource(
-            MediaItem.Builder()
-                .setUri(plan.url.toString())
-                .setMediaId(plan.request.itemId)
-                .setSubtitleConfigurations(listOf(subtitle))
-                .build(),
-        )
+        @Suppress("DEPRECATION")
+        val source = DefaultMediaSourceFactory(dataSourceFactory)
+            .experimentalParseSubtitlesDuringExtraction(false)
+            .createMediaSource(
+                MediaItem.Builder()
+                    .setUri(plan.url.toString())
+                    .setMediaId(plan.request.itemId)
+                    .setSubtitleConfigurations(listOf(subtitle))
+                    .build(),
+            )
         player.setMediaSource(source, resumePositionMs)
         player.playWhenReady = wasPlaying
         player.prepare()
@@ -203,8 +223,24 @@ class PlaybackSessionService : MediaSessionService() {
     }
 
     internal fun playPause() { if (player.playWhenReady) player.pause() else player.play() }
-    internal fun seekTo(positionTicks: Long) { player.seekTo(positionTicks / TICKS_PER_MILLISECOND) }
+    internal fun seekTo(positionTicks: Long) {
+        internalSubtitleDelaySeekPositionMs = null
+        player.seekTo(positionTicks / TICKS_PER_MILLISECOND)
+    }
     internal fun setSpeed(speed: Float) { player.playbackParameters = PlaybackParameters(speed) }
+    internal fun setSubtitleDelay(delayMs: Long) {
+        subtitleDelayDecoderFactory.setDelayMillis(delayMs)
+        if (player.mediaItemCount == 0) return
+        val positionMs = player.currentPosition
+        internalSubtitleDelaySeekPositionMs = positionMs
+        // A same-position seek flushes/recreates only renderer state. The media source, negotiated
+        // playback plan, playWhenReady state, and session remain unchanged.
+        player.seekTo(positionMs)
+    }
+    @UnstableApi
+    internal fun subtitleDelaySupported(): Boolean {
+        return player.currentTracks.hasSelectedDelayableSubtitle(subtitleDelayDecoderFactory)
+    }
     internal fun positionTicks(): Long = player.currentPosition * TICKS_PER_MILLISECOND
     internal fun isPaused(): Boolean = player.isPausedForReporting()
     internal fun stopPlayback() {
@@ -357,9 +393,11 @@ class Media3ServicePlaybackEngine(private val context: Context) : PlaybackEngine
     override val events: SharedFlow<PlaybackEngineEvent> = PlaybackServiceOwner.events
     // ExoPlayer natively supports PlaybackParameters(speed) applied in place, without restart.
     override val speedControlSupported: Boolean get() = true
-    // Media3 has no native per-track subtitle timing offset API; faking support would violate
-    // AC1/AC4's "correctness over faking support" guidance, so the control stays hidden instead.
-    override val subtitleDelaySupported: Boolean get() = false
+    // Capability follows the currently selected Media3 text track. Burned-in or unsupported
+    // subtitle formats never surface the control.
+    @get:UnstableApi
+    override val subtitleDelaySupported: Boolean
+        get() = PlaybackServiceOwner.serviceOrNull()?.subtitleDelaySupported() == true
     // Media3's PlayerView owns a SubtitleView with native CaptionStyleCompat + fractional text size +
     // bottom padding fraction support, all appliable in place without restarting the player (#33).
     override val subtitleAppearanceSupported: Boolean get() = true
@@ -401,6 +439,10 @@ class Media3ServicePlaybackEngine(private val context: Context) : PlaybackEngine
     }
     override suspend fun setSpeed(speed: Float) = withContext(Dispatchers.Main.immediate) {
         PlaybackServiceOwner.serviceOrNull()?.setSpeed(speed)
+        Unit
+    }
+    override suspend fun setSubtitleDelayMs(delayMs: Long) = withContext(Dispatchers.Main.immediate) {
+        PlaybackServiceOwner.serviceOrNull()?.setSubtitleDelay(delayMs)
         Unit
     }
     override suspend fun setSubtitleAppearance(appearance: SubtitleAppearance) = withContext(Dispatchers.Main.immediate) {
