@@ -1,0 +1,12 @@
+https://emby49.localhost:8443 {
+    tls internal
+    reverse_proxy emby49:8096
+}
+https://emby48.localhost:8444 {
+    tls internal
+    reverse_proxy emby48:8096
+}
+https://provider.localhost:8445 {
+    tls internal
+    reverse_proxy opensubtitles:8080
+}

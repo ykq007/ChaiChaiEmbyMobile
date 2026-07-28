@@ -1,0 +1,126 @@
+name: chaichai-qualification
+services:
+  emby49:
+    image: emby/embyserver:4.9.5.0
+    container_name: chai-emby49
+    hostname: chai-emby49
+    restart: unless-stopped
+    environment:
+      UID: "0"
+      GID: "0"
+    volumes:
+      - ./config/emby49:/config
+      - ./media:/media:ro
+    ports:
+      - "127.0.0.1:18096:8096"
+    networks: [qualification]
+  emby48:
+    image: emby/embyserver:4.8.11.0
+    platform: linux/amd64
+    container_name: chai-emby48
+    hostname: chai-emby48
+    restart: unless-stopped
+    environment:
+      UID: "0"
+      GID: "0"
+    volumes:
+      - ./config/emby48:/config
+      - ./media:/media:ro
+    ports:
+      - "127.0.0.1:18097:8096"
+    networks: [qualification]
+  origin:
+    build: ./fixture-app
+    container_name: chai-origin
+    environment:
+      FIXTURE_ROLE: origin
+    ports:
+      - "127.0.0.1:18083:8080"
+    networks: [qualification]
+  dandan-upstream:
+    build: ./fixture-app
+    user: "0:0"
+    container_name: chai-dandan-upstream
+    environment:
+      FIXTURE_ROLE: dandan-upstream
+      DANDAN_APP_ID: ${DANDAN_APP_ID}
+    secrets: [dandan_app_secret]
+    networks: [qualification]
+  dandan-relay:
+    build: ./fixture-app
+    user: "0:0"
+    container_name: chai-dandan-relay
+    environment:
+      FIXTURE_ROLE: dandan-relay
+      DANDAN_APP_ID: ${DANDAN_APP_ID}
+      UPSTREAM: http://dandan-upstream:8080
+    secrets: [dandan_app_secret]
+    ports:
+      - "127.0.0.1:18081:8080"
+    depends_on: [dandan-upstream]
+    networks: [qualification]
+  opensubtitles:
+    build: ./fixture-app
+    user: "0:0"
+    container_name: chai-opensubtitles
+    environment:
+      FIXTURE_ROLE: opensubtitles
+    secrets: [opensubtitles_api_key]
+    ports:
+      - "127.0.0.1:18082:8080"
+    networks: [qualification]
+  squid-noauth:
+    image: ubuntu/squid:latest
+    container_name: chai-squid-noauth
+    volumes:
+      - ./proxy/squid-noauth.conf:/etc/squid/squid.conf:ro
+    ports:
+      - "127.0.0.1:13128:3128"
+    networks: [qualification]
+  squid-auth:
+    image: ubuntu/squid:latest
+    container_name: chai-squid-auth
+    volumes:
+      - ./proxy/squid-auth.conf:/etc/squid/squid.conf:ro
+      - ./.secrets/squid.htpasswd:/etc/squid/passwords:ro
+    ports:
+      - "127.0.0.1:13129:3128"
+    networks: [qualification]
+  socks-noauth:
+    image: serjs/go-socks5-proxy:latest
+    environment:
+      REQUIRE_AUTH: "false"
+    container_name: chai-socks-noauth
+    ports:
+      - "127.0.0.1:11080:1080"
+    networks: [qualification]
+  socks-auth:
+    image: serjs/go-socks5-proxy:latest
+    container_name: chai-socks-auth
+    environment:
+      PROXY_USER: ${SOCKS_PROXY_USER}
+      PROXY_PASSWORD: ${SOCKS_PROXY_PASSWORD}
+    ports:
+      - "127.0.0.1:11081:1080"
+    networks: [qualification]
+  tls:
+    image: caddy:2-alpine
+    container_name: chai-tls
+    volumes:
+      - ./tls/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./tls/data:/data
+    ports:
+      - "127.0.0.1:18443:8443"
+      - "127.0.0.1:18444:8444"
+      - "127.0.0.1:18445:8445"
+    depends_on: [emby49, emby48, opensubtitles]
+    networks: [qualification]
+networks:
+  qualification:
+    name: chai-qualification
+    internal: false
+secrets:
+  dandan_app_secret:
+    file: ./.secrets/dandan_app_secret
+  opensubtitles_api_key:
+    file: ./.secrets/opensubtitles_api_key

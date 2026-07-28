@@ -1,0 +1,6 @@
+.secrets/
+.state/
+config/
+evidence/
+tls/data/
+media/
