@@ -345,6 +345,39 @@ class PlaybackCoordinatorImplTest {
     }
 
     @Test
+    fun `a delayable external subtitle applies the persisted media delay and exposes the control`() = runTest {
+        val identity = MediaIdentity("server", "movie")
+        val preferences = FakePreferences().apply { delays[identity] = 375L }
+        val engine = FakeEngine().apply { supportSubtitleDelayAfterExternal = true }
+        val coordinator = PlaybackCoordinatorImpl(this, FakeGateway(), engine, capabilities(), false, preferences)
+        coordinator.submit(MediaPlaybackRequest.PlayFromBeginning(identity, HomeScope("server", "user"), "Arrival"))
+        advanceUntilIdle()
+
+        assertFalse((coordinator.state.value as PlaybackState.Active).subtitleDelaySupported)
+        assertTrue(engine.appliedSubtitleDelays.isEmpty())
+
+        coordinator.addExternalSubtitle(
+            dev.chaichai.mobile.core.contracts.ExternalSubtitleActivation(
+                track = PlaybackTrack(
+                    index = dev.chaichai.mobile.core.contracts.ExternalSubtitleActivation.SubtitleStreamIndex,
+                    type = PlaybackTrackType.Subtitle,
+                    language = "en",
+                    delivery = dev.chaichai.mobile.core.contracts.TrackDelivery.External,
+                ),
+                localRef = "memory://delayable.srt",
+                mimeType = "application/x-subrip",
+            ),
+        )
+        advanceUntilIdle()
+
+        val active = coordinator.state.value as PlaybackState.Active
+        assertTrue(active.subtitleDelaySupported)
+        assertEquals(375L, active.subtitleDelayMillis)
+        assertEquals(listOf(375L), engine.appliedSubtitleDelays)
+        coordinator.close()
+    }
+
+    @Test
     fun `an incompatible external subtitle rolls back leaving the prior subtitle current`() = runTest {
         val gateway = FakeGateway()
         val engine = FakeEngine().apply { externalSubtitleFailure = IllegalStateException("bad subtitle") }
@@ -1107,6 +1140,7 @@ class PlaybackCoordinatorImplTest {
         val appliedScaleModes = mutableListOf<VideoScaleMode>()
         val appliedExternalSubtitles = mutableListOf<String>()
         var externalSubtitleFailure: Exception? = null
+        var supportSubtitleDelayAfterExternal = false
         override suspend fun setSpeed(speed: Float) { appliedSpeeds += speed }
         override suspend fun setSubtitleDelayMs(delayMs: Long) { appliedSubtitleDelays += delayMs }
         override suspend fun setSubtitleAppearance(appearance: SubtitleAppearance) { appliedAppearances += appearance }
@@ -1114,6 +1148,10 @@ class PlaybackCoordinatorImplTest {
         override suspend fun applyExternalSubtitle(localRef: String, mimeType: String, language: String?) {
             externalSubtitleFailure?.let { throw it }
             appliedExternalSubtitles += localRef
+            if (supportSubtitleDelayAfterExternal) {
+                subtitleDelaySupportedFlag = true
+                eventsFlow.emit(PlaybackEngineEvent.Ready)
+            }
         }
         override suspend fun prepare(plan: AuthoritativePlaybackPlan, startPositionTicks: Long, startPaused: Boolean) {
             prepareFailure?.let { throw it }
